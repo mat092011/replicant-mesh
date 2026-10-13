@@ -1,0 +1,392 @@
+{
+  "date": "2026-10-13",
+  "model": "Maykeye/TinyLLama-v0",
+  "model_revision": "298338802ab94432b917bcce11382aa151aee50f",
+  "runtime": {
+    "torch": "2.3.1+cpu",
+    "transformers": "4.43.1",
+    "petals": "2.3.0.dev2",
+    "hivemind": "1.2.0.dev0",
+    "numpy": "1.26.4",
+    "huggingface-hub": "0.25.2"
+  },
+  "runtime_sources": {
+    "petals": {
+      "url": "https://github.com/bigscience-workshop/petals.git",
+      "vcs_info": {
+        "commit_id": "22afba627a7eb4fcfe9418c49472c6a51334b8ac",
+        "requested_revision": "22afba627a7eb4fcfe9418c49472c6a51334b8ac",
+        "vcs": "git"
+      }
+    },
+    "hivemind": {
+      "url": "https://github.com/learning-at-home/hivemind.git",
+      "vcs_info": {
+        "commit_id": "213bff98a62accb91f254e2afdccbf1d69ebdea9",
+        "requested_revision": "213bff98a62accb91f254e2afdccbf1d69ebdea9",
+        "vcs": "git"
+      }
+    }
+  },
+  "precision": "float32",
+  "attention": "eager",
+  "activation_compression": "NONE",
+  "routing": "client relays activations between fixed stages; server-to-server push disabled",
+  "network": {
+    "unshaped_mean_rtt_ms": 0.128,
+    "wan_mean_rtt_ms": 50.708,
+    "wan_egress_delay_ms": 25,
+    "wan_egress_rate_mbit": 100,
+    "rate_cap_verified_as_configuration_only": true,
+    "ping_packets_per_profile": 5,
+    "shaping_removed": true
+  },
+  "runs": [
+    {
+      "raw_report": "20261013T171824866610Z-check-pipeline.json",
+      "arguments": {
+        "command": "check",
+        "mode": "pipeline",
+        "requests": 10,
+        "concurrency": 1,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "unlabelled",
+        "atol": 0.001,
+        "output": null
+      },
+      "success": true,
+      "summary": null,
+      "comparisons": [
+        {
+          "case": "A:prefill",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "B:prefill",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "A:forced_decode_1",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "B:forced_decode_1",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "B:decode_after_A_close",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "C:fresh_after_A_close",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "C:forced_decode",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "B:decode_after_C_close",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        }
+      ],
+      "model_loading_seconds": {
+        "local": 0.7085817870000142,
+        "pipeline": 0.8675290200000063
+      },
+      "session_limit_rejected": true,
+      "cancelled_session_closed": true
+    },
+    {
+      "raw_report": "20261013T171855011718Z-bench-local.json",
+      "arguments": {
+        "command": "bench",
+        "mode": "local",
+        "requests": 10,
+        "concurrency": 1,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "local-smoke",
+        "atol": 0.001,
+        "output": null
+      },
+      "success": true,
+      "summary": {
+        "attempted": 10,
+        "completed": 10,
+        "failed": 0,
+        "accepted_output_tokens": 80,
+        "measurement_seconds": 0.15313090600000123,
+        "aggregate_output_tokens_per_second": 522.4288296184923,
+        "ttft_seconds_p50": 0.004717280999983586,
+        "ttft_seconds_p95": 0.007218991999991431,
+        "inter_token_seconds_p50": 0.0014052269999922373,
+        "inter_token_seconds_p95": 0.0017775499999856947
+      },
+      "comparisons": null,
+      "model_loading_seconds": 0.7126558649999879,
+      "session_limit_rejected": null,
+      "cancelled_session_closed": null
+    },
+    {
+      "raw_report": "20261013T171900081993Z-bench-pipeline.json",
+      "arguments": {
+        "command": "bench",
+        "mode": "pipeline",
+        "requests": 10,
+        "concurrency": 1,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "lan-c1",
+        "atol": 0.001,
+        "output": null
+      },
+      "success": true,
+      "summary": {
+        "attempted": 10,
+        "completed": 10,
+        "failed": 0,
+        "accepted_output_tokens": 80,
+        "measurement_seconds": 1.7001879519999932,
+        "aggregate_output_tokens_per_second": 47.05362128104312,
+        "ttft_seconds_p50": 0.03339658300001247,
+        "ttft_seconds_p95": 0.03973599200000422,
+        "inter_token_seconds_p50": 0.01805672499997968,
+        "inter_token_seconds_p95": 0.021601373999999396
+      },
+      "comparisons": null,
+      "model_loading_seconds": 1.4336329299999875,
+      "session_limit_rejected": null,
+      "cancelled_session_closed": null
+    },
+    {
+      "raw_report": "20261013T171906694574Z-bench-pipeline.json",
+      "arguments": {
+        "command": "bench",
+        "mode": "pipeline",
+        "requests": 10,
+        "concurrency": 3,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "lan-c3",
+        "atol": 0.001,
+        "output": null
+      },
+      "success": true,
+      "summary": {
+        "attempted": 10,
+        "completed": 10,
+        "failed": 0,
+        "accepted_output_tokens": 80,
+        "measurement_seconds": 1.0084238850000133,
+        "aggregate_output_tokens_per_second": 79.33171872461048,
+        "ttft_seconds_p50": 0.05192130300000031,
+        "ttft_seconds_p95": 0.06657230599998343,
+        "inter_token_seconds_p50": 0.031164527000015596,
+        "inter_token_seconds_p95": 0.04029250600001433
+      },
+      "comparisons": null,
+      "model_loading_seconds": 1.4722856090000107,
+      "session_limit_rejected": null,
+      "cancelled_session_closed": null
+    },
+    {
+      "raw_report": "20261013T171950574486Z-bench-pipeline.json",
+      "arguments": {
+        "command": "bench",
+        "mode": "pipeline",
+        "requests": 10,
+        "concurrency": 1,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "wan-c1",
+        "atol": 0.001,
+        "output": null
+      },
+      "success": true,
+      "summary": {
+        "attempted": 10,
+        "completed": 10,
+        "failed": 0,
+        "accepted_output_tokens": 80,
+        "measurement_seconds": 16.81518222400001,
+        "aggregate_output_tokens_per_second": 4.757605295874666,
+        "ttft_seconds_p50": 0.23939612800000987,
+        "ttft_seconds_p95": 0.2553336349999995,
+        "inter_token_seconds_p50": 0.1826480920000222,
+        "inter_token_seconds_p95": 0.18665744199995515
+      },
+      "comparisons": null,
+      "model_loading_seconds": 1.804010188999996,
+      "session_limit_rejected": null,
+      "cancelled_session_closed": null
+    },
+    {
+      "raw_report": "20261013T172004833653Z-bench-pipeline.json",
+      "arguments": {
+        "command": "bench",
+        "mode": "pipeline",
+        "requests": 10,
+        "concurrency": 3,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "wan-c3",
+        "atol": 0.001,
+        "output": null
+      },
+      "success": true,
+      "summary": {
+        "attempted": 10,
+        "completed": 10,
+        "failed": 0,
+        "accepted_output_tokens": 80,
+        "measurement_seconds": 6.625520138000013,
+        "aggregate_output_tokens_per_second": 12.074523710397912,
+        "ttft_seconds_p50": 0.20586428600000772,
+        "ttft_seconds_p95": 0.351323782999998,
+        "inter_token_seconds_p50": 0.18427073599997357,
+        "inter_token_seconds_p95": 0.19226562000000058
+      },
+      "comparisons": null,
+      "model_loading_seconds": 1.8056712229999903,
+      "session_limit_rejected": null,
+      "cancelled_session_closed": null
+    },
+    {
+      "raw_report": "20261013T172118762497Z-check-pipeline.json",
+      "arguments": {
+        "command": "check",
+        "mode": "pipeline",
+        "requests": 10,
+        "concurrency": 1,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "final-image",
+        "atol": 0.001,
+        "output": null
+      },
+      "success": true,
+      "summary": null,
+      "comparisons": [
+        {
+          "case": "A:prefill",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "B:prefill",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "A:forced_decode_1",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "B:forced_decode_1",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "B:decode_after_A_close",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "C:fresh_after_A_close",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "C:forced_decode",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        },
+        {
+          "case": "B:decode_after_C_close",
+          "max_absolute_logit_error": 0.0,
+          "finite_logits": true,
+          "greedy_token_agreement": true,
+          "passed": true
+        }
+      ],
+      "model_loading_seconds": {
+        "local": 0.6074153980000006,
+        "pipeline": 0.8808097819999716
+      },
+      "session_limit_rejected": true,
+      "cancelled_session_closed": true
+    },
+    {
+      "raw_report": "20261013T172138396821Z-bench-pipeline.json",
+      "arguments": {
+        "command": "bench",
+        "mode": "pipeline",
+        "requests": 8,
+        "concurrency": 8,
+        "prompt_tokens": 1024,
+        "new_tokens": 64,
+        "label": "capacity-smoke",
+        "atol": 0.001,
+        "output": null
+      },
+      "success": true,
+      "summary": {
+        "attempted": 8,
+        "completed": 8,
+        "failed": 0,
+        "accepted_output_tokens": 512,
+        "measurement_seconds": 12.196747627000036,
+        "aggregate_output_tokens_per_second": 41.978404051468736,
+        "ttft_seconds_p50": 2.7567776059999574,
+        "ttft_seconds_p95": 3.4727199940000446,
+        "inter_token_seconds_p50": 0.12496032600000717,
+        "inter_token_seconds_p95": 0.22194759199999226
+      },
+      "comparisons": null,
+      "model_loading_seconds": 1.4894865459999664,
+      "session_limit_rejected": null,
+      "cancelled_session_closed": null
+    }
+  ]
+}

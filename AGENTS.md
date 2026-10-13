@@ -10,9 +10,11 @@ The primary hypothesis is that pooled GPU memory and otherwise idle compute can
 provide access to larger models or more available capacity at acceptable latency
 and resource cost. Faster generation for one user is a separate hypothesis.
 
-Read [docs/PLAN.md](docs/PLAN.md) before implementation. The repository currently
-contains research guidance only; no inference runtime or benchmark is implemented.
-Update that statement when implementation begins.
+Read [docs/PLAN.md](docs/PLAN.md) before implementation. The repository contains a
+prototype private Petals container lab, correctness checks, and a benchmark runner.
+The tiny-model local smoke experiment passed; see [docs/LOCAL_LAB.md](docs/LOCAL_LAB.md)
+for setup and [the report](docs/experiments/2026-10-13-local-lab.md) for evidence and
+limitations. The broader research phase gates remain incomplete.
 
 ## Technical principles
 

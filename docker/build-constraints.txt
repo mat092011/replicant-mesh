@@ -1,0 +1,7 @@
+# Hivemind's pinned setup.py imports pkg_resources, removed in setuptools 82.
+# These constraints apply to both isolated build environments and runtime deps.
+setuptools==75.6.0
+wheel==0.45.1
+grpcio==1.68.1
+grpcio-tools==1.68.1
+protobuf==5.29.2

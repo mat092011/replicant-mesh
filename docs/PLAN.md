@@ -7,9 +7,13 @@ serve useful LLM inference, then test whether reciprocal credits can sustain tha
 network. Contributors would earn credits for accepted work and spend them on
 their own requests.
 
-**Status, 2026-10-13:** planning documents exist. No inference implementation,
-hardware inventory, benchmark results, or credit system exists yet. All technical
-phases below are pending. Targets are proposals, not measured performance.
+**Status, 2026-10-13:** a prototype private Petals container lab, complete-model
+reference, correctness checks, and benchmark runner have been added. The first
+laptop inventory and launch protocol are in [LOCAL_LAB.md](LOCAL_LAB.md). The
+[first smoke experiment](experiments/2026-10-13-local-lab.md) passed numerical
+checks and completed 58 benchmark requests across local and simulated networks.
+The broader phase gates below remain incomplete; no credit system exists.
+Usability targets remain proposals, not claims established by this tiny model.
 
 The first intended deployment uses invited GPU-equipped desktops and one fixed
 model. Device count, GPU types, available memory, and internet connections still
@@ -52,10 +56,10 @@ objective. Do not assume that any pretrained model works with every runtime.
 
 | Phase | Outcome | Dependency | Status |
 | --- | --- | --- | --- |
-| P0 | Fixed protocol, hardware inventory, and acceptance targets | None | Pending |
-| P1 | Reproducible complete-model reference | P0 | Pending |
-| P2 | Correct fixed pipeline across processes and devices | P1 | Pending |
-| P3 | Measured LAN and WAN performance envelope | P2 | Pending |
+| P0 | Fixed protocol, hardware inventory, and acceptance targets | None | Local CPU protocol and runtime validated; GPU cohort and final acceptance targets pending |
+| P1 | Reproducible complete-model reference | P0 | Local smoke baseline measured; startup/prefill/decode and memory instrumentation incomplete |
+| P2 | Correct fixed pipeline across processes and devices | P1 | Three-container logits/session checks passed; separate devices, memory evidence, and overlap traces pending |
+| P3 | Measured LAN and WAN performance envelope | P2 | Short netem smoke comparison measured; full sweeps and real links pending |
 | P4 | Demonstrated pooled-memory benefit | P3 | Pending |
 | P5 | Scheduling and recovery under changing availability | P4 | Pending |
 | P6 | Auditable reciprocal credits | P5 | Pending |
@@ -86,7 +90,8 @@ workload required. Unknown hardware-dependent choices remain explicit.
 **Work**
 
 - Run the complete small model locally with fixed prompts and greedy decoding.
-  `bigscience/bloom-560m`, with 24 transformer blocks, is an initial candidate.
+  The laptop lab starts with the eight-block `Maykeye/TinyLLama-v0` to test
+  mechanics; `bigscience/bloom-560m`, with 24 blocks, is a larger follow-up.
 - Begin without weight quantization or lossy activation compression. Record dtype,
   attention implementation, logits, generated token IDs, timing, and peak memory.
 - Warm up before measuring. Report model loading and cold-start overhead separately.
@@ -102,7 +107,8 @@ measurements distinguish prefill, decode, and startup.
 
 **Work**
 
-- For the 24-block candidate, start with ranges `[0, 8)`, `[8, 16)`, `[16, 24)`.
+- For the eight-block checkpoint, start with ranges `[0, 3)`, `[3, 6)`, `[6, 8)`.
+  For the 24-block candidate, use `[0, 8)`, `[8, 16)`, `[16, 24)`.
   Include the separately placed input/output components in the resource budget.
 - Start on one machine, then place stages on separate devices. For a custom
   implementation, validate an in-process split before adding network transport.
@@ -300,15 +306,26 @@ concurrency target after selecting the hardware, also before the relevant run.
 
 ## Repository outputs
 
-Create these areas as implementation requires them; only this plan and the root
-documentation exist today:
+Current prototype:
+
+- `compose.yaml` and `docker/`: private CPU lab topology and image dependencies.
+- `lab/`: container entry points, reference/pipeline runner, and reporting helpers.
+- `tests/`: dependency-free checks for configuration and metric calculations.
+- `scripts/`: container network shaping.
+- `.lab/results/`: ignored local output directory for run reports.
+- [LOCAL_LAB.md](LOCAL_LAB.md): setup, first machine inventory, and validation limits.
+- `docs/experiments/`: measured smoke report, compact run summaries, and package inventory.
+- `docs/decisions/`: CPU runtime, private topology, and wrapper decisions.
+
+Create these additional areas as the later experiments require them:
 
 - `src/`: worker, client, protocol, and scheduling code added for the experiments.
-- `tests/`: correctness, session isolation, failure handling, and accounting tests.
-- `benchmarks/`: launch manifests, workload fixtures, runners, and metric collection.
-- `docs/experiments/`: dated reports with configuration, results, limitations, and
-  reproduction commands.
-- `docs/decisions/`: decisions about runtime, topology, trust, recovery, and credits.
+- `tests/`: extend coverage for failure handling and accounting as they are added.
+- `benchmarks/`: expanded workload fixtures, traces, and metric collection if they
+  outgrow the initial `lab/` runner.
+
+Extend the reports and decisions with later evidence on real devices, trust,
+recovery, and credits.
 
 Each completed phase should link its deliverables and evidence from the phase
 table. Keep raw private data, model weights, caches, and large traces out of Git.

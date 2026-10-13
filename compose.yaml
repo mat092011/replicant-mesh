@@ -1,0 +1,108 @@
+name: steamboat-net-lab
+
+x-common: &common
+  image: steamboat-net-lab:cpu
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  init: true
+  restart: "no"
+  environment: &environment
+    MODEL_ID: ${MODEL_ID:-Maykeye/TinyLLama-v0}
+    MODEL_REVISION: ${MODEL_REVISION:-298338802ab94432b917bcce11382aa151aee50f}
+    LAB_DHT_PREFIX: steamboat-local-v1
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    OMP_NUM_THREADS: "2"
+    MKL_NUM_THREADS: "2"
+    PETALS_MAX_RETRIES: "2"
+  volumes:
+    - model-cache:/cache
+    - peer-state:/state
+    - ./.lab/results:/results
+  networks: [lab]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 256
+
+x-worker: &worker
+  <<: *common
+  command: [python, -m, lab.launch, worker]
+  cap_add: [NET_ADMIN]
+  cpus: 2.0
+  mem_limit: 3g
+  depends_on:
+    prepare:
+      condition: service_completed_successfully
+    bootstrap:
+      condition: service_healthy
+  healthcheck:
+    test: [CMD, python, -m, lab.launch, health-worker]
+    interval: 10s
+    timeout: 5s
+    retries: 30
+    start_period: 30s
+
+services:
+  # The only service with internet access; downloads a public, pinned checkpoint.
+  prepare:
+    <<: *common
+    command: [python, -m, lab.launch, prepare]
+    environment:
+      <<: *environment
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
+    networks: [download]
+    cpus: 2.0
+    mem_limit: 3g
+
+  bootstrap:
+    <<: *common
+    command: [python, -m, lab.launch, bootstrap]
+    cpus: 0.5
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD, python, -m, lab.launch, health-bootstrap]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  worker-1:
+    <<: *worker
+    environment:
+      <<: *environment
+      BLOCK_RANGE: ${WORKER_1_BLOCKS:-0:3}
+
+  worker-2:
+    <<: *worker
+    environment:
+      <<: *environment
+      BLOCK_RANGE: ${WORKER_2_BLOCKS:-3:6}
+
+  worker-3:
+    <<: *worker
+    environment:
+      <<: *environment
+      BLOCK_RANGE: ${WORKER_3_BLOCKS:-6:8}
+
+  client:
+    <<: *common
+    command: [python, -m, lab.launch, client]
+    cap_add: [NET_ADMIN]
+    cpus: 2.0
+    mem_limit: 5g
+    depends_on:
+      worker-1:
+        condition: service_healthy
+      worker-2:
+        condition: service_healthy
+      worker-3:
+        condition: service_healthy
+
+networks:
+  lab:
+    internal: true
+  download: {}
+
+volumes:
+  model-cache:
+  peer-state:
