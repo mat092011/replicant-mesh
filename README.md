@@ -35,6 +35,8 @@ real transformer `Maykeye/TinyLLama-v0`; the guide also describes an optional
 
 ## Project documents
 
+- [PyTorch pipeline implementation plan](docs/PYTORCH_PIPELINE_PLAN.md): fixed
+  workers, session protocol, coordinator scheduling, and reusable lab comparisons.
 - [Container lab guide](docs/LOCAL_LAB.md): setup, simulation commands, and limits.
 - [Multiphase research and implementation plan](docs/PLAN.md): experiments,
   deliverables, acceptance gates, benchmarks, and the path toward decentralization.

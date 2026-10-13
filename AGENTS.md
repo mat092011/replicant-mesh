@@ -16,6 +16,10 @@ The tiny-model local smoke experiment passed; see [docs/LOCAL_LAB.md](docs/LOCAL
 for setup and [the report](docs/experiments/2026-10-13-local-lab.md) for evidence and
 limitations. The broader research phase gates remain incomplete.
 
+For the planned runtime replacement, also read
+[docs/PYTORCH_PIPELINE_PLAN.md](docs/PYTORCH_PIPELINE_PLAN.md). That plan adds an
+owned PyTorch execution path; Petals remains an optional comparison baseline.
+
 ## Technical principles
 
 - Start with ordinary autoregressive inference and contiguous groups of model
@@ -25,9 +29,10 @@ limitations. The broader research phase gates remain incomplete.
 - Keep weights resident. Keep each session's KV cache with the worker owning its
   layers. Account for embeddings, output heads, tied weights, caches, temporary
   buffers, and token feedback when describing memory and communication.
-- Prefer reproducing a private Petals baseline before developing a new inference
-  engine. Verify supported models and pin compatible dependencies first. A runtime
-  or scheduler change must be recorded as an experimental variable.
+- Preserve the measured private Petals baseline. Develop the new runtime using
+  the PyTorch implementation plan, with isolated dependencies and a complete-model
+  reference on the same stack. Record runtime, scheduler, or topology changes as
+  experimental variables; do not require Petals in the new execution path.
 - Treat a trusted coordinator and central credit ledger as deliberate prototype
   components. Describe their trust requirements accurately. Decentralized compute,
   discovery, scheduling, and accounting are different milestones.

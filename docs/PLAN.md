@@ -15,6 +15,11 @@ checks and completed 58 benchmark requests across local and simulated networks.
 The broader phase gates below remain incomplete; no credit system exists.
 Usability targets remain proposals, not claims established by this tiny model.
 
+**Next implementation:** [PYTORCH_PIPELINE_PLAN.md](PYTORCH_PIPELINE_PLAN.md) defines
+the replacement runtime in six gated milestones: contracts, in-process partition
+parity, session protocol, worker services, coordinator scheduling, and Docker
+comparisons. This is planned work within P0–P3; Petals stays an optional baseline.
+
 The first intended deployment uses invited GPU-equipped desktops and one fixed
 model. Device count, GPU types, available memory, and internet connections still
 need to be inventoried. CPU processes can establish correctness; hardware support
@@ -46,11 +51,12 @@ the prompt; decode produces subsequent output tokens. Measure these separately.
 Record where embeddings, final normalization, output projection, and sampling
 execute: their placement changes memory use and the actual communication route.
 
-Start with a trusted control service, fixed assignments, and authenticated worker
-connections. Prefer an existing private Petals deployment as the first baseline.
-Confirm its runtime/model compatibility before fixing the stack. Introduce a
-custom worker implementation only for a documented experimental need or learning
-objective. Do not assume that any pretrained model works with every runtime.
+Start with a trusted control service and fixed assignments in the private Docker
+lab. The first Petals baseline has been reproduced. The next implementation uses
+owned PyTorch workers so protocol, cache lifecycle, scheduling and measurement are
+under project control; see the linked implementation plan for the scope and gates.
+Authenticated worker admission is required before expanding beyond the trusted
+local lab. Verify runtime/model compatibility and pin the tested stack.
 
 ## Phase overview
 
