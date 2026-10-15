@@ -1,0 +1,721 @@
+{
+  "date": "2026-10-14",
+  "milestone": "M2 protocol and cache lifecycle",
+  "source_base_commit": "650489d06f2dd4ee96254b88e3cc5db2601be4e9",
+  "execution": "One Linux container; three independent stage handlers; binary Protobuf; loopback gRPC checks",
+  "host": {
+    "cpu": "AMD Ryzen AI 9 HX 370",
+    "host_ram_gib_approx": 32,
+    "docker_vm_ram_gib_approx": 15.18,
+    "container_cpu_quota": 2,
+    "torch_threads": 2,
+    "container_memory_gib": 6,
+    "docker_engine": "29.8.2",
+    "compose": "5.6.0",
+    "performance_control": "Not a performance experiment; historical Petals containers remain running"
+  },
+  "runtime": {
+    "torch": "2.14.1+cpu",
+    "transformers": "5.19.0",
+    "grpcio": "1.84.0",
+    "protobuf": "7.36.2",
+    "safetensors": "0.8.0"
+  },
+  "python": "3.12.15",
+  "base_image": "python:3.12.15-slim-bookworm@sha256:2ed6491b93cd49272ee6de2b5a38440c3448360322c089fc23e370722d74179d",
+  "test_suite": {
+    "command": "docker compose -f compose.pytorch.yaml run --rm tests",
+    "tests": 95,
+    "passed": 95,
+    "failed": 0,
+    "skipped": 0,
+    "elapsed_seconds": 10.167,
+    "names": [
+      "test_bit_exact_little_endian_round_trip_and_independent_storage (runtime.test_codec.CodecTests.test_bit_exact_little_endian_round_trip_and_independent_storage)",
+      "test_encode_rejects_unsupported_tensor_representations (runtime.test_codec.CodecTests.test_encode_rejects_unsupported_tensor_representations)",
+      "test_generated_service_matches_transport_operations (runtime.test_codec.CodecTests.test_generated_service_matches_transport_operations)",
+      "test_nonfinite_payload_rejected_before_torch_allocation (runtime.test_codec.CodecTests.test_nonfinite_payload_rejected_before_torch_allocation)",
+      "test_shape_and_length_rejected_before_torch_allocation (runtime.test_codec.CodecTests.test_shape_and_length_rejected_before_torch_allocation)",
+      "test_token_count_and_resource_limits_are_strict (runtime.test_codec.CodecTests.test_token_count_and_resource_limits_are_strict)",
+      "test_unknown_fields_rejected_in_request_and_nested_tensor (runtime.test_codec.CodecTests.test_unknown_fields_rejected_in_request_and_nested_tensor)",
+      "test_wire_cap_precedes_parse_and_serialization (runtime.test_codec.CodecTests.test_wire_cap_precedes_parse_and_serialization)",
+      "test_coverage_rejects_gap_overlap_and_bool_index (runtime.test_manifest.ManifestTests.test_coverage_rejects_gap_overlap_and_bool_index)",
+      "test_fingerprint_detects_unsigned_mutation (runtime.test_manifest.ManifestTests.test_fingerprint_detects_unsigned_mutation)",
+      "test_hash_and_fingerprint_are_stable (runtime.test_manifest.ManifestTests.test_hash_and_fingerprint_are_stable)",
+      "test_identity_and_source_hashes_are_pinned_even_when_resigned (runtime.test_manifest.ManifestTests.test_identity_and_source_hashes_are_pinned_even_when_resigned)",
+      "test_missing_and_tampered_artifacts_fail (runtime.test_manifest.ManifestTests.test_missing_and_tampered_artifacts_fail)",
+      "test_symlink_escape_fails_when_supported (runtime.test_manifest.ManifestTests.test_symlink_escape_fails_when_supported)",
+      "test_traversal_absolute_and_windows_paths_fail (runtime.test_manifest.ManifestTests.test_traversal_absolute_and_windows_paths_fail)",
+      "test_valid_manifest (runtime.test_manifest.ManifestTests.test_valid_manifest)",
+      "test_wrong_tensor_keys_shape_dtype_and_owner_fail (runtime.test_manifest.ManifestTests.test_wrong_tensor_keys_shape_dtype_and_owner_fail)",
+      "test_exact_kv_storage_and_default_reservations (runtime.test_manifest.ResourceLimitTests.test_exact_kv_storage_and_default_reservations)",
+      "test_invalid_model_config_and_dimension_types_fail (runtime.test_manifest.ResourceLimitTests.test_invalid_model_config_and_dimension_types_fail)",
+      "test_invalid_scalar_and_oversized_reservations_fail (runtime.test_manifest.ResourceLimitTests.test_invalid_scalar_and_oversized_reservations_fail)",
+      "test_close_is_idempotent_and_context_manager_cleans_up_on_error (runtime.test_model.PartitionedModelTests.test_close_is_idempotent_and_context_manager_cleans_up_on_error)",
+      "test_compute_failure_releases_mutated_cache_without_harming_another_session (runtime.test_model.PartitionedModelTests.test_compute_failure_releases_mutated_cache_without_harming_another_session)",
+      "test_eight_sessions_reserve_and_release_cache_independently (runtime.test_model.PartitionedModelTests.test_eight_sessions_reserve_and_release_cache_independently)",
+      "test_every_prefill_logit_and_forced_decode_matches_reference (runtime.test_model.PartitionedModelTests.test_every_prefill_logit_and_forced_decode_matches_reference)",
+      "test_exact_context_limit_and_rejection_preserve_committed_cache (runtime.test_model.PartitionedModelTests.test_exact_context_limit_and_rejection_preserve_committed_cache)",
+      "test_greedy_sequences_match_with_independent_feedback (runtime.test_model.PartitionedModelTests.test_greedy_sequences_match_with_independent_feedback)",
+      "test_invalid_input_is_rejected_before_mutating_session (runtime.test_model.PartitionedModelTests.test_invalid_input_is_rejected_before_mutating_session)",
+      "test_invalid_reservations_do_not_consume_capacity (runtime.test_model.PartitionedModelTests.test_invalid_reservations_do_not_consume_capacity)",
+      "test_parameters_reside_only_in_their_assigned_components (runtime.test_model.PartitionedModelTests.test_parameters_reside_only_in_their_assigned_components)",
+      "test_unequal_interleaved_sessions_survive_other_session_close (runtime.test_model.PartitionedModelTests.test_unequal_interleaved_sessions_survive_other_session_close)",
+      "test_real_slices_are_reusable_and_detect_tampering (runtime.test_prepare.PreparationIntegrationTests.test_real_slices_are_reusable_and_detect_tampering)",
+      "test_corrupt_source_is_not_trusted_by_snapshot_path (runtime.test_prepare.PreparationValidationTests.test_corrupt_source_is_not_trusted_by_snapshot_path)",
+      "test_missing_snapshot_rejected_before_loading_libraries (runtime.test_prepare.PreparationValidationTests.test_missing_snapshot_rejected_before_loading_libraries)",
+      "test_partial_existing_output_is_not_overwritten (runtime.test_prepare.PreparationValidationTests.test_partial_existing_output_is_not_overwritten)",
+      "test_every_prefill_logit_and_eight_forced_decode_steps (runtime.test_protocol_model.ProtocolModelTests.test_every_prefill_logit_and_eight_forced_decode_steps)",
+      "test_interleaved_sessions_release_independent_cache (runtime.test_protocol_model.ProtocolModelTests.test_interleaved_sessions_release_independent_cache)",
+      "test_loopback_grpc_real_stage_matches_binary_in_memory_stage (runtime.test_protocol_model.ProtocolModelTests.test_loopback_grpc_real_stage_matches_binary_in_memory_stage)",
+      "test_lost_response_is_not_replayed_and_other_session_survives (runtime.test_protocol_model.ProtocolModelTests.test_lost_response_is_not_replayed_and_other_session_survives)",
+      "test_ambiguous_timeouts_are_not_retried (runtime.test_transport.TransportTests.test_ambiguous_timeouts_are_not_retried)",
+      "test_grpc_core_caps_payload_before_application_parsing (runtime.test_transport.TransportTests.test_grpc_core_caps_payload_before_application_parsing)",
+      "test_in_memory_and_grpc_have_identical_binary_replies (runtime.test_transport.TransportTests.test_in_memory_and_grpc_have_identical_binary_replies)",
+      "test_invalid_operation_and_timeout_do_not_reach_handler (runtime.test_transport.TransportTests.test_invalid_operation_and_timeout_do_not_reach_handler)",
+      "test_malformed_and_unknown_wire_fields_never_reach_handler (runtime.test_transport.TransportTests.test_malformed_and_unknown_wire_fields_never_reach_handler)",
+      "test_nonloopback_adapter_is_explicitly_deferred (runtime.test_transport.TransportTests.test_nonloopback_adapter_is_explicitly_deferred)",
+      "test_successful_reply_identity_and_position_are_checked (runtime.test_transport.TransportTests.test_successful_reply_identity_and_position_are_checked)",
+      "test_accepted_steps_renew_idle_lease (runtime.test_worker_state.WorkerStateTests.test_accepted_steps_renew_idle_lease)",
+      "test_busy_worker_and_duplicate_inflight_operation_fail_without_queueing (runtime.test_worker_state.WorkerStateTests.test_busy_worker_and_duplicate_inflight_operation_fail_without_queueing)",
+      "test_cancel_during_compute_preserves_cache_until_completion_and_suppresses_output (runtime.test_worker_state.WorkerStateTests.test_cancel_during_compute_preserves_cache_until_completion_and_suppresses_output)",
+      "test_cancelled_handler_task_invalidates_session_without_freeing_running_cache (runtime.test_worker_state.WorkerStateTests.test_cancelled_handler_task_invalidates_session_without_freeing_running_cache)",
+      "test_close_cancel_are_idempotent_and_reject_late_steps (runtime.test_worker_state.WorkerStateTests.test_close_cancel_are_idempotent_and_reject_late_steps)",
+      "test_close_during_compute_acknowledges_reclamation_only_after_completion (runtime.test_worker_state.WorkerStateTests.test_close_during_compute_acknowledges_reclamation_only_after_completion)",
+      "test_context_overflow_and_malformed_envelopes_preserve_prefix (runtime.test_worker_state.WorkerStateTests.test_context_overflow_and_malformed_envelopes_preserve_prefix)",
+      "test_describe_reports_identity_assignment_and_frozen_capacity (runtime.test_worker_state.WorkerStateTests.test_describe_reports_identity_assignment_and_frozen_capacity)",
+      "test_duplicate_lost_reply_and_reordered_steps_never_reexecute (runtime.test_worker_state.WorkerStateTests.test_duplicate_lost_reply_and_reordered_steps_never_reexecute)",
+      "test_eight_sessions_and_cleanup_release_capacity_independently (runtime.test_worker_state.WorkerStateTests.test_eight_sessions_and_cleanup_release_capacity_independently)",
+      "test_expiry_during_compute_defers_reclamation_and_discards_late_result (runtime.test_worker_state.WorkerStateTests.test_expiry_during_compute_defers_reclamation_and_discards_late_result)",
+      "test_failure_after_mutation_invalidates_only_the_affected_session (runtime.test_worker_state.WorkerStateTests.test_failure_after_mutation_invalidates_only_the_affected_session)",
+      "test_grpc_caller_cancellation_reaches_worker_without_freeing_compute_cache (runtime.test_worker_state.WorkerStateTests.test_grpc_caller_cancellation_reaches_worker_without_freeing_compute_cache)",
+      "test_identity_and_lease_errors_do_not_mutate_live_state (runtime.test_worker_state.WorkerStateTests.test_identity_and_lease_errors_do_not_mutate_live_state)",
+      "test_idle_expiry_and_renewal_cannot_extend_hard_lifetime (runtime.test_worker_state.WorkerStateTests.test_idle_expiry_and_renewal_cannot_extend_hard_lifetime)",
+      "test_idle_expiry_releases_abandoned_cache_and_rejects_resurrection (runtime.test_worker_state.WorkerStateTests.test_idle_expiry_releases_abandoned_cache_and_rejects_resurrection)",
+      "test_interleaved_sessions_echo_positions_and_keep_independent_caches (runtime.test_worker_state.WorkerStateTests.test_interleaved_sessions_echo_positions_and_keep_independent_caches)",
+      "test_metadata_invalid_unicode_lease_and_nonfinite_input_never_reach_compute (runtime.test_worker_state.WorkerStateTests.test_metadata_invalid_unicode_lease_and_nonfinite_input_never_reach_compute)",
+      "test_new_boot_invalidates_old_leases_before_execution (runtime.test_worker_state.WorkerStateTests.test_new_boot_invalidates_old_leases_before_execution)",
+      "test_open_bounds_reject_without_reserving_memory (runtime.test_worker_state.WorkerStateTests.test_open_bounds_reject_without_reserving_memory)",
+      "test_open_is_idempotent_but_conflicting_reservations_are_rejected (runtime.test_worker_state.WorkerStateTests.test_open_is_idempotent_but_conflicting_reservations_are_rejected)",
+      "test_periodic_reaper_reclaims_abandoned_session_without_another_request (runtime.test_worker_state.WorkerStateTests.test_periodic_reaper_reclaims_abandoned_session_without_another_request)",
+      "test_result_encoding_cannot_commit_after_the_operation_deadline (runtime.test_worker_state.WorkerStateTests.test_result_encoding_cannot_commit_after_the_operation_deadline)",
+      "test_rpc_timeout_invalidates_cache_but_retains_busy_reservation (runtime.test_worker_state.WorkerStateTests.test_rpc_timeout_invalidates_cache_but_retains_busy_reservation)",
+      "test_shutdown_grace_is_bounded_and_does_not_kill_or_free_running_compute (runtime.test_worker_state.WorkerStateTests.test_shutdown_grace_is_bounded_and_does_not_kill_or_free_running_compute)",
+      "test_tombstones_bound_admission_without_evicting_protected_ids (runtime.test_worker_state.WorkerStateTests.test_tombstones_bound_admission_without_evicting_protected_ids)",
+      "test_unresponsive_compute_marks_restart_required_without_unsafe_free (runtime.test_worker_state.WorkerStateTests.test_unresponsive_compute_marks_restart_required_without_unsafe_free)",
+      "test_legacy_selection_preserves_local_and_remote_adapters (test_benchmark.BackendSelectionTests.test_legacy_selection_preserves_local_and_remote_adapters)",
+      "test_pytorch_session_uses_backend_without_importing_petals (test_benchmark.BackendSelectionTests.test_pytorch_session_uses_backend_without_importing_petals)",
+      "test_checkpoint_limit_is_checked_before_any_request (test_benchmark.BenchmarkTests.test_checkpoint_limit_is_checked_before_any_request)",
+      "test_closed_loop_reports_all_requests_once_and_excludes_warmup (test_benchmark.BenchmarkTests.test_closed_loop_reports_all_requests_once_and_excludes_warmup)",
+      "test_failed_warmup_is_preserved_and_prevents_measurement (test_benchmark.BenchmarkTests.test_failed_warmup_is_preserved_and_prevents_measurement)",
+      "test_decode_failure_preserves_partial_output_and_closes_session (test_benchmark.GenerationTests.test_decode_failure_preserves_partial_output_and_closes_session)",
+      "test_decode_feeds_back_previous_token_and_counts_only_outputs (test_benchmark.GenerationTests.test_decode_feeds_back_previous_token_and_counts_only_outputs)",
+      "test_prefill_failure_has_no_first_token_measurement (test_benchmark.GenerationTests.test_prefill_failure_has_no_first_token_measurement)",
+      "test_each_workload_count_must_be_positive (test_benchmark.WorkloadTests.test_each_workload_count_must_be_positive)",
+      "test_empty_tokenizer_fixture_fails_explicitly (test_benchmark.WorkloadTests.test_empty_tokenizer_fixture_fails_explicitly)",
+      "test_exact_context_and_concurrency_limits_are_allowed (test_benchmark.WorkloadTests.test_exact_context_and_concurrency_limits_are_allowed)",
+      "test_excessive_context_or_concurrency_is_rejected (test_benchmark.WorkloadTests.test_excessive_context_or_concurrency_is_rejected)",
+      "test_fixture_is_repeated_and_truncated_to_exact_requested_lengths (test_benchmark.WorkloadTests.test_fixture_is_repeated_and_truncated_to_exact_requested_lengths)",
+      "test_bootstrap_file_is_a_nonempty_string_list (test_config.ConfigurationTests.test_bootstrap_file_is_a_nonempty_string_list)",
+      "test_default_model_and_revision_are_immutable (test_config.ConfigurationTests.test_default_model_and_revision_are_immutable)",
+      "test_layer_ranges_are_nonempty_and_nonnegative (test_config.ConfigurationTests.test_layer_ranges_are_nonempty_and_nonnegative)",
+      "test_model_override_requires_a_full_checkpoint_sha (test_config.ConfigurationTests.test_model_override_requires_a_full_checkpoint_sha)",
+      "test_all_failed_run_has_no_success_latency_estimates (test_config.ReportingTests.test_all_failed_run_has_no_success_latency_estimates)",
+      "test_empty_and_single_measurement_percentiles (test_config.ReportingTests.test_empty_and_single_measurement_percentiles)",
+      "test_failed_partial_outputs_do_not_inflate_accepted_throughput (test_config.ReportingTests.test_failed_partial_outputs_do_not_inflate_accepted_throughput)",
+      "test_nearest_rank_percentile_sorts_without_mutating_measurements (test_config.ReportingTests.test_nearest_rank_percentile_sorts_without_mutating_measurements)",
+      "test_single_output_request_has_no_decode_interval (test_config.ReportingTests.test_single_output_request_has_no_decode_interval)",
+      "test_zero_duration_does_not_report_infinite_throughput (test_config.ReportingTests.test_zero_duration_does_not_report_infinite_throughput)"
+    ]
+  },
+  "legacy_discovery_check": {
+    "tests": 95,
+    "passed": 38,
+    "failed": 0,
+    "skipped": 57,
+    "image": "steamboat-net-lab:m1-regression",
+    "method": "Current source mounted read-only; M1/M2 opt-in model/protocol tests skipped"
+  },
+  "numerical_observations": {
+    "created_utc": "2026-10-14T14:37:10.447841+00:00",
+    "runtime": {
+      "torch": "2.14.1+cpu",
+      "transformers": "5.19.0",
+      "grpcio": "1.84.0",
+      "protobuf": "7.36.2",
+      "safetensors": "0.8.0"
+    },
+    "execution": "three in-process handlers; binary Protobuf round trips; one loopback gRPC check",
+    "atol": 0.001,
+    "rtol": 0,
+    "model_revision": "298338802ab94432b917bcce11382aa151aee50f",
+    "manifest_fingerprint": "33aec5e084dc12cef677821fcc8ca55a00f74298531f1a97d499658e6930254d",
+    "fixture": "token[i] = 3 + ((i * 37 + offset) % (vocab_size - 3))",
+    "comparisons": [
+      {
+        "name": "prefill-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-4",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-5",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-6",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-7",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "prefill-128",
+        "shape": [
+          1,
+          128,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-4",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-5",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-6",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-7",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "prefill-1024",
+        "shape": [
+          1,
+          1024,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-4",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-5",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-6",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-7",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-prefill",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 5.364418029785156e-07
+      },
+      {
+        "name": "interleave-B-prefill",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 1.9073486328125e-06
+      },
+      {
+        "name": "interleave-B-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-B-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-B-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-B-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-B-after-A-close",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "loopback-grpc-stage-1",
+        "shape": [
+          1,
+          7,
+          64
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "lost-response-survivor-prefill",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 9.5367431640625e-07
+      },
+      {
+        "name": "lost-response-survivor-decode",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      }
+    ],
+    "cleanup": [
+      {
+        "test": "test_every_prefill_logit_and_eight_forced_decode_steps",
+        "workers": [
+          {
+            "worker": 1,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          },
+          {
+            "worker": 2,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          },
+          {
+            "worker": 3,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          }
+        ]
+      },
+      {
+        "test": "test_interleaved_sessions_release_independent_cache",
+        "workers": [
+          {
+            "worker": 1,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          },
+          {
+            "worker": 2,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          },
+          {
+            "worker": 3,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          }
+        ]
+      },
+      {
+        "test": "test_loopback_grpc_real_stage_matches_binary_in_memory_stage",
+        "workers": [
+          {
+            "worker": 1,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          },
+          {
+            "worker": 2,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          },
+          {
+            "worker": 3,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          }
+        ]
+      },
+      {
+        "test": "test_lost_response_is_not_replayed_and_other_session_survives",
+        "workers": [
+          {
+            "worker": 1,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          },
+          {
+            "worker": 2,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          },
+          {
+            "worker": 3,
+            "active_sessions": 0,
+            "reserved_positions": 0,
+            "allocated_cache_bytes": 0,
+            "requires_restart": false
+          }
+        ]
+      }
+    ],
+    "step_messages": 120,
+    "activation_payload_bytes_sent": 1020672,
+    "activation_payload_bytes_received": 1020672,
+    "limitations": [
+      "not separate worker processes",
+      "not network-performance evidence",
+      "no coordinator scheduler",
+      "no compute-overlap claim"
+    ],
+    "loopback_grpc": {
+      "stage": [
+        0,
+        3
+      ],
+      "tokens": 7,
+      "end_position": 7,
+      "reclaimed": true
+    },
+    "lost_response": {
+      "retry_code": "OUT_OF_ORDER",
+      "committed_position": 11,
+      "next_sequence": 1,
+      "action": "discard response; reject retry; close all affected reservations"
+    }
+  },
+  "max_absolute_logit_error": 1.9073486328125e-06,
+  "observations_file": "20261014T143712828800Z-m2-validation.json",
+  "preserved_previous_observations": [
+    "20261014T143140575345Z-m2-validation.json",
+    "20261014T143453533910Z-m2-validation.json"
+  ],
+  "test_failures_observed": [],
+  "failure_injection_policy": "Expected malformed messages, compute errors, lost replies, deadlines and cancellations are test assertions, not discarded failed runs.",
+  "bounds": {
+    "sessions": 8,
+    "session_positions": 1152,
+    "cache_positions_per_stage": 12288,
+    "cache_bytes_per_stage": 16777216,
+    "compute_calls_per_worker": 1,
+    "queued_compute_calls": 0,
+    "active_plus_tombstone_slots": 64,
+    "tombstone_seconds": 30,
+    "rpc_max_ms": 30000,
+    "max_lifetime_ms": 300000,
+    "idle_lease_max_ms": 120000,
+    "expiry_check_seconds": 5,
+    "compute_cancel_grace_seconds": 15,
+    "message_bytes": 1048576
+  },
+  "source_sha256": {
+    "compose.pytorch.yaml": "07930fa9f18c725a74bbbafc05a32d275578db505253f083c83109cf87dd32fa",
+    "docker/pytorch/Dockerfile": "4de3362a6994f4020460826ff53f7ce3fe90c199c46c4c46f9b9aadc16de0e57",
+    "docker/pytorch/requirements.lock": "0d893300099241375c9ef032268e162ff6ef46fe93cce1bbe6457bfd01545434",
+    "src/steamboat_runtime/__init__.py": "54262ac712c981e36330fa4ff2a41137129ddf3d2910548207f93845ae36511d",
+    "src/steamboat_runtime/backends.py": "ba613f2ff4b567424fd08f441ea90f3f7422da19c216b03648ae5fa22a64ea09",
+    "src/steamboat_runtime/interfaces.py": "d654d39dffec67f0bd8531f68a7279823ee9a668ff91219fb70cd45cb385eaa1",
+    "src/steamboat_runtime/manifest.py": "0a0cf5af4d8e9be3c47b2fdbc443e3aac01b4d2a013f34062329cd804ab44797",
+    "src/steamboat_runtime/model.py": "98e1f2a2ad6356bf21bfe376aa1517500ce4582ee6b7d4911e22418c26b943ee",
+    "src/steamboat_runtime/prepare.py": "12d878a263019aacf01055ea7c9c203dbe3fc007f8f435531293dc77141b9d30",
+    "src/steamboat_runtime/protocol/__init__.py": "fe07534bc0f4012c50455f2e3c930706be36445c457fb582197f4c78a8c5888c",
+    "src/steamboat_runtime/protocol/codec.py": "dd8170e5ce9e29a0b655f9257a8154fd6022461a7bd97acaf2af2885015c2447",
+    "src/steamboat_runtime/protocol/errors.py": "09b11b4eae9c3f1532de165d4029bc1f7135222d3fbd17656d7699122cb6f605",
+    "src/steamboat_runtime/protocol/transport.py": "11d44328026e1dfbf03ce182880113dd536580374c6089549749edc461e5e71e",
+    "src/steamboat_runtime/protocol/wire.py": "2402fe9b266e374dcc13cfa47b4ca8a3c78a30afb09780255e3e14b11c218b2f",
+    "src/steamboat_runtime/protocol/worker.proto": "7a69549f24fc23ef43a8a2286f5d98d8443e3c58470f61790d25a5eb2e915156",
+    "src/steamboat_runtime/protocol/worker_pb2.py": "3dc65dd3f7ca7b9a0316664bc7025d5386c655d2e136fcddf7ff5f8a0a29eccb",
+    "src/steamboat_runtime/worker_state.py": "f65ed29f76d30560b13b144ad166a5fcf163da1ec0d87aee12fe794225771cfe",
+    "tests/runtime/__init__.py": "f7ce56c8c79ce3b5750aeba432e9b0a6ad80a5a528f3c62d7ef21f260823e019",
+    "tests/runtime/test_codec.py": "f3cf383306e408f1aa2e8b44aa79b46087de42467d76c5700634ccacbed711ed",
+    "tests/runtime/test_manifest.py": "dc743d2b6ac72276dad46628b425dfd93463526baa89f54d817102e5ae73640c",
+    "tests/runtime/test_model.py": "ea9dee416d4bcefac686435d60564c8bdfdf82b10f9357c324d3008f2d75b3b5",
+    "tests/runtime/test_prepare.py": "c8f1dc700980609219ce533b83f620e3c7028508476d01eb8184860f6254a1a0",
+    "tests/runtime/test_protocol_model.py": "270d9736c16d4da6ee93534b7e7052612ebbe968edb33ccd497f6c712423f647",
+    "tests/runtime/test_transport.py": "97be36618dde610eaaa5ffce815b3f7fb34c28d4143eaf2de9776a25e859a02c",
+    "tests/runtime/test_worker_state.py": "f60b41a45c4f7bbb2fbb9ccde770f4fb08e8640b7aa4aa58bece1b973ff846be",
+    "tests/test_benchmark.py": "d4a6fc18d4adfce7b5cc4edb0af47765dbbd6676baa294f4aafc609108efef82",
+    "tests/test_config.py": "c45ace64a19d161bfb81db7cd96a8af0669cbc5e220cdfe35c21dd7b6ccf68c6"
+  },
+  "unimplemented_or_unmeasured": [
+    "separate worker processes/containers",
+    "process watchdog/restart",
+    "stage queues",
+    "coordinator scheduler and cross-worker automatic cleanup",
+    "WAN transport/performance",
+    "authenticated worker admission",
+    "compute overlap",
+    "allocator/RSS peak memory",
+    "energy",
+    "pooled GPU memory benefit"
+  ]
+}

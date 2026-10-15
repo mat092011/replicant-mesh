@@ -19,6 +19,13 @@ limitations. The broader research phase gates remain incomplete.
 For the planned runtime replacement, also read
 [docs/PYTORCH_PIPELINE_PLAN.md](docs/PYTORCH_PIPELINE_PLAN.md). That plan adds an
 owned PyTorch execution path; Petals remains an optional comparison baseline.
+M0–M3 are implemented: see [docs/PYTORCH_RUNTIME.md](docs/PYTORCH_RUNTIME.md) for
+the verified setup, current limits and test commands.
+[docs/PYTORCH_PROTOCOL.md](docs/PYTORCH_PROTOCOL.md) describes the binary protocol
+and worker lifecycle. [docs/PYTORCH_WORKERS.md](docs/PYTORCH_WORKERS.md) runs three
+supervised worker containers with bounded queues and remote numerical validation.
+M4 scheduling and M5 network experiments remain pending; same-host container tests
+do not establish separate-device performance or useful pipeline overlap.
 
 ## Technical principles
 

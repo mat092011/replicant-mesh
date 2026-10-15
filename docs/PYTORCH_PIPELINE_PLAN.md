@@ -1,8 +1,15 @@
 # Plan: an owned PyTorch pipeline runtime
 
-Status: proposed implementation, 2026-10-13. No replacement runtime is implemented
-by this document. The working Petals lab and its measured results are preserved
-on `main` at `9723c1b`; this plan starts from that commit.
+Status: M0 contracts, M1 in-process parity, M2 protocol/lifecycle and M3 supervised
+worker services implemented and validated, 2026-10-15.
+See the [runtime guide](PYTORCH_RUNTIME.md) and
+[M1 validation report](experiments/2026-10-14-pytorch-m1.md),
+[protocol guide](PYTORCH_PROTOCOL.md) and
+[M2 validation report](experiments/2026-10-14-pytorch-m2.md),
+[worker guide](PYTORCH_WORKERS.md) and
+[M3 validation report](experiments/2026-10-15-pytorch-m3.md). M4–M5 remain pending.
+The working Petals lab and its measured results are preserved on `main` at
+`9723c1b`; this implementation starts from that baseline.
 
 ## Objective and scope
 
@@ -52,13 +59,17 @@ loading peaks as well as steady-state weight and cache memory. Account explicitl
 for tied input/output weights and for the tiny model's large client-side share.
 
 Use PyTorch with a narrowly scoped Transformers Llama adapter, rather than writing
-attention kernels. Proposed transport is asynchronous gRPC with Protobuf metadata
-and bounded raw tensor bytes. Select and pin supported package versions in M0;
-these are design choices to validate, not claims of tested compatibility.
+attention kernels. M2 uses asynchronous gRPC with Protobuf metadata and bounded raw
+tensor bytes. The CPU dependency stack selected in M0 is locked; M2 validates
+serialized handlers and loopback transport. M3 adds three supervised services on
+an internal Docker network with bounded FIFO queues.
 
 ## Milestones and acceptance gates
 
-All milestones below are pending. Complete each gate before depending on it.
+M0's configuration/import, M1's numerical, M2's protocol/lifecycle and M3's remote
+worker gates passed. M3 enforces queues, expiry and execution deadlines across
+supervised worker processes, and validates numerical results across three containers.
+Coordinator scheduling and overlap remain M4 work. Complete each gate before depending on it.
 They implement parts of research phases P0–P3 in [PLAN.md](PLAN.md); they do not
 complete the separate-device or pooled-memory research gates.
 
@@ -127,6 +138,11 @@ closing one session does not change another session's results.
 
 ### M2 — Define and implement the protocol and cache lifecycle
 
+Implemented: see [the protocol guide](PYTORCH_PROTOCOL.md) for current operations,
+binary transport, lifecycle semantics and reproducible checks. Cancellation during
+compute retains ownership until completion; unresponsive compute marks the worker
+as requiring restart. The external process supervisor is now implemented in M3.
+
 Implement the contract below against an in-memory worker handler first, then the
 binary transport. No Python pickle, `torch.load` on received bytes, arbitrary
 operator names, or executable payloads are allowed in the protocol.
@@ -181,6 +197,12 @@ reservations return to baseline after cleanup; allocator-retained RSS is reporte
 separately from live cache ownership.
 
 ### M3 — Serve the three fixed workers
+
+Implemented with `worker.py`, the independent `supervisor.py`, opt-in FIFO queues
+in `WorkerHandler`, and `remote_check.py`. See the [worker guide](PYTORCH_WORKERS.md)
+and [validation record](experiments/2026-10-15-pytorch-m3.md). The following list is
+the original acceptance scope; the remote driver is sequential and does not
+implement the M4 coordinator.
 
 1. Package the model adapter and protocol handler as one worker image configured
    by a fixed assignment. Load weights once at startup and keep them resident.
@@ -285,18 +307,25 @@ resource-matched whole-model replicas before drawing efficiency conclusions.
 
 ## Proposed file layout and implementation order
 
-Paths below are planned; they are not runnable components yet.
+The model adapter, manifest/preparation helpers, session interface, backend adapter,
+protocol schema/codec/transports, worker state handler, tests and locked Docker image
+are implemented. Compose runs preparation and M1–M3 tests, plus three separate
+supervised worker services and a remote numerical checker. The coordinator,
+scheduler and network-profile extensions remain planned.
 
 | Path | Intended contents |
 | --- | --- |
 | `src/steamboat_runtime/model.py` | Llama adapter, weight manifest and assigned-layer loading |
 | `src/steamboat_runtime/protocol/` | Protobuf schema, checked tensor codec, errors |
+| `src/steamboat_runtime/worker_state.py` | Implemented owned-stage executor and worker lifecycle handler |
 | `src/steamboat_runtime/worker.py` | Worker service, bounded execution and session state |
+| `src/steamboat_runtime/supervisor.py` | Independent process watchdog and bounded restart budget |
+| `src/steamboat_runtime/remote_check.py` | Sequential remote validation fixture and complete-model comparison |
 | `src/steamboat_runtime/coordinator.py` | Admission, stage scheduler, token feedback and cancellation |
 | `src/steamboat_runtime/client.py` | Benchmark adapter and streamed-token client |
 | `tests/runtime/` | Model equivalence, protocol, cache, scheduling and failure tests |
 | `docker/pytorch/` | Independent runtime image and locked dependencies |
-| `compose.pytorch.yaml` | Three workers and coordinator using private static discovery |
+| `compose.pytorch.yaml` | Three workers and remote checker using private static discovery; coordinator pending |
 | `lab/benchmark.py`, `scripts/Set-NetworkProfile.ps1` | Reused entry points with explicit backend/lab selection |
 | `docs/experiments/` | Sanitized measurements and comparison reports |
 

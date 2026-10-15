@@ -172,5 +172,24 @@ class BenchmarkTests(unittest.TestCase):
         generator.assert_not_called()
 
 
+class BackendSelectionTests(unittest.TestCase):
+    def test_pytorch_session_uses_backend_without_importing_petals(self):
+        model = SimpleNamespace(runtime_backend="pytorch", open_session=Mock())
+        with patch.object(benchmark, "RemoteSession") as legacy:
+            session = benchmark.make_session(model, "pipeline", 20)
+        self.assertIs(session, model.open_session.return_value)
+        model.open_session.assert_called_once_with(20)
+        legacy.assert_not_called()
+
+    def test_legacy_selection_preserves_local_and_remote_adapters(self):
+        model = object()
+        with patch.object(benchmark, "LocalSession") as local, \
+                patch.object(benchmark, "RemoteSession") as remote:
+            self.assertIs(benchmark.make_session(model, "local", 20), local.return_value)
+            self.assertIs(benchmark.make_session(model, "pipeline", 20), remote.return_value)
+        local.assert_called_once_with(model, 20)
+        remote.assert_called_once_with(model, 20)
+
+
 if __name__ == "__main__":
     unittest.main()

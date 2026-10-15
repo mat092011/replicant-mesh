@@ -1,0 +1,821 @@
+{
+  "date": "2026-10-14",
+  "milestones": [
+    "M0 configuration/import gate",
+    "M1 in-process parity gate"
+  ],
+  "source_base_commit": "650489d06f2dd4ee96254b88e3cc5db2601be4e9",
+  "execution": "single CPU process; serialized stages; network disabled for new runtime checks",
+  "host": {
+    "cpu": "AMD Ryzen AI 9 HX 370",
+    "host_ram_gib_approx": 32,
+    "docker_vm_ram_gib_approx": 15.18,
+    "container_cpu_quota": 2,
+    "torch_threads": 2,
+    "container_memory_gib": 6,
+    "docker_engine": "29.8.2",
+    "compose": "5.6.0",
+    "contention": "Historical Petals containers remained running; not a performance study"
+  },
+  "runtime": {
+    "torch": "2.14.1+cpu",
+    "transformers": "5.19.0",
+    "petals": null,
+    "hivemind": null,
+    "numpy": "2.5.4",
+    "huggingface-hub": "2.2.0",
+    "grpcio": "1.84.0",
+    "protobuf": "7.36.2",
+    "safetensors": "0.8.0"
+  },
+  "python": "3.12.15",
+  "base_image": "python:3.12.15-slim-bookworm@sha256:2ed6491b93cd49272ee6de2b5a38440c3448360322c089fc23e370722d74179d",
+  "model": "Maykeye/TinyLLama-v0",
+  "revision": "298338802ab94432b917bcce11382aa151aee50f",
+  "precision": "float32",
+  "attention": "eager",
+  "compression": "none",
+  "test_suite": {
+    "command": "docker compose -f compose.pytorch.yaml run --rm tests",
+    "tests": 49,
+    "passed": 49,
+    "failures": 0,
+    "skipped": 0,
+    "observations_file": "20261014T084608947852Z-m1-validation.json"
+  },
+  "numerical_observations": {
+    "created_utc": "2026-10-14T08:46:06.133561+00:00",
+    "runtime": {
+      "torch": "2.14.1+cpu",
+      "transformers": "5.19.0",
+      "grpcio": "1.84.0",
+      "protobuf": "7.36.2",
+      "safetensors": "0.8.0"
+    },
+    "execution": "in_process_serialized; no network transport",
+    "atol": 0.001,
+    "rtol": 0,
+    "model_revision": "298338802ab94432b917bcce11382aa151aee50f",
+    "fixture": "token[i] = 3 + ((i * 37 + offset) % (vocab_size - 3))",
+    "comparisons": [
+      {
+        "name": "failure-survivor-prefill",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 9.5367431640625e-07
+      },
+      {
+        "name": "failure-survivor-decode",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "prefill-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-4",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-5",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-6",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1-7",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "prefill-128",
+        "shape": [
+          1,
+          128,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-4",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-5",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-6",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-128-7",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "prefill-1024",
+        "shape": [
+          1,
+          1024,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-4",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-5",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-6",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "forced-1024-7",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "context-1151",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 1.9073486328125e-06
+      },
+      {
+        "name": "context-1152",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "invalid-prefill",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 5.364418029785156e-07
+      },
+      {
+        "name": "after-invalid-input",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-prefill",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 5.364418029785156e-07
+      },
+      {
+        "name": "interleave-B-prefill",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 1.9073486328125e-06
+      },
+      {
+        "name": "interleave-B-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-0",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-B-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-1",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-B-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-2",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-B-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-A-3",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "interleave-B-after-A-close",
+        "shape": [
+          1,
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      }
+    ],
+    "greedy": [
+      {
+        "prompt_length": 1,
+        "pipeline_tokens": [
+          393,
+          260,
+          1496,
+          2789,
+          538,
+          4838,
+          289,
+          955,
+          492,
+          2017,
+          31843,
+          13,
+          9040,
+          1124,
+          31844,
+          266
+        ],
+        "reference_tokens": [
+          393,
+          260,
+          1496,
+          2789,
+          538,
+          4838,
+          289,
+          955,
+          492,
+          2017,
+          31843,
+          13,
+          9040,
+          1124,
+          31844,
+          266
+        ],
+        "divergences": []
+      },
+      {
+        "prompt_length": 128,
+        "pipeline_tokens": [
+          31829,
+          600,
+          3659,
+          31844,
+          700,
+          3379,
+          260,
+          3797,
+          1468,
+          15945,
+          291,
+          350,
+          3824,
+          1163,
+          291,
+          2815
+        ],
+        "reference_tokens": [
+          31829,
+          600,
+          3659,
+          31844,
+          700,
+          3379,
+          260,
+          3797,
+          1468,
+          15945,
+          291,
+          350,
+          3824,
+          1163,
+          291,
+          2815
+        ],
+        "divergences": []
+      }
+    ],
+    "eight_session_diagnostics": {
+      "active_sessions": 8,
+      "reserved_positions": 256,
+      "allocated_cache_bytes": 147456,
+      "stages": [
+        {
+          "start": 0,
+          "end": 3,
+          "active_sessions": 8,
+          "reserved_positions": 256,
+          "allocated_bytes": 55296
+        },
+        {
+          "start": 3,
+          "end": 6,
+          "active_sessions": 8,
+          "reserved_positions": 256,
+          "allocated_bytes": 55296
+        },
+        {
+          "start": 6,
+          "end": 8,
+          "active_sessions": 8,
+          "reserved_positions": 256,
+          "allocated_bytes": 36864
+        }
+      ],
+      "execution": "in_process_serialized",
+      "manifest_fingerprint": "33aec5e084dc12cef677821fcc8ca55a00f74298531f1a97d499658e6930254d"
+    },
+    "parameter_counts": {
+      "coordinator": 4096064,
+      "worker-1": 196992,
+      "worker-2": 196992,
+      "worker-3": 131328
+    },
+    "final_diagnostics": {
+      "active_sessions": 0,
+      "reserved_positions": 0,
+      "allocated_cache_bytes": 0,
+      "stages": [
+        {
+          "start": 0,
+          "end": 3,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_bytes": 0
+        },
+        {
+          "start": 3,
+          "end": 6,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_bytes": 0
+        },
+        {
+          "start": 6,
+          "end": 8,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_bytes": 0
+        }
+      ],
+      "execution": "in_process_serialized",
+      "manifest_fingerprint": "33aec5e084dc12cef677821fcc8ca55a00f74298531f1a97d499658e6930254d"
+    }
+  },
+  "max_absolute_logit_error": 1.9073486328125e-06,
+  "cli_check": {
+    "success": true,
+    "cases": 8,
+    "max_absolute_error": 0.0
+  },
+  "legacy_check": {
+    "success": true,
+    "cases": 8,
+    "runtime": {
+      "torch": "2.3.1+cpu",
+      "transformers": "4.43.1",
+      "petals": "2.3.0.dev2",
+      "hivemind": "1.2.0.dev0",
+      "numpy": "1.26.4",
+      "huggingface-hub": "0.25.2",
+      "grpcio": "1.68.1",
+      "protobuf": "5.29.2",
+      "safetensors": "0.4.5"
+    },
+    "file": "20261014T084657065693Z-check-pipeline.json"
+  },
+  "legacy_image_build": {
+    "success": true,
+    "tag": "steamboat-net-lab:m1-regression",
+    "unit_tests_passed": 38,
+    "model_integration_skipped": 11
+  },
+  "runner_smoke_attempts": [
+    {
+      "file": "20261014T084713762739Z-bench-pipeline.json",
+      "success": true,
+      "arguments": {
+        "command": "bench",
+        "mode": "pipeline",
+        "backend": "pytorch",
+        "artifacts": "/artifacts",
+        "reference": null,
+        "requests": 3,
+        "concurrency": 3,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "m1-cli-smoke",
+        "atol": 0.001,
+        "output": null
+      },
+      "summary": {
+        "attempted": 3,
+        "completed": 3,
+        "failed": 0,
+        "accepted_output_tokens": 24,
+        "measurement_seconds": 0.07066266099718632,
+        "aggregate_output_tokens_per_second": 339.64189377124706,
+        "ttft_seconds_p50": 0.023917475999041926,
+        "ttft_seconds_p95": 0.03382246399996802,
+        "inter_token_seconds_p50": 0.0021544550036196597,
+        "inter_token_seconds_p95": 0.020505843000137247
+      },
+      "error": null,
+      "output_token_ids": [
+        [
+          287,
+          484,
+          266,
+          693,
+          288,
+          266,
+          1978,
+          31843
+        ],
+        [
+          287,
+          484,
+          266,
+          693,
+          288,
+          266,
+          1978,
+          31843
+        ],
+        [
+          287,
+          484,
+          266,
+          693,
+          288,
+          266,
+          1978,
+          31843
+        ]
+      ]
+    },
+    {
+      "file": "20261014T084718043698Z-bench-local.json",
+      "success": false,
+      "arguments": {
+        "command": "bench",
+        "mode": "local",
+        "backend": "pytorch",
+        "artifacts": "/artifacts",
+        "reference": null,
+        "requests": 3,
+        "concurrency": 1,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "m1-cli-control",
+        "atol": 0.001,
+        "output": null
+      },
+      "summary": null,
+      "error": "IncompleteSnapshotError: The cached snapshot for 'Maykeye/TinyLLama-v0' (revision '298338802ab94432b917bcce11382aa151aee50f', commit 298338802ab94432b917bcce11382aa151aee50f) is incomplete: 9 file(s) are missing (.gitattributes, README.md, backup/do_backup.py, ... (6 more)). Outgoing traffic is disabled ('local_files_only=True'). Re-run the download with network access to complete the snapshot.",
+      "output_token_ids": []
+    },
+    {
+      "file": "20261014T084737447664Z-bench-local.json",
+      "success": true,
+      "arguments": {
+        "command": "bench",
+        "mode": "local",
+        "backend": "pytorch",
+        "artifacts": "/artifacts",
+        "reference": null,
+        "requests": 3,
+        "concurrency": 1,
+        "prompt_tokens": 128,
+        "new_tokens": 8,
+        "label": "m1-cli-control-fixed",
+        "atol": 0.001,
+        "output": null
+      },
+      "summary": {
+        "attempted": 3,
+        "completed": 3,
+        "failed": 0,
+        "accepted_output_tokens": 24,
+        "measurement_seconds": 0.05193986900121672,
+        "aggregate_output_tokens_per_second": 462.07278650313475,
+        "ttft_seconds_p50": 0.004990856003132649,
+        "ttft_seconds_p95": 0.00979588000336662,
+        "inter_token_seconds_p50": 0.00142125000274973,
+        "inter_token_seconds_p95": 0.0017224129987880588
+      },
+      "error": null,
+      "output_token_ids": [
+        [
+          287,
+          484,
+          266,
+          693,
+          288,
+          266,
+          1978,
+          31843
+        ],
+        [
+          287,
+          484,
+          266,
+          693,
+          288,
+          266,
+          1978,
+          31843
+        ],
+        [
+          287,
+          484,
+          266,
+          693,
+          288,
+          266,
+          1978,
+          31843
+        ]
+      ]
+    }
+  ],
+  "failed_attempt_resolution": "Complete-model offline lookup now requests only the seven pinned files; unrelated repository files are not required.",
+  "source_sha256": {
+    "compose.pytorch.yaml": "ed23cd66dddcc2d93ef703b1bba7bde75530e821c479720a3c5b6a0191366a69",
+    "docker/Dockerfile": "9593bfa0ae51977181e1151ff9573432831d637483ca647bc3759e087c921c11",
+    "docker/pytorch/Dockerfile": "4de3362a6994f4020460826ff53f7ce3fe90c199c46c4c46f9b9aadc16de0e57",
+    "docker/pytorch/lock_from_report.py": "7ba4bf4b3675a850888277bd531ec994d26562da42880012f164e67fc52408e9",
+    "docker/pytorch/README.md": "706c03a6d12350bbcd9d2580b9deaa9b45e595d6c51f68de87088e00692f63fd",
+    "docker/pytorch/requirements.in": "b0eb7e463b4f8627ad94e9108fdd53c9258f069c804755f0836f4ea52ec0acce",
+    "docker/pytorch/requirements.lock": "0d893300099241375c9ef032268e162ff6ef46fe93cce1bbe6457bfd01545434",
+    "docker/pytorch/verify_environment.py": "9d08e18d57c494bcbe97d42d20cf29f57c384c2da92f038765e7e996577d974a",
+    "lab/__init__.py": "ed55d8778ae649b950e10fdc4705c0578905389416582f4c315977aabdc2f1a3",
+    "lab/benchmark.py": "f229cbb22a9c6b1b63b19e0e11fd5774e1f9d79271860c3da0e94e77b2b0d321",
+    "lab/config.py": "bb79cd28bacd2abbbeab2a74aa0123f0d411fefc9336226eeea7ed1a71302eaf",
+    "lab/launch.py": "980339d4582455a4d7a3c1afcbd67bab1cd0b76634627bba687f86c89f0929a9",
+    "src/steamboat_runtime/__init__.py": "54262ac712c981e36330fa4ff2a41137129ddf3d2910548207f93845ae36511d",
+    "src/steamboat_runtime/backends.py": "ba613f2ff4b567424fd08f441ea90f3f7422da19c216b03648ae5fa22a64ea09",
+    "src/steamboat_runtime/interfaces.py": "d654d39dffec67f0bd8531f68a7279823ee9a668ff91219fb70cd45cb385eaa1",
+    "src/steamboat_runtime/manifest.py": "0a0cf5af4d8e9be3c47b2fdbc443e3aac01b4d2a013f34062329cd804ab44797",
+    "src/steamboat_runtime/model.py": "98e1f2a2ad6356bf21bfe376aa1517500ce4582ee6b7d4911e22418c26b943ee",
+    "src/steamboat_runtime/prepare.py": "12d878a263019aacf01055ea7c9c203dbe3fc007f8f435531293dc77141b9d30",
+    "tests/runtime/__init__.py": "f7ce56c8c79ce3b5750aeba432e9b0a6ad80a5a528f3c62d7ef21f260823e019",
+    "tests/runtime/test_manifest.py": "dc743d2b6ac72276dad46628b425dfd93463526baa89f54d817102e5ae73640c",
+    "tests/runtime/test_model.py": "ea9dee416d4bcefac686435d60564c8bdfdf82b10f9357c324d3008f2d75b3b5",
+    "tests/runtime/test_prepare.py": "c8f1dc700980609219ce533b83f620e3c7028508476d01eb8184860f6254a1a0",
+    "tests/test_benchmark.py": "d4a6fc18d4adfce7b5cc4edb0af47765dbbd6676baa294f4aafc609108efef82",
+    "tests/test_config.py": "c45ace64a19d161bfb81db7cd96a8af0669cbc5e220cdfe35c21dd7b6ccf68c6"
+  },
+  "unmeasured": [
+    "RPC behavior",
+    "network performance",
+    "pipeline overlap",
+    "separate devices",
+    "loading peak memory",
+    "allocator peak memory/RSS",
+    "pooled GPU memory",
+    "energy"
+  ]
+}

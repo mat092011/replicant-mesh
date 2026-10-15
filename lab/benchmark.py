@@ -13,8 +13,12 @@ import platform
 import subprocess
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from lab.config import model_settings, percentile, read_peers, summarize_requests
+
+if TYPE_CHECKING:
+    from steamboat_runtime.interfaces import InferenceSession
 
 FIXTURE = "A network of computers cooperates to calculate the next token. "
 MAX_SESSION_TOKENS = 1152
@@ -42,11 +46,16 @@ class LocalSession:
         self.max_length = max_length
         self.position = 0
         self.cache = None
+        self.closed = False
 
     def __enter__(self):
+        if self.closed:
+            raise RuntimeError("Session is closed")
         return self
 
-    def step(self, ids):
+    def step(self, ids, *, return_all_logits=False):
+        if self.closed:
+            raise RuntimeError("Session is closed")
         if self.position + ids.shape[1] > self.max_length:
             raise ValueError("Session context limit exceeded")
         result = self.model.base_model(
@@ -54,10 +63,15 @@ class LocalSession:
         )
         self.cache = result.past_key_values
         self.position += ids.shape[1]
-        return self.model.lm_head(result.last_hidden_state[:, -1:, :])
+        hidden = result.last_hidden_state
+        return self.model.lm_head(hidden if return_all_logits else hidden[:, -1:, :])
+
+    def diagnostics(self):
+        return {"position": self.position, "max_length": self.max_length, "closed": self.closed}
 
     def close(self):
         self.cache = None
+        self.closed = True
 
     def __exit__(self, *_):
         self.close()
@@ -75,11 +89,20 @@ class RemoteSession:
         self.remote.__enter__()
         return self
 
-    def step(self, ids):
+    @property
+    def position(self):
+        return self.remote.position
+
+    def step(self, ids, *, return_all_logits=False):
+        if self.closed:
+            raise RuntimeError("Session is closed")
         transformer = self.model.transformer
         embeddings = transformer.word_embeddings_layernorm(transformer.word_embeddings(ids))
         hidden = self.remote.step(embeddings)
-        return self.model.lm_head(transformer.ln_f(hidden[:, -1:, :]))
+        return self.model.lm_head(transformer.ln_f(hidden if return_all_logits else hidden[:, -1:, :]))
+
+    def diagnostics(self):
+        return {"position": self.position, "closed": self.closed}
 
     def close(self):
         if not self.closed:
@@ -90,11 +113,17 @@ class RemoteSession:
         self.close()
 
 
-def load_model(mode):
+def load_model(mode, backend="petals", artifacts="/artifacts", reference=None):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "2")))
+    if backend == "pytorch":
+        from steamboat_runtime.backends import load_model as load_pytorch_model
+
+        return load_pytorch_model(mode, artifacts, reference)
+    if backend != "petals":
+        raise ValueError(f"Unknown backend: {backend}")
     model_id, revision = model_settings()
     kwargs = dict(revision=revision, torch_dtype=torch.float32,
                   local_files_only=True, attn_implementation="eager")
@@ -116,8 +145,16 @@ def load_model(mode):
     return model, tokenizer, time.perf_counter() - started
 
 
-def make_session(model, mode, max_length):
+def make_session(model, mode, max_length) -> "InferenceSession":
+    if getattr(model, "runtime_backend", None) == "pytorch":
+        return model.open_session(max_length)
     return (LocalSession if mode == "local" else RemoteSession)(model, max_length)
+
+
+def model_options(args):
+    return dict(backend=getattr(args, "backend", "petals"),
+                artifacts=getattr(args, "artifacts", "/artifacts"),
+                reference=getattr(args, "reference", None))
 
 
 def generate_request(model, mode, prompt, new_tokens, request_id):
@@ -155,7 +192,7 @@ def generate_request(model, mode, prompt, new_tokens, request_id):
 
 def run_bench(args, report):
     validate_workload(args.prompt_tokens, args.new_tokens, args.concurrency, args.requests)
-    model, tokenizer, loading = load_model(args.mode)
+    model, tokenizer, loading = load_model(args.mode, **model_options(args))
     report["model_loading_seconds"] = loading
     position_limit = getattr(model.config, "max_position_embeddings", MAX_SESSION_TOKENS)
     if args.prompt_tokens + args.new_tokens > position_limit:
@@ -193,13 +230,15 @@ def run_bench(args, report):
         r["output_tokens"] for r in records if not r["success"]
     )
     report["success"] = all(r["success"] for r in records)
+    if getattr(model, "runtime_backend", None) == "pytorch":
+        report["runtime_diagnostics_after_close"] = model.diagnostics()
 
 
 def run_check(args, report):
     import torch
 
-    local, tokenizer, local_loading = load_model("local")
-    remote, _, remote_loading = load_model("pipeline")
+    local, tokenizer, local_loading = load_model("local", **model_options(args))
+    remote, _, remote_loading = load_model("pipeline", **model_options(args))
     report["model_loading_seconds"] = {"local": local_loading, "pipeline": remote_loading}
     comparisons = report["comparisons"] = []
     forced = fixture_ids(tokenizer, 4)
@@ -221,7 +260,7 @@ def run_check(args, report):
         pairs = []
         for name, length in [("A", 16), ("B", 37)]:
             left = stack.enter_context(LocalSession(local, length + 4))
-            right = stack.enter_context(RemoteSession(remote, length + 4))
+            right = stack.enter_context(make_session(remote, "pipeline", length + 4))
             prompt = fixture_ids(tokenizer, length + (name == "B"))[int(name == "B"):]
             compare(left, right, prompt, f"{name}:prefill")
             pairs.append((left, right))
@@ -231,11 +270,11 @@ def run_check(args, report):
         pairs[0][1].close()
         report["cancelled_session_closed"] = True
         compare(*pairs[1], [forced[2]], "B:decode_after_A_close")
-        with LocalSession(local, 20) as left, RemoteSession(remote, 20) as right:
+        with LocalSession(local, 20) as left, make_session(remote, "pipeline", 20) as right:
             compare(left, right, fixture_ids(tokenizer, 16), "C:fresh_after_A_close")
             compare(left, right, [forced[3]], "C:forced_decode")
         compare(*pairs[1], [forced[3]], "B:decode_after_C_close")
-        with RemoteSession(remote, 8) as bounded:
+        with make_session(remote, "pipeline", 8) as bounded:
             bounded.step(torch.tensor([fixture_ids(tokenizer, 8)], dtype=torch.long))
             try:
                 bounded.step(torch.tensor([[forced[0]]], dtype=torch.long))
@@ -249,13 +288,26 @@ def run_check(args, report):
         "closing and reusing sessions checks behavior; worker memory reclamation is not measured",
         "malformed RPC messages, process failures, and execution overlap traces are not tested",
     ]
+    if getattr(remote, "runtime_backend", None) == "pytorch":
+        report["runtime_diagnostics_after_close"] = remote.diagnostics()
+        report["limitations"] = [
+            "this short check compares final-position logits; run the M1 test suite for full-prefill coverage",
+            "all three stages execute in one process under one lock; no RPC, network or pipeline overlap",
+            "cache tensor bytes are measured; process RSS and allocator peak memory are not measured",
+        ]
 
 
 def metadata(args):
-    model, revision = model_settings()
+    backend = getattr(args, "backend", "petals")
+    if backend == "pytorch":
+        from steamboat_runtime.manifest import MODEL_ID, MODEL_REVISION
+        model, revision = MODEL_ID, MODEL_REVISION
+    else:
+        model, revision = model_settings()
     versions = {}
     sources = {}
-    for package in ["torch", "transformers", "petals", "hivemind", "numpy", "huggingface-hub"]:
+    for package in ["torch", "transformers", "petals", "hivemind", "numpy", "huggingface-hub",
+                    "grpcio", "protobuf", "safetensors"]:
         try:
             versions[package] = importlib.metadata.version(package)
             source = importlib.metadata.distribution(package).read_text("direct_url.json")
@@ -268,12 +320,17 @@ def metadata(args):
                                text=True, capture_output=True, timeout=5, check=True).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         qdisc = None
+    routing = ("in-process serialized stages [0,3), [3,6), [6,8); no network transport"
+               if backend == "pytorch" else
+               "client relays activations between fixed stages; server-to-server push disabled")
+    if args.mode == "local" and args.command == "bench":
+        routing = "complete-model local reference; no network transport"
     return {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "model": model, "revision": revision, "tokenizer_revision": revision,
         "runtime": versions, "runtime_sources": sources, "python": platform.python_version(),
         "precision": "float32", "attention": "eager", "activation_compression": "NONE",
-        "routing": "client relays activations between fixed stages; server-to-server push disabled",
+        "backend": backend, "routing": routing,
         "torch_threads": int(os.environ.get("OMP_NUM_THREADS", "2")),
         "arguments": vars(args), "client_qdisc": qdisc,
         "workload": "public repeated fixture, greedy sampling, fixed output length; EOS ignored",
@@ -290,6 +347,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["check", "bench"])
     parser.add_argument("--mode", choices=["local", "pipeline"], default="pipeline")
+    parser.add_argument("--backend", choices=["petals", "pytorch"], default="petals")
+    parser.add_argument("--artifacts", default="/artifacts", help="verified PyTorch shard directory")
+    parser.add_argument("--reference", help="pinned source snapshot for the PyTorch whole-model reference")
     parser.add_argument("--requests", type=int, default=10)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--prompt-tokens", type=int, default=128)

@@ -18,7 +18,8 @@ Usability targets remain proposals, not claims established by this tiny model.
 **Next implementation:** [PYTORCH_PIPELINE_PLAN.md](PYTORCH_PIPELINE_PLAN.md) defines
 the replacement runtime in six gated milestones: contracts, in-process partition
 parity, session protocol, worker services, coordinator scheduling, and Docker
-comparisons. This is planned work within P0–P3; Petals stays an optional baseline.
+comparisons. Contracts, in-process parity, protocol/lifecycle and supervised workers
+(M0–M3) are now implemented within P0–P3; Petals stays an optional baseline.
 
 The first intended deployment uses invited GPU-equipped desktops and one fixed
 model. Device count, GPU types, available memory, and internet connections still
@@ -58,13 +59,24 @@ under project control; see the linked implementation plan for the scope and gate
 Authenticated worker admission is required before expanding beyond the trusted
 local lab. Verify runtime/model compatibility and pin the tested stack.
 
+The first owned-runtime slice (M0/M1) now passes in-process numerical and session
+checks on the locked PyTorch stack, including full 1,024-position prefill logits.
+See [the runtime guide](PYTORCH_RUNTIME.md) and
+[M1 evidence](experiments/2026-10-14-pytorch-m1.md). The subsequent
+[M2 protocol/lifecycle gate](experiments/2026-10-14-pytorch-m2.md) also passes
+binary transport, bounded validation and cancellation/expiry checks, including
+loopback gRPC. [M3](experiments/2026-10-15-pytorch-m3.md) adds three supervised
+worker containers, bounded queues, process-fault checks and remote logit parity.
+Scheduling and overlap remain pending; same-host correctness tests do not complete
+the separate-device or performance research gates below.
+
 ## Phase overview
 
 | Phase | Outcome | Dependency | Status |
 | --- | --- | --- | --- |
 | P0 | Fixed protocol, hardware inventory, and acceptance targets | None | Local CPU protocol and runtime validated; GPU cohort and final acceptance targets pending |
-| P1 | Reproducible complete-model reference | P0 | Local smoke baseline measured; startup/prefill/decode and memory instrumentation incomplete |
-| P2 | Correct fixed pipeline across processes and devices | P1 | Three-container logits/session checks passed; separate devices, memory evidence, and overlap traces pending |
+| P1 | Reproducible complete-model reference | P0 | Petals smoke baseline and owned PyTorch full-logit reference validated; detailed timing/peak memory incomplete |
+| P2 | Correct fixed pipeline across processes and devices | P1 | PyTorch M3 supervised containers, remote parity and process faults passed; separate devices and overlap traces pending |
 | P3 | Measured LAN and WAN performance envelope | P2 | Short netem smoke comparison measured; full sweeps and real links pending |
 | P4 | Demonstrated pooled-memory benefit | P3 | Pending |
 | P5 | Scheduling and recovery under changing availability | P4 | Pending |

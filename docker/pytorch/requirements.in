@@ -1,0 +1,11 @@
+# Independent CPU runtime. Resolve only binary wheels for CPython 3.12/linux-amd64.
+# CPU wheel comes from PyTorch's official index, never the CUDA-enabled PyPI wheel.
+torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl
+transformers==5.19.0
+grpcio==1.84.0
+protobuf==7.36.2
+safetensors==0.8.0
+huggingface-hub==2.2.0
+numpy==2.5.4
+sentencepiece==0.2.1
+psutil==7.2.2

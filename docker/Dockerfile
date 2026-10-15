@@ -20,6 +20,8 @@ RUN PIP_CONSTRAINT=/tmp/build-constraints.txt pip install --no-cache-dir -r /tmp
     && pip check
 
 WORKDIR /app
+ENV PYTHONPATH=/app/src:/app
+COPY src /app/src
 COPY lab /app/lab
 COPY tests /app/tests
 RUN python -m compileall -q lab tests && python -m unittest discover -s tests

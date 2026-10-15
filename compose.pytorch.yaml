@@ -1,0 +1,124 @@
+# M0-M3: partition/protocol tests and three supervised private worker services.
+# The coordinator scheduler and network-profile experiments are later milestones.
+name: steamboat-pytorch-m1
+
+x-common: &common
+  image: steamboat-pytorch:cpu
+  platform: linux/amd64
+  build:
+    context: .
+    dockerfile: docker/pytorch/Dockerfile
+    target: runtime
+  init: true
+  restart: "no"
+  cpus: 2.0
+  mem_limit: 6g
+  pids_limit: 256
+  security_opt: [no-new-privileges:true]
+  environment: &environment
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    OMP_NUM_THREADS: "2"
+    MKL_NUM_THREADS: "2"
+    STEAMBOAT_ARTIFACT_DIR: /artifacts
+    STEAMBOAT_REFERENCE_DIR: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+    STEAMBOAT_TEST_SNAPSHOT: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+    STEAMBOAT_PROTOCOL_TESTS: "1"
+  volumes:
+    - pytorch-model-cache:/cache:ro
+    - pytorch-artifacts:/artifacts:ro
+    - ./.lab/pytorch-results:/results
+
+services:
+  prepare:
+    <<: *common
+    command: [python, -m, steamboat_runtime.prepare, --output, /artifacts]
+    environment:
+      <<: *environment
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
+    volumes:
+      - pytorch-model-cache:/cache
+      - pytorch-artifacts:/artifacts
+    networks: [download]
+
+  tests:
+    <<: *common
+    command: [python, -m, unittest, discover, -s, tests, -v]
+    network_mode: none
+    environment:
+      <<: *environment
+      STEAMBOAT_TEST_REPORT: ${STEAMBOAT_TEST_REPORT:-/results}
+      STEAMBOAT_PROTOCOL_REPORT: ${STEAMBOAT_PROTOCOL_REPORT:-/results}
+      STEAMBOAT_PROCESS_TESTS: "1"
+
+  benchmark:
+    <<: *common
+    network_mode: none
+    command:
+      - python
+      - -m
+      - lab.benchmark
+      - check
+      - --backend
+      - pytorch
+      - --artifacts
+      - /artifacts
+      - --reference
+      - /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+
+  worker-1: &worker
+    <<: *common
+    command: [python, -m, steamboat_runtime.worker, serve, --artifacts, /artifacts, --worker, worker-1, --host, "0.0.0.0:50051", --private-network]
+    mem_limit: 3g
+    stop_grace_period: 20s
+    volumes:
+      - pytorch-artifacts:/artifacts:ro
+    networks: [workers]
+    healthcheck:
+      test: [CMD, python, -m, steamboat_runtime.worker, health, --target, "127.0.0.1:50051", --artifacts, /artifacts, --worker, worker-1]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  worker-2:
+    <<: *worker
+    command: [python, -m, steamboat_runtime.worker, serve, --artifacts, /artifacts, --worker, worker-2, --host, "0.0.0.0:50051", --private-network]
+    healthcheck:
+      test: [CMD, python, -m, steamboat_runtime.worker, health, --target, "127.0.0.1:50051", --artifacts, /artifacts, --worker, worker-2]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  worker-3:
+    <<: *worker
+    command: [python, -m, steamboat_runtime.worker, serve, --artifacts, /artifacts, --worker, worker-3, --host, "0.0.0.0:50051", --private-network]
+    healthcheck:
+      test: [CMD, python, -m, steamboat_runtime.worker, health, --target, "127.0.0.1:50051", --artifacts, /artifacts, --worker, worker-3]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  remote-check:
+    <<: *common
+    command: [python, -m, steamboat_runtime.remote_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --output, /results]
+    networks: [workers]
+    depends_on:
+      worker-1:
+        condition: service_healthy
+      worker-2:
+        condition: service_healthy
+      worker-3:
+        condition: service_healthy
+
+networks:
+  download: {}
+  workers:
+    internal: true
+
+volumes:
+  pytorch-model-cache:
+  pytorch-artifacts:
