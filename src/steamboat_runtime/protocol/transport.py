@@ -60,6 +60,9 @@ class InMemoryTransport:
                                Response, self.max_message_bytes)
         return validate_response(method, request, result)
 
+    async def close(self):
+        """No channel is owned; the fixture remains responsible for its handler."""
+
 
 def _options(max_message_bytes):
     if type(max_message_bytes) is not int or not 1 <= max_message_bytes <= MAX_MESSAGE_BYTES:

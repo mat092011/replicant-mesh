@@ -57,10 +57,13 @@ def validate_response(method, request, response):
     if response.code not in ERROR_CODES | {"OK"} or len(response.message) > MAX_ERROR_CHARS:
         raise ProtocolError("INVALID_INPUT", "invalid response status")
     if any(len(getattr(response, name)) > 256 for name in
-           ("manifest_fingerprint", "worker_boot_id", "session_id", "lease_token", "state")):
+           ("manifest_fingerprint", "worker_boot_id", "session_id", "lease_token", "state", "clock_id")):
         raise ProtocolError("INVALID_INPUT", "response metadata exceeds the bound")
     if not all(math.isfinite(value) and value >= 0 for value in (response.queue_ms, response.compute_ms)):
         raise ProtocolError("INVALID_INPUT", "invalid response timing")
+    if response.compute_start_ns or response.compute_end_ns:
+        if not (0 < response.compute_start_ns <= response.compute_end_ns <= response.monotonic_ns):
+            raise ProtocolError("INVALID_INPUT", "invalid compute timestamp ordering")
     if response.code != "OK":
         # Error responses may report the current boot/model after a restart.
         return response

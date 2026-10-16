@@ -70,6 +70,12 @@ message Response {
   uint32 rpc_timeout_ms = 38;
   uint32 queued_operations = 39;
   uint32 max_stage_queue = 40;
+  // Actual execution-thread spans; compare across workers only after verifying
+  // a shared Linux clock domain and a bracketed Describe monotonic_ns sample.
+  uint64 compute_start_ns = 41;
+  uint64 compute_end_ns = 42;
+  string clock_id = 43;
+  uint64 monotonic_ns = 44;
 }
 
 service Worker {

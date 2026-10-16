@@ -5,7 +5,7 @@ Protobuf schema, bounded tensor codec, one-stage worker handler, serialized
 in-memory transport and a loopback gRPC adapter. It builds on the
 [M0/M1 partitions](PYTORCH_RUNTIME.md). [M3 worker services](PYTORCH_WORKERS.md)
 extend this handler with queues, private Docker RPC and process supervision.
-Coordinator scheduling remains M4 work. This page describes the M2 behavior;
+Coordinator scheduling is implemented in [M4](PYTORCH_COORDINATOR.md). This page describes the M2 behavior;
 its default in-process handler still rejects busy compute instead of queueing.
 
 ## Run the checks

@@ -3,8 +3,9 @@
 M3 moves the [M2 handler and protocol](PYTORCH_PROTOCOL.md) into three supervised
 worker services. Each service loads only its assigned model layers and owns its
 session KV caches. A sequential validation client relays activations and compares
-the final logits with the complete model. The M4 request scheduler, streamed-token
-API and useful overlap of independent requests remain future work.
+the final logits with the complete model. The subsequent [M4 coordinator](PYTORCH_COORDINATOR.md)
+adds request scheduling, local streaming and verified overlap of independent requests.
+This page describes the sequential M3 validation path.
 
 The three-container numerical check passed on 2026-10-15: 48 comparisons had a
 maximum absolute logit difference of `3.337860107421875e-6`, within the frozen

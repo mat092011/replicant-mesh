@@ -27,7 +27,9 @@ also supports RFC1918 IPv4 addresses, simple Docker service names for clients,
 and `0.0.0.0` for container listeners. Compose supplies the network isolation;
 the option supplies no authentication or encryption. No host ports are published.
 All participants must use the same schema build: M3 adds response fields 39/40
-for queue counts/capacity, and older strict v1 decoders reject unknown fields.
+for queue counts/capacity, and M4 adds fields 41–44 for execution-thread monotonic
+spans, clock identity and a Describe clock sample. Older strict v1 decoders reject
+unknown fields. Rebuild/recreate all workers when moving to the M4 code.
 Timeout/disconnect can leave an operation committed without a received reply.
 Callers must terminate the affected session and release reservations; resending
 the same step is not recovery. The later coordinator owns cross-worker cleanup.

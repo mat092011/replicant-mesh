@@ -1,13 +1,15 @@
 # Plan: an owned PyTorch pipeline runtime
 
-Status: M0 contracts, M1 in-process parity, M2 protocol/lifecycle and M3 supervised
-worker services implemented and validated, 2026-10-15.
+Status: M0 contracts, M1 in-process parity, M2 protocol/lifecycle, M3 supervised
+workers and M4 coordinator scheduling implemented and validated, 2026-10-15.
 See the [runtime guide](PYTORCH_RUNTIME.md) and
 [M1 validation report](experiments/2026-10-14-pytorch-m1.md),
 [protocol guide](PYTORCH_PROTOCOL.md) and
 [M2 validation report](experiments/2026-10-14-pytorch-m2.md),
 [worker guide](PYTORCH_WORKERS.md) and
-[M3 validation report](experiments/2026-10-15-pytorch-m3.md). M4–M5 remain pending.
+[M3 validation report](experiments/2026-10-15-pytorch-m3.md),
+[coordinator guide](PYTORCH_COORDINATOR.md) and
+[M4 validation report](experiments/2026-10-15-pytorch-m4.md). M5 remains pending.
 The working Petals lab and its measured results are preserved on `main` at
 `9723c1b`; this implementation starts from that baseline.
 
@@ -69,7 +71,8 @@ an internal Docker network with bounded FIFO queues.
 M0's configuration/import, M1's numerical, M2's protocol/lifecycle and M3's remote
 worker gates passed. M3 enforces queues, expiry and execution deadlines across
 supervised worker processes, and validates numerical results across three containers.
-Coordinator scheduling and overlap remain M4 work. Complete each gate before depending on it.
+M4's bounded coordinator validates concurrent parity and same-host compute overlap.
+M5's service/benchmark/network work remains. Complete each gate before depending on it.
 They implement parts of research phases P0–P3 in [PLAN.md](PLAN.md); they do not
 complete the separate-device or pooled-memory research gates.
 
@@ -229,6 +232,14 @@ prevents admission; a failed worker produces a bounded error rather than a hang.
 
 ### M4 — Coordinate and schedule independent requests
 
+Implemented as an asynchronous coordinator object with three bounded FIFO stage
+queues, atomic admission, streaming, deadlines and cleanup. The coordinator's model
+components execute on a bounded CPU thread; `client.py` provides a thin local
+stream interface. The container validation driver proves actual worker compute
+overlap using kernel boot/monotonic-offset checks and bracketed timestamps.
+See the [guide](PYTORCH_COORDINATOR.md) and [evidence](experiments/2026-10-15-pytorch-m4.md).
+A standalone coordinator listener and benchmark adapter remain M5 work.
+
 1. Place tokenization, embeddings, normalization, output projection and greedy
    sampling in the coordinator. Keep the public benchmark/client thin.
 2. Admit a session only after all three workers reserve capacity. If any worker
@@ -309,9 +320,10 @@ resource-matched whole-model replicas before drawing efficiency conclusions.
 
 The model adapter, manifest/preparation helpers, session interface, backend adapter,
 protocol schema/codec/transports, worker state handler, tests and locked Docker image
-are implemented. Compose runs preparation and M1–M3 tests, plus three separate
-supervised worker services and a remote numerical checker. The coordinator,
-scheduler and network-profile extensions remain planned.
+are implemented. Compose runs preparation and M1–M4 tests, three separate
+supervised worker services, and both sequential and concurrent validation drivers.
+The coordinator library and local streaming client are implemented; a standalone
+coordinator service, remote benchmark client and network-profile extensions remain planned.
 
 | Path | Intended contents |
 | --- | --- |
@@ -322,10 +334,12 @@ scheduler and network-profile extensions remain planned.
 | `src/steamboat_runtime/supervisor.py` | Independent process watchdog and bounded restart budget |
 | `src/steamboat_runtime/remote_check.py` | Sequential remote validation fixture and complete-model comparison |
 | `src/steamboat_runtime/coordinator.py` | Admission, stage scheduler, token feedback and cancellation |
-| `src/steamboat_runtime/client.py` | Benchmark adapter and streamed-token client |
+| `src/steamboat_runtime/coordinator_model.py` | Coordinator-owned input/output weights and offline tokenizer |
+| `src/steamboat_runtime/coordinator_check.py` | Concurrent parity and clock-verified compute overlap |
+| `src/steamboat_runtime/client.py` | Local streamed-token client; remote benchmark adapter pending |
 | `tests/runtime/` | Model equivalence, protocol, cache, scheduling and failure tests |
 | `docker/pytorch/` | Independent runtime image and locked dependencies |
-| `compose.pytorch.yaml` | Three workers and remote checker using private static discovery; coordinator pending |
+| `compose.pytorch.yaml` | Three workers and validation drivers using private static discovery; coordinator service pending |
 | `lab/benchmark.py`, `scripts/Set-NetworkProfile.ps1` | Reused entry points with explicit backend/lab selection |
 | `docs/experiments/` | Sanitized measurements and comparison reports |
 

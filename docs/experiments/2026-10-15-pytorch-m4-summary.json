@@ -1,0 +1,2275 @@
+{
+  "date": "2026-10-15",
+  "milestone": "M4 bounded concurrent coordinator",
+  "source_base_commit": "8fd97bb5585f4d5164199cb98135d675cbf5dd6a",
+  "source_state": "M4 working tree identified by executable source hashes; M0-M3 pushed before this implementation",
+  "execution": "bounded coordinator; three supervised remote worker containers",
+  "host": {
+    "cpu": "AMD Ryzen AI 9 HX 370",
+    "ram_gib_approx": 32,
+    "docker_vm_ram_gib_approx": 15.18,
+    "docker_engine": "29.8.2",
+    "compose": "5.6.0",
+    "contention": "Historical Petals containers and regression test container ran during parts of validation; timings are not performance comparisons"
+  },
+  "runtime": {
+    "torch": "2.14.1+cpu",
+    "transformers": "5.19.0",
+    "grpcio": "1.84.0",
+    "protobuf": "7.36.2",
+    "safetensors": "0.8.0"
+  },
+  "python": "3.12.15",
+  "model_id": "Maykeye/TinyLLama-v0",
+  "revision": "298338802ab94432b917bcce11382aa151aee50f",
+  "manifest_fingerprint": "33aec5e084dc12cef677821fcc8ca55a00f74298531f1a97d499658e6930254d",
+  "model_source_hashes": {
+    "config.json": "92d9f842bbff69a6646eb69472d5f342ad832e718c079bf04d605ae4a4634dfd",
+    "generation_config.json": "e594efa3d5f29e494af0ab38ec7f341f31cdd45a3a570657f260d1f4b5c6ced2",
+    "model.safetensors": "c302246d91e2854ff350e52a79938a818c203186c2f0671213ce372a0289cd91",
+    "special_tokens_map.json": "ff3b4a612c4e447acb02d40071bddd989fe0da87eb5b7fe0dbadfc4f74de7531",
+    "tokenizer.json": "608ef1b5bb4bbfe6d3fdff0a5d3a4baaef0fd99fa678311a1e013bf5b37cd2a0",
+    "tokenizer.model": "ab1b681ec7fc02fed5edd3026687d7a692a918c4dd8e150ca2e3994a6229843b",
+    "tokenizer_config.json": "be843e84b4b7d0b226b500a22dceabcbbf54b8e8b0dab85a252b0958e230ffbf"
+  },
+  "dtype": "float32",
+  "attention": "eager",
+  "layout": "batch_sequence_hidden",
+  "test_suite": {
+    "tests": 179,
+    "passed": 179,
+    "failed": 0,
+    "skipped": 0,
+    "elapsed_seconds": 66.077,
+    "command": "docker compose -f compose.pytorch.yaml run --rm tests",
+    "log_sha256": "0869df50b2df8614205920032c6b8a5f4d2d0e118133ca19bc6efea5b260d934",
+    "new_coverage": {
+      "scheduler_lifecycle": 23,
+      "model_and_client": 8,
+      "trace_and_model_integration": 7,
+      "clock_and_thread_timing": 5
+    }
+  },
+  "legacy_regression": {
+    "tests": 179,
+    "passed": 52,
+    "failed": 0,
+    "skipped": 127,
+    "reason_for_skips": "Explicit new-runtime flags are disabled in the historical dependency environment"
+  },
+  "numerical": {
+    "raw_report": "20261015T180758317002Z-2eb4257a-m4-coordinator.json",
+    "comparisons": 144,
+    "atol": 0.001,
+    "rtol": 0,
+    "max_absolute_error": 3.814697265625e-06,
+    "comparisons_detail": [
+      {
+        "name": "cohort-0-concurrency-1-request-0-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-0-concurrency-1-request-0-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-0-concurrency-1-request-0-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-0-concurrency-1-request-0-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-0-concurrency-1-request-0-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-0-concurrency-1-request-0-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-0-concurrency-1-request-0-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-0-concurrency-1-request-0-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-0-concurrency-1-request-0-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-1-concurrency-1-request-0-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 3.814697265625e-06
+      },
+      {
+        "name": "cohort-1-concurrency-1-request-0-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-1-concurrency-1-request-0-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-1-concurrency-1-request-0-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-1-concurrency-1-request-0-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-1-concurrency-1-request-0-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-1-concurrency-1-request-0-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-1-concurrency-1-request-0-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-1-concurrency-1-request-0-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-2-concurrency-1-request-0-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 1.6689300537109375e-06
+      },
+      {
+        "name": "cohort-2-concurrency-1-request-0-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-2-concurrency-1-request-0-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-2-concurrency-1-request-0-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-2-concurrency-1-request-0-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-2-concurrency-1-request-0-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-2-concurrency-1-request-0-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-2-concurrency-1-request-0-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-2-concurrency-1-request-0-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-0-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-1-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 1.9073486328125e-06
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-2-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 2.86102294921875e-06
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-0-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-1-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-2-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-0-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-1-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-2-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-0-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-1-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-2-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-0-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-1-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-2-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-0-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-1-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-2-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-0-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-1-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-2-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-0-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-1-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-2-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-0-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-1-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-3-concurrency-3-request-2-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-0-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 1.6689300537109375e-06
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-1-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 1.9073486328125e-06
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-2-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 2.86102294921875e-06
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-3-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 9.5367431640625e-07
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-4-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 2.384185791015625e-06
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-5-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 2.384185791015625e-06
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-6-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 2.86102294921875e-06
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-7-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-0-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-1-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-2-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-3-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-4-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-5-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-6-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-7-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-0-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-1-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-2-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-3-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-4-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-5-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-6-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-7-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-0-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-1-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-2-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-3-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-4-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-5-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-6-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-7-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-0-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-1-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-2-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-3-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-4-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-5-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-6-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-7-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-0-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-1-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-2-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-3-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-4-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-5-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-6-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-7-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-0-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-1-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-2-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-3-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-4-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-5-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-6-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-7-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-0-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-1-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-2-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-3-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-4-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-5-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-6-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-7-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-0-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-1-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-2-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-3-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-4-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-5-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-6-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cohort-4-concurrency-8-request-7-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "greedy-feedback-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 2.86102294921875e-06
+      },
+      {
+        "name": "greedy-feedback-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "greedy-feedback-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "greedy-feedback-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "greedy-feedback-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "greedy-feedback-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "greedy-feedback-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "greedy-feedback-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "greedy-feedback-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cancel-survivor-output-0",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 2.384185791015625e-06
+      },
+      {
+        "name": "cancel-survivor-output-1",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cancel-survivor-output-2",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cancel-survivor-output-3",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cancel-survivor-output-4",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cancel-survivor-output-5",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cancel-survivor-output-6",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cancel-survivor-output-7",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      },
+      {
+        "name": "cancel-survivor-output-8",
+        "shape": [
+          1,
+          32000
+        ],
+        "max_absolute_error": 0.0
+      }
+    ],
+    "fixture": {
+      "prompt_formula": "3 + ((i * 37 + request_index * 211) % (vocab_size - 3))",
+      "cohorts": [
+        {
+          "concurrency": 1,
+          "prompt_lengths": [
+            1
+          ]
+        },
+        {
+          "concurrency": 1,
+          "prompt_lengths": [
+            128
+          ]
+        },
+        {
+          "concurrency": 1,
+          "prompt_lengths": [
+            1024
+          ]
+        },
+        {
+          "concurrency": 3,
+          "prompt_lengths": [
+            1,
+            128,
+            1024
+          ]
+        },
+        {
+          "concurrency": 8,
+          "prompt_lengths": [
+            1024,
+            128,
+            1024,
+            7,
+            1024,
+            128,
+            1024,
+            1
+          ]
+        }
+      ],
+      "output_tokens": 9,
+      "forced_decode_inputs": 8,
+      "forced_formula": "3 + ((900 + request_index * 97 + step * 13) % (vocab_size - 3))",
+      "greedy": {
+        "prompt_tokens": 128,
+        "offset": 471,
+        "output_tokens": 9
+      }
+    }
+  },
+  "cohorts": [
+    {
+      "name": "cohort-0-concurrency-1",
+      "concurrency": 1,
+      "prompt_lengths": [
+        1
+      ],
+      "trace": {
+        "requests": 1,
+        "stage_operations": 27,
+        "causal_order_verified": true,
+        "single_call_per_worker_verified": true,
+        "clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+        "overlapping_compute_pairs": 0,
+        "longest_pair_overlap_ns": 0,
+        "overlap_examples": []
+      }
+    },
+    {
+      "name": "cohort-1-concurrency-1",
+      "concurrency": 1,
+      "prompt_lengths": [
+        128
+      ],
+      "trace": {
+        "requests": 1,
+        "stage_operations": 27,
+        "causal_order_verified": true,
+        "single_call_per_worker_verified": true,
+        "clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+        "overlapping_compute_pairs": 0,
+        "longest_pair_overlap_ns": 0,
+        "overlap_examples": []
+      }
+    },
+    {
+      "name": "cohort-2-concurrency-1",
+      "concurrency": 1,
+      "prompt_lengths": [
+        1024
+      ],
+      "trace": {
+        "requests": 1,
+        "stage_operations": 27,
+        "causal_order_verified": true,
+        "single_call_per_worker_verified": true,
+        "clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+        "overlapping_compute_pairs": 0,
+        "longest_pair_overlap_ns": 0,
+        "overlap_examples": []
+      }
+    },
+    {
+      "name": "cohort-3-concurrency-3",
+      "concurrency": 3,
+      "prompt_lengths": [
+        1,
+        128,
+        1024
+      ],
+      "trace": {
+        "requests": 3,
+        "stage_operations": 81,
+        "causal_order_verified": true,
+        "single_call_per_worker_verified": true,
+        "clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+        "overlapping_compute_pairs": 39,
+        "longest_pair_overlap_ns": 3831399,
+        "overlap_examples": [
+          {
+            "first": {
+              "session_id": "60b746db82b44c3f8af45047a42e2fdf",
+              "sequence": 0,
+              "worker": 2,
+              "start_ns": 175986880154893,
+              "end_ns": 175986882088676
+            },
+            "second": {
+              "session_id": "090c47d665504d31990f4a20251ac134",
+              "sequence": 0,
+              "worker": 1,
+              "start_ns": 175986880300196,
+              "end_ns": 175986882678565
+            },
+            "overlap_ns": 1788480
+          },
+          {
+            "first": {
+              "session_id": "090c47d665504d31990f4a20251ac134",
+              "sequence": 0,
+              "worker": 2,
+              "start_ns": 175986888415536,
+              "end_ns": 175986892332366
+            },
+            "second": {
+              "session_id": "b78cb73e33f147b2886c1b3fcccf77e5",
+              "sequence": 0,
+              "worker": 1,
+              "start_ns": 175986888578543,
+              "end_ns": 175987065402565
+            },
+            "overlap_ns": 3753823
+          },
+          {
+            "first": {
+              "session_id": "b78cb73e33f147b2886c1b3fcccf77e5",
+              "sequence": 0,
+              "worker": 1,
+              "start_ns": 175986888578543,
+              "end_ns": 175987065402565
+            },
+            "second": {
+              "session_id": "090c47d665504d31990f4a20251ac134",
+              "sequence": 0,
+              "worker": 3,
+              "start_ns": 175986897669080,
+              "end_ns": 175986901500479
+            },
+            "overlap_ns": 3831399
+          }
+        ]
+      }
+    },
+    {
+      "name": "cohort-4-concurrency-8",
+      "concurrency": 8,
+      "prompt_lengths": [
+        1024,
+        128,
+        1024,
+        7,
+        1024,
+        128,
+        1024,
+        1
+      ],
+      "trace": {
+        "requests": 8,
+        "stage_operations": 216,
+        "causal_order_verified": true,
+        "single_call_per_worker_verified": true,
+        "clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+        "overlapping_compute_pairs": 152,
+        "longest_pair_overlap_ns": 296763342,
+        "overlap_examples": [
+          {
+            "first": {
+              "session_id": "0db20936efb64f39ac925e634e9513c8",
+              "sequence": 0,
+              "worker": 1,
+              "start_ns": 175989904954513,
+              "end_ns": 175989909060225
+            },
+            "second": {
+              "session_id": "716b51525fb74b83b8a6c5ceb64ab8ae",
+              "sequence": 0,
+              "worker": 2,
+              "start_ns": 175989905581630,
+              "end_ns": 175990164302249
+            },
+            "overlap_ns": 3478595
+          },
+          {
+            "first": {
+              "session_id": "716b51525fb74b83b8a6c5ceb64ab8ae",
+              "sequence": 0,
+              "worker": 2,
+              "start_ns": 175989905581630,
+              "end_ns": 175990164302249
+            },
+            "second": {
+              "session_id": "f6900c9fbdb34ce6ae9b6eac12d9926f",
+              "sequence": 0,
+              "worker": 1,
+              "start_ns": 175989914549133,
+              "end_ns": 175990172375391
+            },
+            "overlap_ns": 249753116
+          },
+          {
+            "first": {
+              "session_id": "f6900c9fbdb34ce6ae9b6eac12d9926f",
+              "sequence": 0,
+              "worker": 1,
+              "start_ns": 175989914549133,
+              "end_ns": 175990172375391
+            },
+            "second": {
+              "session_id": "0db20936efb64f39ac925e634e9513c8",
+              "sequence": 0,
+              "worker": 2,
+              "start_ns": 175990169956786,
+              "end_ns": 175990174594763
+            },
+            "overlap_ns": 2418605
+          }
+        ]
+      }
+    }
+  ],
+  "clock_evidence": [
+    {
+      "worker": 1,
+      "clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+      "coordinator_clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+      "sent_ns": 175984678660078,
+      "received_ns": 175984681759658,
+      "worker_monotonic_ns": 175984681280184,
+      "verified": true
+    },
+    {
+      "worker": 2,
+      "clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+      "coordinator_clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+      "sent_ns": 175984682014791,
+      "received_ns": 175984684779516,
+      "worker_monotonic_ns": 175984684406116,
+      "verified": true
+    },
+    {
+      "worker": 3,
+      "clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+      "coordinator_clock_id": "linux:d4485167-774d-4925-8a77-f1916462344b:monotonic-offset-ns:0",
+      "sent_ns": 175984684804714,
+      "received_ns": 175984687621680,
+      "worker_monotonic_ns": 175984687237068,
+      "verified": true
+    }
+  ],
+  "cancelled_request": {
+    "session_id": "e2e0f25c1c6747dca217586f2840c7f1",
+    "status": "cancelled",
+    "buffered_tokens_before_cancel": 1,
+    "cleanup_complete": true
+  },
+  "cleanup": [
+    {
+      "case": "before-validation",
+      "workers": [
+        {
+          "worker_boot_id": "be325a6edd554ccca2116ce83a81321e",
+          "ready": true,
+          "layer_start": 0,
+          "layer_end": 3,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 0,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "7ae23da8b8dd4b8d91539cb58162e0b4",
+          "ready": true,
+          "layer_start": 3,
+          "layer_end": 6,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 0,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "a29c27e47d7b444a95ef5721d137e683",
+          "ready": true,
+          "layer_start": 6,
+          "layer_end": 8,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 0,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        }
+      ]
+    },
+    {
+      "case": "cohort-0-concurrency-1",
+      "workers": [
+        {
+          "worker_boot_id": "be325a6edd554ccca2116ce83a81321e",
+          "ready": true,
+          "layer_start": 0,
+          "layer_end": 3,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 1,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "7ae23da8b8dd4b8d91539cb58162e0b4",
+          "ready": true,
+          "layer_start": 3,
+          "layer_end": 6,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 1,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "a29c27e47d7b444a95ef5721d137e683",
+          "ready": true,
+          "layer_start": 6,
+          "layer_end": 8,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 1,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        }
+      ]
+    },
+    {
+      "case": "cohort-1-concurrency-1",
+      "workers": [
+        {
+          "worker_boot_id": "be325a6edd554ccca2116ce83a81321e",
+          "ready": true,
+          "layer_start": 0,
+          "layer_end": 3,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 2,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "7ae23da8b8dd4b8d91539cb58162e0b4",
+          "ready": true,
+          "layer_start": 3,
+          "layer_end": 6,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 2,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "a29c27e47d7b444a95ef5721d137e683",
+          "ready": true,
+          "layer_start": 6,
+          "layer_end": 8,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 2,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        }
+      ]
+    },
+    {
+      "case": "cohort-2-concurrency-1",
+      "workers": [
+        {
+          "worker_boot_id": "be325a6edd554ccca2116ce83a81321e",
+          "ready": true,
+          "layer_start": 0,
+          "layer_end": 3,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 3,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "7ae23da8b8dd4b8d91539cb58162e0b4",
+          "ready": true,
+          "layer_start": 3,
+          "layer_end": 6,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 3,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "a29c27e47d7b444a95ef5721d137e683",
+          "ready": true,
+          "layer_start": 6,
+          "layer_end": 8,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 3,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        }
+      ]
+    },
+    {
+      "case": "cohort-3-concurrency-3",
+      "workers": [
+        {
+          "worker_boot_id": "be325a6edd554ccca2116ce83a81321e",
+          "ready": true,
+          "layer_start": 0,
+          "layer_end": 3,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 6,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "7ae23da8b8dd4b8d91539cb58162e0b4",
+          "ready": true,
+          "layer_start": 3,
+          "layer_end": 6,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 6,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "a29c27e47d7b444a95ef5721d137e683",
+          "ready": true,
+          "layer_start": 6,
+          "layer_end": 8,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 6,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        }
+      ]
+    },
+    {
+      "case": "cohort-4-concurrency-8",
+      "workers": [
+        {
+          "worker_boot_id": "be325a6edd554ccca2116ce83a81321e",
+          "ready": true,
+          "layer_start": 0,
+          "layer_end": 3,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 14,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "7ae23da8b8dd4b8d91539cb58162e0b4",
+          "ready": true,
+          "layer_start": 3,
+          "layer_end": 6,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 14,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "a29c27e47d7b444a95ef5721d137e683",
+          "ready": true,
+          "layer_start": 6,
+          "layer_end": 8,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 14,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        }
+      ]
+    },
+    {
+      "case": "greedy-feedback",
+      "workers": [
+        {
+          "worker_boot_id": "be325a6edd554ccca2116ce83a81321e",
+          "ready": true,
+          "layer_start": 0,
+          "layer_end": 3,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 15,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "7ae23da8b8dd4b8d91539cb58162e0b4",
+          "ready": true,
+          "layer_start": 3,
+          "layer_end": 6,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 15,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "a29c27e47d7b444a95ef5721d137e683",
+          "ready": true,
+          "layer_start": 6,
+          "layer_end": 8,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 15,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        }
+      ]
+    },
+    {
+      "case": "cancellation-and-survivor",
+      "workers": [
+        {
+          "worker_boot_id": "be325a6edd554ccca2116ce83a81321e",
+          "ready": true,
+          "layer_start": 0,
+          "layer_end": 3,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 17,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "7ae23da8b8dd4b8d91539cb58162e0b4",
+          "ready": true,
+          "layer_start": 3,
+          "layer_end": 6,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 17,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        },
+        {
+          "worker_boot_id": "a29c27e47d7b444a95ef5721d137e683",
+          "ready": true,
+          "layer_start": 6,
+          "layer_end": 8,
+          "hidden_size": 64,
+          "active_sessions": 0,
+          "reserved_positions": 0,
+          "allocated_cache_bytes": 0,
+          "cache_bytes_exact": true,
+          "active_operations": 0,
+          "tombstones": 17,
+          "requires_restart": false,
+          "max_sessions": 8,
+          "max_positions_limit": 1152,
+          "max_cache_positions": 12288,
+          "max_cache_bytes": 16777216,
+          "queued_operations": 0,
+          "max_stage_queue": 8
+        }
+      ]
+    }
+  ],
+  "coordinator_final_stats": {
+    "ready": false,
+    "active_requests": 0,
+    "waiting_admissions": 0,
+    "stage_queue_sizes": [
+      0,
+      0,
+      0
+    ],
+    "active_stage_calls": [
+      0,
+      0,
+      0
+    ],
+    "trace_events": 1066,
+    "trace_dropped": 0,
+    "trace_errors": 0,
+    "model_cleanup_complete": true
+  },
+  "coordinator_model": {
+    "pending_cpu_operations": 0,
+    "max_cpu_operations": 8,
+    "closed": false,
+    "requires_restart": false,
+    "parameter_count": 4096064,
+    "parameter_bytes": 16384256
+  },
+  "client_resources": {
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.36",
+    "machine": "x86_64",
+    "python": "3.12.15",
+    "logical_cpus_visible": 24,
+    "torch_threads": 2,
+    "client_peak_rss_bytes": 623587328,
+    "memory_limit": "6442450944",
+    "cpu_limit": "200000 100000",
+    "memory_peak": "538378240"
+  },
+  "additional_reference_parameter_bytes": 18485504,
+  "limits": {
+    "admission_timeout_seconds": 30,
+    "compute_cancel_grace_seconds": 15,
+    "idle_lease_seconds": 120,
+    "lease_check_interval_seconds": 5,
+    "max_compute_calls": 1,
+    "max_message_bytes": 1048576,
+    "max_positions": 1152,
+    "max_sessions": 8,
+    "max_stage_queue": 8,
+    "max_waiting_admissions": 32,
+    "output_queue_tokens": 16,
+    "output_stall_timeout_seconds": 30,
+    "renew_interval_seconds": 30,
+    "request_timeout_seconds": 300,
+    "rpc_timeout_seconds": 30,
+    "worker_cache_bytes": 16777216,
+    "worker_cache_positions": 12288,
+    "worker_memory_bytes": 3221225472
+  },
+  "containers": {
+    "workers": [
+      {
+        "worker": "worker-1",
+        "image": "sha256:d8f324fe6a8a011a0ea2720a11d0afb960f6f171f6c270309afe74d261379a9f",
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "health": "healthy",
+        "oom_killed": false,
+        "ready_events": [
+          {
+            "boot_id": "be325a6edd554ccca2116ce83a81321e",
+            "event": "worker_ready",
+            "layer_end": 3,
+            "layer_start": 0,
+            "loading_seconds": 2.084957400977146,
+            "parameter_bytes": 787968,
+            "parameter_count": 196992,
+            "pid": 8,
+            "rss_bytes": 363094016,
+            "startup_peak_rss_bytes": 363094016,
+            "worker": "worker-1"
+          }
+        ],
+        "cgroup": {
+          "memory.peak": "484610048",
+          "memory.max": "3221225472",
+          "cpu.max": "200000 100000",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+        }
+      },
+      {
+        "worker": "worker-2",
+        "image": "sha256:d8f324fe6a8a011a0ea2720a11d0afb960f6f171f6c270309afe74d261379a9f",
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "health": "healthy",
+        "oom_killed": false,
+        "ready_events": [
+          {
+            "boot_id": "7ae23da8b8dd4b8d91539cb58162e0b4",
+            "event": "worker_ready",
+            "layer_end": 6,
+            "layer_start": 3,
+            "loading_seconds": 2.077142652007751,
+            "parameter_bytes": 787968,
+            "parameter_count": 196992,
+            "pid": 8,
+            "rss_bytes": 363520000,
+            "startup_peak_rss_bytes": 363520000,
+            "worker": "worker-2"
+          }
+        ],
+        "cgroup": {
+          "memory.peak": "484278272",
+          "memory.max": "3221225472",
+          "cpu.max": "200000 100000",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+        }
+      },
+      {
+        "worker": "worker-3",
+        "image": "sha256:d8f324fe6a8a011a0ea2720a11d0afb960f6f171f6c270309afe74d261379a9f",
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "health": "healthy",
+        "oom_killed": false,
+        "ready_events": [
+          {
+            "boot_id": "a29c27e47d7b444a95ef5721d137e683",
+            "event": "worker_ready",
+            "layer_end": 8,
+            "layer_start": 6,
+            "loading_seconds": 2.075571219989797,
+            "parameter_bytes": 525312,
+            "parameter_count": 131328,
+            "pid": 8,
+            "rss_bytes": 363991040,
+            "startup_peak_rss_bytes": 363991040,
+            "worker": "worker-3"
+          }
+        ],
+        "cgroup": {
+          "memory.peak": "483717120",
+          "memory.max": "3221225472",
+          "cpu.max": "200000 100000",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+        }
+      }
+    ],
+    "network_internal": true
+  },
+  "all_remote_runs": [
+    {
+      "file": "20261015T180334060214Z-96a5581b-m4-coordinator.json",
+      "status": "failed",
+      "comparisons": 126,
+      "error": {
+        "type": "AssertionError",
+        "message": "No verified useful compute overlap between independent requests"
+      },
+      "sha256": "4e3ad23e0b8d484dc7414fb4b32a5c42d9aef8e3e61f08d71a433b91b6242e98"
+    },
+    {
+      "file": "20261015T180758317002Z-2eb4257a-m4-coordinator.json",
+      "status": "passed",
+      "comparisons": 144,
+      "error": null,
+      "sha256": "9d470c7e66cdbfaf9ea6b75b5c14a87117d294a1ed90f6a14726a6c76c46e6c5"
+    }
+  ],
+  "iteration_notes": [
+    "First 15-test integration run had two teardown errors due to a missing no-op close on InMemoryTransport; numerical and cancellation bodies passed. The corrected integration run passed all15.",
+    "A FIFO unit assertion initially observed enqueueing before the fake RPC entered; corrected to wait for the explicit queue event.",
+    "First remote run passed126 forced logit comparisons but failed the overlap gate because distinct Docker time-namespace IDs were treated as distinct clocks.",
+    "The clock-domain identity now uses kernel boot UUID plus CLOCK_MONOTONIC offset, with both Describe samples and every compute span bracketed by coordinator timestamps; malformed/unequal offsets fail validation.",
+    "The final remote run also verifies cancellation while a second request completes nine reference-matching outputs.",
+    "All final executable source hashes match the tested image; only documentation was edited after testing."
+  ],
+  "clock_reference": "https://www.man7.org/linux/man-pages/man7/time_namespaces.7.html",
+  "limitations": [
+    "same-host correctness and overlap mechanics; no speedup claim",
+    "trusted private gRPC network without authentication or encryption",
+    "additional complete-model reference memory in validation process",
+    "uncontrolled diagnostic timings, not M5 performance results",
+    "no automatic Step retry, replay, or recovery",
+    "unchunked prefill cannot be preempted",
+    "M4 exposes an async coordinator library and local streaming client. A standalone coordinator listener and remote benchmark adapter are M5 work.",
+    "Model thread cancellation cannot kill a running kernel; close returns false when it cannot drain. A standalone coordinator supervisor remains service-deployment work.",
+    "Overlap counts are pairs of wall-clock execution spans containing real model work, not a throughput or CPU efficiency estimate."
+  ],
+  "source_sha256": {
+    "docker/pytorch/Dockerfile": "4de3362a6994f4020460826ff53f7ce3fe90c199c46c4c46f9b9aadc16de0e57",
+    "docker/pytorch/lock_from_report.py": "7ba4bf4b3675a850888277bd531ec994d26562da42880012f164e67fc52408e9",
+    "docker/pytorch/requirements.in": "b0eb7e463b4f8627ad94e9108fdd53c9258f069c804755f0836f4ea52ec0acce",
+    "docker/pytorch/requirements.lock": "0d893300099241375c9ef032268e162ff6ef46fe93cce1bbe6457bfd01545434",
+    "docker/pytorch/verify_environment.py": "9d08e18d57c494bcbe97d42d20cf29f57c384c2da92f038765e7e996577d974a",
+    "lab/__init__.py": "ed55d8778ae649b950e10fdc4705c0578905389416582f4c315977aabdc2f1a3",
+    "lab/benchmark.py": "f229cbb22a9c6b1b63b19e0e11fd5774e1f9d79271860c3da0e94e77b2b0d321",
+    "lab/config.py": "bb79cd28bacd2abbbeab2a74aa0123f0d411fefc9336226eeea7ed1a71302eaf",
+    "lab/launch.py": "980339d4582455a4d7a3c1afcbd67bab1cd0b76634627bba687f86c89f0929a9",
+    "src/steamboat_runtime/__init__.py": "54262ac712c981e36330fa4ff2a41137129ddf3d2910548207f93845ae36511d",
+    "src/steamboat_runtime/backends.py": "ba613f2ff4b567424fd08f441ea90f3f7422da19c216b03648ae5fa22a64ea09",
+    "src/steamboat_runtime/client.py": "1da7bdbecafe3505e9383c3badb9a2efbbf0f1ed38866af076675ad6cfb451db",
+    "src/steamboat_runtime/coordinator.py": "ab4ad0b43a5ee1dc3db73c173f80c14d34ce3c23aecf15fbadd3f3c31d5188bb",
+    "src/steamboat_runtime/coordinator_check.py": "1e282a8f1abcec00814df794ae06c2369d43774920f5b208ecd8b375eefc7c4f",
+    "src/steamboat_runtime/coordinator_model.py": "883037be1ca6a0275422c4596c92825a9c1650fb0343aa06b78828d73d757c97",
+    "src/steamboat_runtime/interfaces.py": "d654d39dffec67f0bd8531f68a7279823ee9a668ff91219fb70cd45cb385eaa1",
+    "src/steamboat_runtime/manifest.py": "0a0cf5af4d8e9be3c47b2fdbc443e3aac01b4d2a013f34062329cd804ab44797",
+    "src/steamboat_runtime/model.py": "98e1f2a2ad6356bf21bfe376aa1517500ce4582ee6b7d4911e22418c26b943ee",
+    "src/steamboat_runtime/prepare.py": "12d878a263019aacf01055ea7c9c203dbe3fc007f8f435531293dc77141b9d30",
+    "src/steamboat_runtime/protocol/__init__.py": "fe07534bc0f4012c50455f2e3c930706be36445c457fb582197f4c78a8c5888c",
+    "src/steamboat_runtime/protocol/clock.py": "8bf2c163bfde1f58eacd258fb752c73c7c22c7aa9eeb6bb1a22e21c5db99091a",
+    "src/steamboat_runtime/protocol/codec.py": "dd8170e5ce9e29a0b655f9257a8154fd6022461a7bd97acaf2af2885015c2447",
+    "src/steamboat_runtime/protocol/errors.py": "09b11b4eae9c3f1532de165d4029bc1f7135222d3fbd17656d7699122cb6f605",
+    "src/steamboat_runtime/protocol/transport.py": "30e11633d33eb4cab248ef60138116bc87604c54a0f3a926eea1ac1f117aa9af",
+    "src/steamboat_runtime/protocol/wire.py": "322317416b5c6e4426aa790f038876d7170f8cf6edd0963ebff3a498fc301998",
+    "src/steamboat_runtime/protocol/worker.proto": "919307b99d8cb476f8cb7d371a50b8b2d16facc058dca61aa31b6d1fdc4aae7b",
+    "src/steamboat_runtime/protocol/worker_pb2.py": "a17f216a94b1b14c7a8a7c06a2290f34476af811c01bb57affd9e5d7e57c6932",
+    "src/steamboat_runtime/remote_check.py": "e8a6d4452b18e728126483c389d0c9a344be0d96280a2d10e8f3757169087b53",
+    "src/steamboat_runtime/supervisor.py": "55569fa38f622ee33fc799fded6bf97bcb2c8dec0d3f44153831dec62c6e0248",
+    "src/steamboat_runtime/worker.py": "4a3d452907adb110d1de9fe291bac55db0b8a8d4a977b1859323966733d79df6",
+    "src/steamboat_runtime/worker_state.py": "bf959f1c18d60662c33e8ef0a3ad0d0b50db987a1d49e8701f15c63f24a6ece7",
+    "tests/runtime/__init__.py": "f7ce56c8c79ce3b5750aeba432e9b0a6ad80a5a528f3c62d7ef21f260823e019",
+    "tests/runtime/process_fixture.py": "d76b7cd79fa04479551ed20029c53231a4623ff13c3e38708aceca51197afcde",
+    "tests/runtime/test_codec.py": "f3cf383306e408f1aa2e8b44aa79b46087de42467d76c5700634ccacbed711ed",
+    "tests/runtime/test_coordinator.py": "cdce966980f202000805f9acf08244629fa29686a5cd500022dd7b2934776b8c",
+    "tests/runtime/test_coordinator_integration.py": "e82cc502d0cb7234268325c2c5f82ae8420a38ed773a80b3b131ff7c342d1069",
+    "tests/runtime/test_coordinator_model.py": "a332867c5af01cabb5aabc23040233286f283a4ff76ec31febed2e1b9b998428",
+    "tests/runtime/test_manifest.py": "dc743d2b6ac72276dad46628b425dfd93463526baa89f54d817102e5ae73640c",
+    "tests/runtime/test_model.py": "ea9dee416d4bcefac686435d60564c8bdfdf82b10f9357c324d3008f2d75b3b5",
+    "tests/runtime/test_prepare.py": "c8f1dc700980609219ce533b83f620e3c7028508476d01eb8184860f6254a1a0",
+    "tests/runtime/test_protocol_model.py": "270d9736c16d4da6ee93534b7e7052612ebbe968edb33ccd497f6c712423f647",
+    "tests/runtime/test_remote_workers.py": "8d5f938c6f87388f2bd1bbd952f29b76f52ef04c2146dd5057fb916301da68b3",
+    "tests/runtime/test_transport.py": "1f5ad14ad0f239575bffc39a15bba8dd074fa5f7ba8ee5789f1f58732778197e",
+    "tests/runtime/test_worker_process.py": "110b3ad1000b6473b459a7d7b43d506fd8d3bba74ee3397c35dfb5f2c79690a8",
+    "tests/runtime/test_worker_queue.py": "bbe8cfa6dc2ba7769a80577558381c0497c8dd715babd7b790c02c592d823f68",
+    "tests/runtime/test_worker_state.py": "f60b41a45c4f7bbb2fbb9ccde770f4fb08e8640b7aa4aa58bece1b973ff846be",
+    "tests/runtime/test_worker_timing.py": "a1ad6ab215d46b20be649611c5e33cfbb4a89d7ba280303e7e38b44ec81cf063",
+    "tests/test_benchmark.py": "d4a6fc18d4adfce7b5cc4edb0af47765dbbd6676baa294f4aafc609108efef82",
+    "tests/test_config.py": "c45ace64a19d161bfb81db7cd96a8af0669cbc5e220cdfe35c21dd7b6ccf68c6",
+    "compose.pytorch.yaml": "8bd44792508a9735e3940a32dba2561ba7f3aed90a84087df96ad876095309d3"
+  }
+}

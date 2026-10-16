@@ -18,6 +18,7 @@ import uuid
 
 from .manifest import artifact_path, cache_bytes, load_manifest, validate_manifest
 from .protocol.codec import decode_tensor, encode_tensor, validate_envelope
+from .protocol.clock import clock_identity
 from .protocol.errors import ProtocolError
 from .protocol.worker_pb2 import Request, Response
 
@@ -225,6 +226,7 @@ class WorkerHandler:
         response = Response(
             protocol_version=1, manifest_fingerprint=self.manifest["fingerprint"],
             worker_boot_id=self.boot_id, code=code, message=message[:256],
+            clock_id=clock_identity(), monotonic_ns=time.monotonic_ns(),
             ready=not self.stopping and not self.requires_restart,
             layer_start=self.start, layer_end=self.end,
             hidden_size=self.manifest["config"]["hidden_size"],
@@ -453,6 +455,7 @@ class WorkerHandler:
 
     async def _compute(self, request, entry, hidden, options, deadline, submitted):
         queue_ms = compute_ms = 0.0
+        compute_start_ns = compute_end_ns = 0
         # Dispatch itself yields to the event loop. A queued operation may have
         # been cancelled or expired after selection but before its task runs.
         # Reclaim it now without sending a stale activation into the thread.
@@ -468,7 +471,7 @@ class WorkerHandler:
                                             hidden, entry.cache, entry.position, submitted)
         try:
             # The compute future cannot be cancelled by an RPC task losing its caller.
-            result, failed, queue_ms, compute_ms = await asyncio.shield(future)
+            result, failed, queue_ms, compute_ms, compute_start_ns, compute_end_ns = await asyncio.shield(future)
             if failed:
                 raise RuntimeError("Layer execution failed")
             self._reap()
@@ -491,6 +494,7 @@ class WorkerHandler:
                 response = self._response(request, entry)
                 response.tensor.CopyFrom(encoded)
                 response.queue_ms, response.compute_ms = queue_ms, compute_ms
+                response.compute_start_ns, response.compute_end_ns = compute_start_ns, compute_end_ns
                 return response
         except asyncio.CancelledError:
             # Shutdown must not release a buffer while a thread is using it. If
@@ -509,15 +513,19 @@ class WorkerHandler:
         self._terminate(entry, entry.terminal_code or "EXECUTION_FAILED")
         response = self._response(request, entry, code=entry.terminal_code, message="Session cannot continue")
         response.queue_ms, response.compute_ms = queue_ms, compute_ms
+        response.compute_start_ns, response.compute_end_ns = compute_start_ns, compute_end_ns
         return response
 
     def _execute_timed(self, hidden, cache, position, submitted):
         started = time.perf_counter()
+        compute_start_ns = time.monotonic_ns()
         try:
             result, failed = self.executor.execute(hidden, cache, position), False
         except Exception:
             result, failed = None, True
-        return result, failed, (started - submitted) * 1000, (time.perf_counter() - started) * 1000
+        compute_end_ns = time.monotonic_ns()
+        return (result, failed, (started - submitted) * 1000,
+                (time.perf_counter() - started) * 1000, compute_start_ns, compute_end_ns)
 
     async def shutdown(self, grace_seconds=None):
         self._bind_loop()

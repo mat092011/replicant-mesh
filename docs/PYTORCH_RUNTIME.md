@@ -6,8 +6,8 @@ against a complete model on the same new software stack. All stages execute in
 one process. [M2 protocol/lifecycle](PYTORCH_PROTOCOL.md) is also implemented as a
 separate worker handler and binary transport with lease expiry. The direct M1
 benchmark path described here remains sequential. Separate worker services and
-supervision are available in [M3](PYTORCH_WORKERS.md). Scheduling
-and network simulation for this backend remain M4–M5 work.
+supervision are available in [M3](PYTORCH_WORKERS.md), with concurrent scheduling in
+[M4](PYTORCH_COORDINATOR.md). Network experiments for this backend remain M5 work.
 
 ## Run
 

@@ -22,10 +22,12 @@ supervisor replaces stuck workers and invalidates their old sessions.
 See the [worker guide](docs/PYTORCH_WORKERS.md) and
 [M3 validation results](docs/experiments/2026-10-15-pytorch-m3.md).
 
-The remote validation driver calls the three stages sequentially and compares
-logits with the complete model. The next milestone is the coordinator scheduler
-that overlaps independent requests across stages. Network-performance experiments
-for this runtime follow in M5.
+M4 adds a bounded coordinator that streams tokens and overlaps independent requests
+across stages. Concurrent requests match the complete-model reference, and a trace
+verifies actual worker compute overlap on this laptop. See the
+[coordinator guide](docs/PYTORCH_COORDINATOR.md) and
+[M4 validation results](docs/experiments/2026-10-15-pytorch-m4.md).
+Network-performance experiments and the standalone coordinator service follow in M5.
 
 A CPU container lab now defines three Petals workers, a private discovery service,
 and a client on one laptop. It includes a complete-model reference, correctness
@@ -53,6 +55,8 @@ real transformer `Maykeye/TinyLLama-v0`; the guide also describes an optional
   sessions, cancellation, deadlines and loopback transport checks.
 - [PyTorch worker guide](docs/PYTORCH_WORKERS.md): three private worker containers,
   bounded queues, process supervision and remote numerical checks.
+- [PyTorch coordinator guide](docs/PYTORCH_COORDINATOR.md): admission, concurrent
+  scheduling, streamed tokens, cancellation and compute-overlap evidence.
 - [PyTorch pipeline implementation plan](docs/PYTORCH_PIPELINE_PLAN.md): fixed
   workers, session protocol, coordinator scheduling, and reusable lab comparisons.
 - [Container lab guide](docs/LOCAL_LAB.md): setup, simulation commands, and limits.

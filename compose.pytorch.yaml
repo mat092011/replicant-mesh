@@ -1,5 +1,5 @@
-# M0-M3: partition/protocol tests and three supervised private worker services.
-# The coordinator scheduler and network-profile experiments are later milestones.
+# M0-M4: partition/protocol tests, supervised workers and coordinator validation.
+# A standalone coordinator service and network-profile experiments follow in M5.
 name: steamboat-pytorch-m1
 
 x-common: &common
@@ -51,6 +51,7 @@ services:
       STEAMBOAT_TEST_REPORT: ${STEAMBOAT_TEST_REPORT:-/results}
       STEAMBOAT_PROTOCOL_REPORT: ${STEAMBOAT_PROTOCOL_REPORT:-/results}
       STEAMBOAT_PROCESS_TESTS: "1"
+      STEAMBOAT_COORDINATOR_TESTS: "1"
 
   benchmark:
     <<: *common
@@ -105,6 +106,18 @@ services:
   remote-check:
     <<: *common
     command: [python, -m, steamboat_runtime.remote_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --output, /results]
+    networks: [workers]
+    depends_on:
+      worker-1:
+        condition: service_healthy
+      worker-2:
+        condition: service_healthy
+      worker-3:
+        condition: service_healthy
+
+  coordinator-check:
+    <<: *common
+    command: [python, -m, steamboat_runtime.coordinator_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --output, /results]
     networks: [workers]
     depends_on:
       worker-1:

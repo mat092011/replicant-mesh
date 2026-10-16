@@ -30,7 +30,7 @@ modules are absent and the PyTorch build is CPU-only. Model equivalence tests
 are separate: this environment check cannot establish partition correctness.
 Weights are downloaded/prepared at runtime, not baked into the image.
 
-The M0–M3 Compose lab uses its own project, cache and artifact volumes. Run the
+The M0–M4 Compose lab uses its own project, cache and artifact volumes. Run the
 following services sequentially; `prepare` is the only one with internet access.
 Tests and comparisons mount the prepared weights read-only and run with
 `network_mode: none`, two CPUs and a 6 GiB memory limit per invocation.
@@ -54,6 +54,9 @@ and process-fault tests. These run within the test container using loopback RPC.
 For the three supervised containers and their remote numerical comparison, follow
 [the worker guide](../../docs/PYTORCH_WORKERS.md). They share an internal Docker
 network and publish no ports; workers each have two CPUs and a 3 GiB limit.
+M4 also enables coordinator lifecycle/model tests. Its `coordinator-check` service
+compares 1/3/8 concurrent requests and verifies compute overlap; see the
+[coordinator guide](../../docs/PYTORCH_COORDINATOR.md).
 
 The matching complete-model control uses `--mode local`. Both use the same
 locked new stack and CPU budget. These are in-process M1 runs; they provide no
