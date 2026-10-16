@@ -3,6 +3,9 @@
 Status: M0 contracts, M1 in-process parity, M2 protocol/lifecycle, M3 supervised
 workers, M4 coordinator scheduling and M5 private network lab implemented and
 validated, 2026-10-16. The full performance sweep remains incomplete.
+The [P3 follow-up](experiments/2026-10-16-pytorch-p3-continuation.md) measures a
+bounded delay subset and matched-budget complete-model controls; it does not
+complete P3 or demonstrate pooled memory.
 See the [runtime guide](PYTORCH_RUNTIME.md) and
 [M1 validation report](experiments/2026-10-14-pytorch-m1.md),
 [protocol guide](PYTORCH_PROTOCOL.md) and

@@ -54,6 +54,28 @@ def assert_reclaimed(description):
         raise AssertionError("Coordinator retains request metrics after cleanup")
 
 
+def assert_matched_reclaimed(description):
+    """Check actual cache, session and operation counters from each replica."""
+    if description.get("control_kind") != "matched_complete_model_replica":
+        raise AssertionError("Expected the matched complete-model control")
+    replicas = description.get("replicas")
+    if not isinstance(replicas, list) or len(replicas) != 4:
+        raise AssertionError("Describe must report all four complete-model replicas")
+    fingerprints = {replica.get("fingerprint") for replica in replicas}
+    if len(fingerprints) != 1 or None in fingerprints:
+        raise AssertionError("Complete-model replicas do not share one pinned identity")
+    for index, replica in enumerate(replicas, 1):
+        if not replica.get("ready"):
+            raise AssertionError(f"Complete-model replica {index} is not ready")
+        service = replica.get("service", {})
+        for name in ("active_streams", "active_sessions", "active_operations",
+                     "queued_operations", "allocated_cache_bytes"):
+            if service.get(name) != 0:
+                raise AssertionError(f"Replica {index} retains {name}")
+        if service.get("cache_bytes_exact") is not True:
+            raise AssertionError(f"Replica {index} lacks exact cache accounting")
+
+
 async def generate_remote_request(client, prompt, new_tokens, request_id, *, timeout_seconds=300):
     """Retain partial output and terminal diagnostics for every attempted stream."""
     started = time.monotonic()
@@ -155,11 +177,18 @@ async def run_remote_bench(args, report, *, client=None):
         prompt = (fixture * ((args.prompt_tokens + len(fixture) - 1) // len(fixture)))[:args.prompt_tokens]
         report["prompt_token_ids"] = prompt
         report["model_loading_seconds"] = description.get("service", {}).get("loading_seconds")
+        if hasattr(client, "warmup_all"):
+            warmups = await client.warmup_all(prompt, args.new_tokens, timeout)
+            report["replica_warmups"] = warmups
+            if not all(item["success"] for item in warmups):
+                raise RuntimeError("At least one complete-model replica warm-up failed")
         warmup = await generate_remote_request(client, prompt, args.new_tokens, "warmup", timeout_seconds=timeout)
         report["warmup"] = warmup
         if not warmup["success"]:
             raise RuntimeError(f"Warm-up failed: {warmup.get('error')}")
-        assert_reclaimed(await client.describe())
+        after_warmup = await client.describe()
+        (assert_matched_reclaimed if after_warmup.get("control_kind") == "matched_complete_model_replica"
+         else assert_reclaimed)(after_warmup)
         records, next_id, completed = [], 0, 0
 
         async def client_loop():
@@ -187,7 +216,9 @@ async def run_remote_bench(args, report, *, client=None):
                                                           if record.get("error_code")})}
             record_attempt_policy(report, target, maximum)
         report["service_description_after"] = await client.describe()
-        assert_reclaimed(report["service_description_after"])
+        after = report["service_description_after"]
+        (assert_matched_reclaimed if after.get("control_kind") == "matched_complete_model_replica"
+         else assert_reclaimed)(after)
     finally:
         report["client_resources_after"] = resource_snapshot()
         await client.close()

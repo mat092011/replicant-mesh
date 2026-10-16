@@ -30,6 +30,15 @@ and checks explicit component budgets without claiming execution fit. See the
 [tooling validation record](experiments/2026-10-16-research-tooling.md). Only this
 laptop is currently available; pooled-GPU and separate-device evidence remains pending.
 
+**P3 follow-up, 2026-10-16:** [bounded delay and matched-control measurements](experiments/2026-10-16-pytorch-p3-continuation.md)
+add immutable continuation provenance, strict image/source/configuration checks,
+duration estimates and complete-model replicas with matched aggregate CPU quotas.
+The LAN/delay10 subset completed 612/612 requests; a corrected-image LAN pipeline
+and replica comparison each completed 306/306. All final resets were verified.
+Two failed control setup/client runs remain retained separately. Replicas were
+faster for this locally fitting tiny model; no pipeline efficiency or pooled-memory
+benefit is established. Full P3 coverage and separate-device links remain pending.
+
 The first intended deployment uses invited GPU-equipped desktops and one fixed
 model. Device count, GPU types, available memory, and internet connections still
 need to be inventoried. CPU processes can establish correctness; hardware support
@@ -90,7 +99,7 @@ research gates below.
 | P0 | Fixed protocol, hardware inventory, and acceptance targets | None | Local CPU protocol and runtime validated; GPU cohort and final acceptance targets pending |
 | P1 | Reproducible complete-model reference | P0 | Petals smoke baseline and owned PyTorch full-logit reference validated; detailed timing/peak memory incomplete |
 | P2 | Correct fixed pipeline across processes and devices | P1 | PyTorch M4 concurrent remote parity, lifecycle and same-host compute-overlap traces passed; separate devices pending |
-| P3 | Measured LAN and WAN performance envelope | P2 | M5 network smoke and selected LAN repetitions measured; full sweeps and real links pending |
+| P3 | Measured LAN and WAN performance envelope | P2 | Selected LAN/delay10 repetitions and matched-budget replica controls measured; full sweeps and real links pending |
 | P4 | Demonstrated pooled-memory benefit | P3 | Local inventory and explicit memory-fit planner implemented; GPU capacities, suitable model and demonstration pending |
 | P5 | Scheduling and recovery under changing availability | P4 | Pending |
 | P6 | Auditable reciprocal credits | P5 | Pending |

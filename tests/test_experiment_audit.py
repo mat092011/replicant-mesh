@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from lab.experiment_audit import audit_run, build_audit, main
+from lab.experiment_continue import continuation_plan, estimate_remaining
 
 
 def full_plan(run_id="synthetic-run"):
@@ -12,7 +13,9 @@ def full_plan(run_id="synthetic-run"):
             "requests": 100, "completion_target": 100,
             "maximum_attempts": 200}
     cases = [{**base, "repetition": repetition} for repetition in (1, 2, 3)]
-    return {"mode": "Full", "run_id": run_id, "cases": cases}
+    return {"mode": "Full", "run_id": run_id, "source_commit": "abc123",
+            "source_fingerprint": "b" * 64, "compose_sha256": "a" * 64,
+            "runtime_image": "sha256:" + "a" * 64, "cases": cases}
 
 
 def smoke_plan(run_id="smoke-run"):
@@ -51,10 +54,14 @@ def write_case(directory, index, plan, image=None, completed=100, failed=0,
         "rate_mbit": case["rate_mbit"], "success": True})
     write_json(directory / f"{stem}-outcome.json", {
         "index": index, "reset_verified": reset, "success": reset})
+    write_json(directory / f"{stem}-reset.json", {
+        "success": reset, "services": ["worker-1", "worker-2", "worker-3", "coordinator"],
+        "after": {service: "qdisc noqueue 0: root refcnt 2" for service in
+                  ("worker-1", "worker-2", "worker-3", "coordinator")} if reset else {}})
     if not include_benchmark:
         return
     attempted = completed + failed
-    requests = ([{"success": True} for _ in range(completed)]
+    requests = ([{"success": True, "output_tokens": case["new_tokens"]} for _ in range(completed)]
                 + [{"success": False, "error_code": "CAPACITY_EXHAUSTED"}
                    for _ in range(failed)])
     metrics = {"attempted": attempted, "completed": completed, "failed": failed,
@@ -68,14 +75,16 @@ def write_case(directory, index, plan, image=None, completed=100, failed=0,
         "arguments": {"prompt_tokens": case["prompt_tokens"],
                       "new_tokens": case["new_tokens"],
                       "concurrency": case["concurrency"],
-                      "repetition": case["repetition"]},
-        "summary": metrics, "requests": requests,
+                      "repetition": case["repetition"], "requests": case["requests"]},
+        "attempt_policy": {"completion_target": case["completion_target"],
+                           "maximum_attempts": case["maximum_attempts"]},
+        "summary": {**metrics, "aggregate_output_tokens_per_second": 20.0}, "requests": requests,
         "error_counts": {"CAPACITY_EXHAUSTED": failed} if failed else {}})
 
 
 class ExperimentAuditTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1])
         self.root = Path(self.temp.name)
 
     def tearDown(self):
@@ -212,6 +221,74 @@ class ExperimentAuditTests(unittest.TestCase):
         self.assertTrue(json.loads(output.read_text(encoding="utf-8"))["runs"])
         with self.assertRaises(SystemExit):
             main(["--output", str(output), str(directory)])
+
+    def test_continuation_keeps_only_unfinished_cases_and_parent_is_unchanged(self):
+        parent = self.root / "parent"
+        plan = prepare_run(parent, summary=False)
+        write_case(parent, 0, plan)
+        original = (parent / "plan.json").read_bytes()
+        child = continuation_plan(parent, self.root / "child")
+        self.assertEqual(len(child["cases"]), 2)
+        self.assertEqual(child["continuation"]["unfinished_case_indices"], [1, 2])
+        self.assertEqual((parent / "plan.json").read_bytes(), original)
+        self.assertEqual(len(list(parent.glob("*-benchmark.json"))), 1)
+        self.assertEqual(audit_run(self.root / "child")[0]["status"], "plan_only")
+
+    def test_plan_only_frozen_parent_can_be_continued_with_pinned_image(self):
+        parent = self.root / "plan-only"
+        plan = prepare_run(parent, summary=False)
+        child = continuation_plan(parent, self.root / "child")
+        self.assertEqual(len(child["cases"]), 3)
+        self.assertEqual(child["continuation"]["parent_runtime_image"], plan["runtime_image"])
+
+    def test_modified_parent_evidence_invalidates_frozen_continuation(self):
+        parent = self.root / "parent"
+        plan = prepare_run(parent, summary=False)
+        child = continuation_plan(parent, self.root / "child")
+        (parent / "plan.json").write_text(json.dumps({**plan, "cases": []}), encoding="utf-8")
+        audit = audit_run(self.root / "child")[0]
+        self.assertEqual(audit["status"], "invalid")
+        self.assertTrue(any("hashes do not match" in issue for issue in audit["issues"]))
+
+    def test_duration_estimate_accepts_only_compatible_observations(self):
+        parent = self.root / "pending"
+        parent_plan = prepare_run(parent)
+        write_case(parent, 0, parent_plan, completed=90, failed=10)
+        history = self.root / "history"
+        history_plan = prepare_run(history)
+        for index in range(3):
+            write_case(history, index, history_plan)
+        estimate = estimate_remaining(parent, [history])
+        self.assertGreater(estimate["cases"][0]["sample_count"], 0)
+        incompatible = self.root / "other-image"
+        other_plan = prepare_run(incompatible, image="sha256:" + "c" * 64)
+        for index in range(3):
+            write_case(incompatible, index, other_plan)
+        estimate = estimate_remaining(parent, [incompatible])
+        self.assertTrue(estimate["rejected_observations"])
+
+    def test_duration_estimate_uses_observed_same_configuration_range(self):
+        parent = self.root / "timings"
+        plan = prepare_run(parent)
+        for index in range(3):
+            write_case(parent, index, plan, completed=90, failed=10) if index == 0 else write_case(parent, index, plan)
+        estimate = estimate_remaining(parent)
+        self.assertEqual(estimate["pending_case_count"], 1)
+        self.assertGreater(estimate["estimated_seconds"], 0)
+        self.assertLessEqual(estimate["uncertainty_low_seconds"], estimate["estimated_seconds"])
+        self.assertGreaterEqual(estimate["uncertainty_high_seconds"], estimate["estimated_seconds"])
+
+    def test_audit_flags_attempt_limit_mismatch_against_plan(self):
+        directory = self.root / "policy-mismatch"
+        plan = prepare_run(directory)
+        write_case(directory, 0, plan)
+        report = next(directory.glob("*-benchmark.json"))
+        data = json.loads(report.read_text(encoding="utf-8"))
+        data["arguments"]["requests"] = 99
+        write_json(report, data)
+        run = audit_run(directory)[0]
+        self.assertFalse(run["planned_cases"][0]["configuration_matches"])
+        self.assertTrue(any("attempt limit" in issue for issue in run["issues"]))
 
 
 if __name__ == "__main__":

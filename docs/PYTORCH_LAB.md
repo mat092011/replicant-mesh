@@ -7,6 +7,9 @@ processes; it does not establish performance on separate consumer devices.
 
 The [M5 validation report](experiments/2026-10-16-pytorch-m5.md) records the passing
 lab gate, selected network measurements and the remaining performance sweep.
+The [P3 follow-up](experiments/2026-10-16-pytorch-p3-continuation.md) adds repeated
+delay10 measurements, immutable continuation and matched-budget replica controls,
+including retained setup failures and explicit separation of runtime images.
 
 The runtime still uses the pinned CPU checkpoint, float32 eager attention and
 fixed layer assignments in [PYTORCH_RUNTIME.md](PYTORCH_RUNTIME.md). Workers keep
@@ -116,6 +119,35 @@ CPU quota units than the pipeline. It is a correctness and latency reference.
 Resource-matched whole-model replicas are needed before making efficiency claims.
 Historical Petals runs use their recorded older dependencies and topology; they
 must not be treated as a matched runtime comparison.
+
+### Complete-model replica control
+
+The optional `replica-1` through `replica-4` services each retain a complete copy
+of the same pinned model, with two CPU quota units and 3 GiB RAM each. Their
+aggregate eight CPU units and 12 GiB memory ceiling match the three workers plus
+coordinator. Both topologies use the same one-CPU, 1 GiB thin client. This matches
+configured budgets, not dedicated cores or measured energy use. Four full weight
+copies and replica-local KV caches differ from the pipeline's partitioned weights
+and layer-local caches; the replica control needs no separate coordinator.
+
+The `matched` benchmark backend uses the same remote token timing, public fixture,
+closed-loop arrival policy and completion/attempt limits as `pipeline`. It warms
+all replicas before the shared measurement interval. The client dispatches each
+independent request to a least-loaded replica, rotating ties. The existing local
+two-CPU control remains available.
+
+Run controls separately from pipeline measurements. After the pipeline finishes
+and its network reset is verified, stop its inference services, start all four
+replicas, and run `scripts/Invoke-MatchedControl.ps1 -ExpectedImage sha256:...` with
+the actual image ID. The script freezes three LAN repetitions at 128 input / 64
+output tokens and concurrency three, runs a numerical/lifecycle check, retains
+attempts and cgroup observations, and verifies per-replica resets. Its output
+belongs to a separate `matched-*` directory. Stop replicas before restarting the
+pipeline. The control's direct client-to-replica route is a different topology;
+do not treat it as a shaped multi-hop network measurement.
+The pipeline auditor does not accept the control plan schema; review its saved
+gate, benchmark, resource and reset records separately as in the P3 report.
+Control probes explicitly use port 50054, separate from replica RPC port 50053.
 
 ## Shape and measure the network
 

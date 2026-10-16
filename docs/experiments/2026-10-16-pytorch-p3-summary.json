@@ -1,0 +1,1576 @@
+{
+  "date": "2026-10-16",
+  "scope": "bounded P3 same-host CPU subset; no P3/P4 completion claim",
+  "pipeline": {
+    "run_id": "m5-20261016T212532066Z-66bfda4d",
+    "runtime_image": "sha256:346b3aad9e7fd0aca1c7570ff542d668daa901a2483e80e4057e4ecd3fda8119",
+    "plan_sha256": "9c92bb46965e5ff3277a5511adc99204f950a7a5ba3c340a920db74674b560e5",
+    "summary": {
+      "run_id": "m5-20261016T212532066Z-66bfda4d",
+      "success": true,
+      "cases": [
+        {
+          "index": 0,
+          "config": {
+            "profile": "lan",
+            "delay_ms": 0,
+            "rate_mbit": 0,
+            "prompt_tokens": 128,
+            "new_tokens": 64,
+            "concurrency": 3,
+            "requests": 100,
+            "completion_target": 100,
+            "maximum_attempts": 200,
+            "repetition": 1
+          },
+          "success": true,
+          "reset_verified": true,
+          "error": null,
+          "reset_error": null,
+          "probe_stop_errors": []
+        },
+        {
+          "index": 1,
+          "config": {
+            "profile": "delay10",
+            "delay_ms": 10,
+            "rate_mbit": 0,
+            "prompt_tokens": 128,
+            "new_tokens": 64,
+            "concurrency": 3,
+            "requests": 100,
+            "completion_target": 100,
+            "maximum_attempts": 200,
+            "repetition": 1
+          },
+          "success": true,
+          "reset_verified": true,
+          "error": null,
+          "reset_error": null,
+          "probe_stop_errors": []
+        },
+        {
+          "index": 2,
+          "config": {
+            "profile": "delay10",
+            "delay_ms": 10,
+            "rate_mbit": 0,
+            "prompt_tokens": 128,
+            "new_tokens": 64,
+            "concurrency": 3,
+            "requests": 100,
+            "completion_target": 100,
+            "maximum_attempts": 200,
+            "repetition": 2
+          },
+          "success": true,
+          "reset_verified": true,
+          "error": null,
+          "reset_error": null,
+          "probe_stop_errors": []
+        },
+        {
+          "index": 3,
+          "config": {
+            "profile": "lan",
+            "delay_ms": 0,
+            "rate_mbit": 0,
+            "prompt_tokens": 128,
+            "new_tokens": 64,
+            "concurrency": 3,
+            "requests": 100,
+            "completion_target": 100,
+            "maximum_attempts": 200,
+            "repetition": 2
+          },
+          "success": true,
+          "reset_verified": true,
+          "error": null,
+          "reset_error": null,
+          "probe_stop_errors": []
+        },
+        {
+          "index": 4,
+          "config": {
+            "profile": "delay10",
+            "delay_ms": 10,
+            "rate_mbit": 0,
+            "prompt_tokens": 128,
+            "new_tokens": 64,
+            "concurrency": 3,
+            "requests": 100,
+            "completion_target": 100,
+            "maximum_attempts": 200,
+            "repetition": 3
+          },
+          "success": true,
+          "reset_verified": true,
+          "error": null,
+          "reset_error": null,
+          "probe_stop_errors": []
+        },
+        {
+          "index": 5,
+          "config": {
+            "profile": "lan",
+            "delay_ms": 0,
+            "rate_mbit": 0,
+            "prompt_tokens": 128,
+            "new_tokens": 64,
+            "concurrency": 3,
+            "requests": 100,
+            "completion_target": 100,
+            "maximum_attempts": 200,
+            "repetition": 3
+          },
+          "success": true,
+          "reset_verified": true,
+          "error": null,
+          "reset_error": null,
+          "probe_stop_errors": []
+        }
+      ],
+      "final_reset_verified": true,
+      "error": null
+    },
+    "runs": [
+      {
+        "report": "000-lan-p128-c3-r1-benchmark.json",
+        "report_sha256": "357af48ecb2517d20e892b52c156c9c314ee4874f10ade5588ab54b55691b237",
+        "profile": "lan",
+        "repetition": 1,
+        "backend": "pipeline",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 41.24296605199925,
+        "aggregate_output_tokens_per_second": 158.28153561432705,
+        "ttft_seconds_p50": 0.039496219003922306,
+        "ttft_seconds_p95": 0.051801932997477707,
+        "inter_token_seconds_p50": 0.017627042005187832,
+        "inter_token_seconds_p95": 0.023777681002684403,
+        "session_itl_p50_median_seconds": 0.017578860501089366,
+        "session_itl_p95_median_seconds": 0.02078710050045629,
+        "session_itl_p95_p95_seconds": 0.04235826600051951,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "worker-1",
+            "cpu_seconds": 66.348725,
+            "throttled_seconds": 0.882284,
+            "nr_throttled": 18,
+            "memory_current_before_bytes": 322785280,
+            "memory_current_after_bytes": 313937920
+          },
+          {
+            "service": "worker-2",
+            "cpu_seconds": 66.75975,
+            "throttled_seconds": 1.320256,
+            "nr_throttled": 19,
+            "memory_current_before_bytes": 326381568,
+            "memory_current_after_bytes": 321613824
+          },
+          {
+            "service": "worker-3",
+            "cpu_seconds": 65.31229,
+            "throttled_seconds": 1.221969,
+            "nr_throttled": 21,
+            "memory_current_before_bytes": 319500288,
+            "memory_current_after_bytes": 317329408
+          },
+          {
+            "service": "coordinator",
+            "cpu_seconds": 47.999297,
+            "throttled_seconds": 0.218187,
+            "nr_throttled": 15,
+            "memory_current_before_bytes": 376393728,
+            "memory_current_after_bytes": 381296640
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 4.579582,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 6926336,
+            "memory_current_after_bytes": 7233536
+          }
+        ],
+        "probes": {
+          "samples": 15,
+          "rtt_median_ms": 0.16975000471575186,
+          "upload_mbit_range": [
+            37548.81912650321,
+            42698.537200338484
+          ],
+          "download_mbit_range": [
+            39682.97083595596,
+            46576.53142515375
+          ]
+        }
+      },
+      {
+        "report": "001-delay10-p128-c3-r1-benchmark.json",
+        "report_sha256": "499b78c351fa7223d8048675ede136353009151076e72ede0335f12b05b1fa78",
+        "profile": "delay10",
+        "repetition": 1,
+        "backend": "pipeline",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 175.15045296800236,
+        "aggregate_output_tokens_per_second": 37.27081425928472,
+        "ttft_seconds_p50": 0.22622444800072117,
+        "ttft_seconds_p95": 0.2332489140026155,
+        "inter_token_seconds_p50": 0.07731077900098171,
+        "inter_token_seconds_p95": 0.08247277500049677,
+        "session_itl_p50_median_seconds": 0.07732769450012711,
+        "session_itl_p95_median_seconds": 0.08220552499915357,
+        "session_itl_p95_p95_seconds": 0.08414567099680426,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "worker-1",
+            "cpu_seconds": 92.54737,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 332959744,
+            "memory_current_after_bytes": 322224128
+          },
+          {
+            "service": "worker-2",
+            "cpu_seconds": 91.967772,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 321605632,
+            "memory_current_after_bytes": 321556480
+          },
+          {
+            "service": "worker-3",
+            "cpu_seconds": 87.532014,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 317607936,
+            "memory_current_after_bytes": 317759488
+          },
+          {
+            "service": "coordinator",
+            "cpu_seconds": 46.436954,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 371978240,
+            "memory_current_after_bytes": 368869376
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 5.517011,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 7454720,
+            "memory_current_after_bytes": 7401472
+          }
+        ],
+        "probes": {
+          "samples": 15,
+          "rtt_median_ms": 20.585813996149227,
+          "upload_mbit_range": [
+            329.5833713221459,
+            330.26485628391333
+          ],
+          "download_mbit_range": [
+            300.133466173522,
+            328.67210510218194
+          ]
+        }
+      },
+      {
+        "report": "002-delay10-p128-c3-r2-benchmark.json",
+        "report_sha256": "024ac7cde32b5800ebaf8ea0a3c2ca86ef271609abf2ce2a4b47c4e95596f2ad",
+        "profile": "delay10",
+        "repetition": 2,
+        "backend": "pipeline",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 174.99272450499848,
+        "aggregate_output_tokens_per_second": 37.30440804591013,
+        "ttft_seconds_p50": 0.22766871999920113,
+        "ttft_seconds_p95": 0.23714158999791835,
+        "inter_token_seconds_p50": 0.07727159099886194,
+        "inter_token_seconds_p95": 0.08237128399923677,
+        "session_itl_p50_median_seconds": 0.07731618299658294,
+        "session_itl_p95_median_seconds": 0.08210052100184839,
+        "session_itl_p95_p95_seconds": 0.08472190299653448,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "worker-1",
+            "cpu_seconds": 92.567976,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 321949696,
+            "memory_current_after_bytes": 321933312
+          },
+          {
+            "service": "worker-2",
+            "cpu_seconds": 91.841761,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 320544768,
+            "memory_current_after_bytes": 321482752
+          },
+          {
+            "service": "worker-3",
+            "cpu_seconds": 87.560113,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 318083072,
+            "memory_current_after_bytes": 317898752
+          },
+          {
+            "service": "coordinator",
+            "cpu_seconds": 45.644915,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 369205248,
+            "memory_current_after_bytes": 370135040
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 5.479424,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 1,
+            "memory_current_before_bytes": 6852608,
+            "memory_current_after_bytes": 6705152
+          }
+        ],
+        "probes": {
+          "samples": 15,
+          "rtt_median_ms": 20.549367000057828,
+          "upload_mbit_range": [
+            299.06622954725503,
+            329.9977654165008
+          ],
+          "download_mbit_range": [
+            300.7867317475173,
+            330.04112192179974
+          ]
+        }
+      },
+      {
+        "report": "003-lan-p128-c3-r2-benchmark.json",
+        "report_sha256": "b8bce24a32cc640327d6a46bfddafee3ce0c53d6c79885df1696ab8946a224db",
+        "profile": "lan",
+        "repetition": 2,
+        "backend": "pipeline",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 41.41231855100341,
+        "aggregate_output_tokens_per_second": 157.6342554199209,
+        "ttft_seconds_p50": 0.039474073993915226,
+        "ttft_seconds_p95": 0.05581915800576098,
+        "inter_token_seconds_p50": 0.0177570919986465,
+        "inter_token_seconds_p95": 0.02373482199618593,
+        "session_itl_p50_median_seconds": 0.017719583498546854,
+        "session_itl_p95_median_seconds": 0.020852996000030544,
+        "session_itl_p95_p95_seconds": 0.04228550400148379,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "worker-1",
+            "cpu_seconds": 66.611096,
+            "throttled_seconds": 0.807083,
+            "nr_throttled": 17,
+            "memory_current_before_bytes": 338481152,
+            "memory_current_after_bytes": 317968384
+          },
+          {
+            "service": "worker-2",
+            "cpu_seconds": 67.2658,
+            "throttled_seconds": 1.260894,
+            "nr_throttled": 20,
+            "memory_current_before_bytes": 321327104,
+            "memory_current_after_bytes": 316919808
+          },
+          {
+            "service": "worker-3",
+            "cpu_seconds": 65.647226,
+            "throttled_seconds": 0.625471,
+            "nr_throttled": 17,
+            "memory_current_before_bytes": 317960192,
+            "memory_current_after_bytes": 315367424
+          },
+          {
+            "service": "coordinator",
+            "cpu_seconds": 48.612854,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 370200576,
+            "memory_current_after_bytes": 374095872
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 4.583775,
+            "throttled_seconds": 0.001344,
+            "nr_throttled": 1,
+            "memory_current_before_bytes": 7196672,
+            "memory_current_after_bytes": 7684096
+          }
+        ],
+        "probes": {
+          "samples": 15,
+          "rtt_median_ms": 0.13543900422519073,
+          "upload_mbit_range": [
+            38707.10197887575,
+            43091.8969274375
+          ],
+          "download_mbit_range": [
+            32941.053121578094,
+            42176.672426028425
+          ]
+        }
+      },
+      {
+        "report": "004-delay10-p128-c3-r3-benchmark.json",
+        "report_sha256": "ae6b884b3135d5f2f71205769b2f404127f4d218fb5d5e11a1f9864116c6d1ed",
+        "profile": "delay10",
+        "repetition": 3,
+        "backend": "pipeline",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 175.05665481499454,
+        "aggregate_output_tokens_per_second": 37.290784557142366,
+        "ttft_seconds_p50": 0.22693794799852185,
+        "ttft_seconds_p95": 0.23833867400389863,
+        "inter_token_seconds_p50": 0.07725579499674495,
+        "inter_token_seconds_p95": 0.08277945499867201,
+        "session_itl_p50_median_seconds": 0.07725709450096474,
+        "session_itl_p95_median_seconds": 0.08264995599893155,
+        "session_itl_p95_p95_seconds": 0.08485698799631791,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "worker-1",
+            "cpu_seconds": 92.171366,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 317353984,
+            "memory_current_after_bytes": 320737280
+          },
+          {
+            "service": "worker-2",
+            "cpu_seconds": 92.087248,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 316178432,
+            "memory_current_after_bytes": 317378560
+          },
+          {
+            "service": "worker-3",
+            "cpu_seconds": 87.645625,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 314433536,
+            "memory_current_after_bytes": 314785792
+          },
+          {
+            "service": "coordinator",
+            "cpu_seconds": 46.126919,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 374415360,
+            "memory_current_after_bytes": 376459264
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 5.450262,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 6938624,
+            "memory_current_after_bytes": 7192576
+          }
+        ],
+        "probes": {
+          "samples": 15,
+          "rtt_median_ms": 20.480231003602967,
+          "upload_mbit_range": [
+            298.94943399181204,
+            300.06716726759635
+          ],
+          "download_mbit_range": [
+            328.49792615321695,
+            331.28125041636093
+          ]
+        }
+      },
+      {
+        "report": "005-lan-p128-c3-r3-benchmark.json",
+        "report_sha256": "94a7a0a40e7955527c9bcfed88c85f7dc177e7a70e742c5d71c26d3c822b540e",
+        "profile": "lan",
+        "repetition": 3,
+        "backend": "pipeline",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 41.586231288994895,
+        "aggregate_output_tokens_per_second": 156.97503230420224,
+        "ttft_seconds_p50": 0.03963047700381139,
+        "ttft_seconds_p95": 0.0497328950004885,
+        "inter_token_seconds_p50": 0.01783029699436156,
+        "inter_token_seconds_p95": 0.024322837001818698,
+        "session_itl_p50_median_seconds": 0.017833283498475794,
+        "session_itl_p95_median_seconds": 0.021000879500206793,
+        "session_itl_p95_p95_seconds": 0.0406984469955205,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "worker-1",
+            "cpu_seconds": 66.147904,
+            "throttled_seconds": 1.010146,
+            "nr_throttled": 18,
+            "memory_current_before_bytes": 320868352,
+            "memory_current_after_bytes": 314187776
+          },
+          {
+            "service": "worker-2",
+            "cpu_seconds": 67.473938,
+            "throttled_seconds": 1.161946,
+            "nr_throttled": 18,
+            "memory_current_before_bytes": 317108224,
+            "memory_current_after_bytes": 321269760
+          },
+          {
+            "service": "worker-3",
+            "cpu_seconds": 66.113983,
+            "throttled_seconds": 0.761489,
+            "nr_throttled": 18,
+            "memory_current_before_bytes": 315002880,
+            "memory_current_after_bytes": 318398464
+          },
+          {
+            "service": "coordinator",
+            "cpu_seconds": 49.001958,
+            "throttled_seconds": 0.283567,
+            "nr_throttled": 15,
+            "memory_current_before_bytes": 376197120,
+            "memory_current_after_bytes": 369881088
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 4.595626,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 6959104,
+            "memory_current_after_bytes": 7348224
+          }
+        ],
+        "probes": {
+          "samples": 15,
+          "rtt_median_ms": 0.13803499314235523,
+          "upload_mbit_range": [
+            39677.363375909255,
+            43290.930210286984
+          ],
+          "download_mbit_range": [
+            41142.585240970475,
+            45199.46362095815
+          ]
+        }
+      }
+    ],
+    "source_fingerprint": "b54a579fcde2483db02b9718ea8e8b9834605d58e750a4409522090537657796",
+    "source_sha256": null,
+    "resource_peaks": [
+      {
+        "service": "worker-1",
+        "image": "sha256:346b3aad9e7fd0aca1c7570ff542d668daa901a2483e80e4057e4ecd3fda8119",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "ab4e4747ad6b5ea64af90fd08d2477263feab1b8819ca43e93549428b67f986c",
+        "oom_killed": false,
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "cap_add": [
+          "CAP_NET_ADMIN"
+        ],
+        "memory_peak_bytes": 475418624,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-worker-1.log"
+      },
+      {
+        "service": "worker-2",
+        "image": "sha256:346b3aad9e7fd0aca1c7570ff542d668daa901a2483e80e4057e4ecd3fda8119",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "a32b75c9749cb54893a4232f31de3b8521134d3d1eaa04426f33e00394a4999b",
+        "oom_killed": false,
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "cap_add": [
+          "CAP_NET_ADMIN"
+        ],
+        "memory_peak_bytes": 467853312,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-worker-2.log"
+      },
+      {
+        "service": "worker-3",
+        "image": "sha256:346b3aad9e7fd0aca1c7570ff542d668daa901a2483e80e4057e4ecd3fda8119",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "e6e3a707c206e47c9c4f618e6c2c15ed74773075cf586b0f829575bf8fb2c4f5",
+        "oom_killed": false,
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "cap_add": [
+          "CAP_NET_ADMIN"
+        ],
+        "memory_peak_bytes": 459874304,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-worker-3.log"
+      },
+      {
+        "service": "coordinator",
+        "image": "sha256:346b3aad9e7fd0aca1c7570ff542d668daa901a2483e80e4057e4ecd3fda8119",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "4890acb64b250511a0767f424121a42d11b8f99be564c67698baac032d9142de",
+        "oom_killed": false,
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "cap_add": [
+          "CAP_NET_ADMIN"
+        ],
+        "memory_peak_bytes": 416120832,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-coordinator.log"
+      },
+      {
+        "service": "pipeline-benchmark",
+        "image": "sha256:346b3aad9e7fd0aca1c7570ff542d668daa901a2483e80e4057e4ecd3fda8119",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "75c568e321d317909ac0acc050b4dbfe3195d71038516fb67249023c90ee2a7d",
+        "oom_killed": false,
+        "memory_limit_bytes": 1073741824,
+        "nano_cpus": 1000000000,
+        "port_bindings": {},
+        "cap_add": null,
+        "memory_peak_bytes": 38797312,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-pipeline-benchmark.log"
+      }
+    ]
+  },
+  "pipeline_audit": {
+    "issues": [],
+    "coverage": {
+      "planned": 6,
+      "observed": 6,
+      "missing_case_indices": [],
+      "unexpected_case_indices": [],
+      "configuration_mismatch_indices": [],
+      "repetition_mismatch_indices": [],
+      "completion_target_miss_indices": [],
+      "attempt_policy_miss_indices": [],
+      "complete": true
+    },
+    "final_reset_state": "verified"
+  },
+  "matched_control": {
+    "run_id": "matched-20261016T215146484Z-d822a13a",
+    "runtime_image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+    "plan_sha256": "6ef81bd35c86096339232f39201609c8d6df91bd04581961f483f0a47ab604d8",
+    "summary": {
+      "success": true,
+      "cases": [
+        {
+          "repetition": 1,
+          "success": true,
+          "error": null,
+          "reset_verified": true
+        },
+        {
+          "repetition": 2,
+          "success": true,
+          "error": null,
+          "reset_verified": true
+        },
+        {
+          "repetition": 3,
+          "success": true,
+          "error": null,
+          "reset_verified": true
+        }
+      ],
+      "error": null,
+      "final_reset_verified": true
+    },
+    "runs": [
+      {
+        "report": "r1-benchmark.json",
+        "report_sha256": "128e38f3004f85c1a99e6ff97fd69a8cffd39b6c2880ff5aaee0f3d0884946c8",
+        "profile": "lan",
+        "repetition": 1,
+        "backend": "matched",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 9.092160888998478,
+        "aggregate_output_tokens_per_second": 717.9811355844885,
+        "ttft_seconds_p50": 0.01137852799729444,
+        "ttft_seconds_p95": 0.013939171003585216,
+        "inter_token_seconds_p50": 0.004063795997353736,
+        "inter_token_seconds_p95": 0.005090369995741639,
+        "session_itl_p50_median_seconds": 0.0040501475014025345,
+        "session_itl_p95_median_seconds": 0.004904946497845231,
+        "session_itl_p95_p95_seconds": 0.0058275120027246885,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "replica-1",
+            "cpu_seconds": 14.52704,
+            "throttled_seconds": 0.092881,
+            "nr_throttled": 18,
+            "memory_current_before_bytes": 345542656,
+            "memory_current_after_bytes": 345436160
+          },
+          {
+            "service": "replica-2",
+            "cpu_seconds": 14.128946,
+            "throttled_seconds": 0.172826,
+            "nr_throttled": 28,
+            "memory_current_before_bytes": 345227264,
+            "memory_current_after_bytes": 345120768
+          },
+          {
+            "service": "replica-3",
+            "cpu_seconds": 14.841275,
+            "throttled_seconds": 0.130367,
+            "nr_throttled": 30,
+            "memory_current_before_bytes": 342167552,
+            "memory_current_after_bytes": 342573056
+          },
+          {
+            "service": "replica-4",
+            "cpu_seconds": 14.958469,
+            "throttled_seconds": 0.183455,
+            "nr_throttled": 30,
+            "memory_current_before_bytes": 344928256,
+            "memory_current_after_bytes": 344469504
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 3.896439,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 6766592,
+            "memory_current_after_bytes": 7544832
+          }
+        ],
+        "probes": {
+          "samples": 20,
+          "rtt_median_ms": 0.1598364979145117,
+          "upload_mbit_range": [
+            24155.110769237555,
+            38818.4461353003
+          ],
+          "download_mbit_range": [
+            40270.45686972606,
+            45581.40471149781
+          ]
+        }
+      },
+      {
+        "report": "r2-benchmark.json",
+        "report_sha256": "83486bdf34089ef0ff2af9f7c7b0ea27f5769cf1462e500e9421301aa75c2d20",
+        "profile": "lan",
+        "repetition": 2,
+        "backend": "matched",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 9.187411368999165,
+        "aggregate_output_tokens_per_second": 710.5374667370676,
+        "ttft_seconds_p50": 0.011208256000827532,
+        "ttft_seconds_p95": 0.013283134998346213,
+        "inter_token_seconds_p50": 0.004092793999006972,
+        "inter_token_seconds_p95": 0.005176004997338168,
+        "session_itl_p50_median_seconds": 0.004082207502506208,
+        "session_itl_p95_median_seconds": 0.004986282503523398,
+        "session_itl_p95_p95_seconds": 0.0056376729990006424,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "replica-1",
+            "cpu_seconds": 14.204709,
+            "throttled_seconds": 0.124834,
+            "nr_throttled": 24,
+            "memory_current_before_bytes": 345772032,
+            "memory_current_after_bytes": 345890816
+          },
+          {
+            "service": "replica-2",
+            "cpu_seconds": 14.426415,
+            "throttled_seconds": 0.112909,
+            "nr_throttled": 29,
+            "memory_current_before_bytes": 345292800,
+            "memory_current_after_bytes": 345329664
+          },
+          {
+            "service": "replica-3",
+            "cpu_seconds": 15.172388,
+            "throttled_seconds": 0.162156,
+            "nr_throttled": 29,
+            "memory_current_before_bytes": 342700032,
+            "memory_current_after_bytes": 343519232
+          },
+          {
+            "service": "replica-4",
+            "cpu_seconds": 15.144903,
+            "throttled_seconds": 0.245854,
+            "nr_throttled": 31,
+            "memory_current_before_bytes": 345427968,
+            "memory_current_after_bytes": 345452544
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 3.939756,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 6787072,
+            "memory_current_after_bytes": 7528448
+          }
+        ],
+        "probes": {
+          "samples": 20,
+          "rtt_median_ms": 0.14000900409882888,
+          "upload_mbit_range": [
+            35250.51036405286,
+            43079.72553326771
+          ],
+          "download_mbit_range": [
+            32234.432035511145,
+            44374.30838422502
+          ]
+        }
+      },
+      {
+        "report": "r3-benchmark.json",
+        "report_sha256": "2ba82ec17b62f5f661dda3f5f7f002b5140fa47b34debe8ad0fd92dee1fe0720",
+        "profile": "lan",
+        "repetition": 3,
+        "backend": "matched",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 9.11353075200168,
+        "aggregate_output_tokens_per_second": 716.2975774856744,
+        "ttft_seconds_p50": 0.01124829499894986,
+        "ttft_seconds_p95": 0.013179727997339796,
+        "inter_token_seconds_p50": 0.004085792003024835,
+        "inter_token_seconds_p95": 0.0051443470001686364,
+        "session_itl_p50_median_seconds": 0.004089236503205029,
+        "session_itl_p95_median_seconds": 0.0048947089999273885,
+        "session_itl_p95_p95_seconds": 0.006363155996950809,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "replica-1",
+            "cpu_seconds": 14.497072,
+            "throttled_seconds": 0.118617,
+            "nr_throttled": 16,
+            "memory_current_before_bytes": 345833472,
+            "memory_current_after_bytes": 345767936
+          },
+          {
+            "service": "replica-2",
+            "cpu_seconds": 15.126073,
+            "throttled_seconds": 0.071902,
+            "nr_throttled": 33,
+            "memory_current_before_bytes": 344915968,
+            "memory_current_after_bytes": 345776128
+          },
+          {
+            "service": "replica-3",
+            "cpu_seconds": 14.784653,
+            "throttled_seconds": 0.175568,
+            "nr_throttled": 35,
+            "memory_current_before_bytes": 343322624,
+            "memory_current_after_bytes": 343670784
+          },
+          {
+            "service": "replica-4",
+            "cpu_seconds": 14.294995,
+            "throttled_seconds": 0.072761,
+            "nr_throttled": 18,
+            "memory_current_before_bytes": 345595904,
+            "memory_current_after_bytes": 345522176
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 3.859193,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 6828032,
+            "memory_current_after_bytes": 6819840
+          }
+        ],
+        "probes": {
+          "samples": 20,
+          "rtt_median_ms": 0.17548799951327965,
+          "upload_mbit_range": [
+            23459.84737647286,
+            44641.27001199572
+          ],
+          "download_mbit_range": [
+            40555.92591529622,
+            44837.8859421274
+          ]
+        }
+      }
+    ],
+    "source_fingerprint": null,
+    "source_sha256": {
+      "lab/matched_control.py": "5c66a7e49261395d1902a34510d5c24dd753123c6c17b933a1e2bc435a6d6cb9",
+      "lab/benchmark.py": "2f50eb755117c28830cbd2279ff1e53114bfffb5ddf0c60b79219dd1b998009c",
+      "lab/pipeline_benchmark.py": "c2e7ee66d4e2c42f730ee1e0c3aafbc49c5aaada4ca79e005b7975473464c159",
+      "scripts/Invoke-MatchedControl.ps1": "efc976d72c8c74f463411a63575bc12885250ba1b01919f4390a184313763f50",
+      "scripts/Set-NetworkProfile.ps1": "890f079d72bd0093fad1ad7fa7a841b3305f115fe1f9536ddc380723b53d9680",
+      "scripts/NetworkReset.ps1": "805166b19138eb141fe7c817ca6d76e03884b21041247bffd4fada836abaa1f8"
+    },
+    "resource_peaks": [
+      {
+        "service": "replica-1",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "container_id": "3c99deb8943bfc80ea313b0562a8c159a0cd2a2ff9fde3686052f437296e6eae",
+        "nano_cpus": 2000000000,
+        "memory_limit_bytes": 3221225472,
+        "memory_current_bytes": 345767936,
+        "memory_peak_bytes": 381775872,
+        "cpu_stat": "usage_usec 51051876\nuser_usec 48181749\nsystem_usec 2870126\nnr_periods 716\nnr_throttled 58\nthrottled_usec 336332\nnr_bursts 0\nburst_usec 0",
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+      },
+      {
+        "service": "replica-2",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "container_id": "06a2d18ad00f2d3d60911a34369f94ba4d059495730a4757cc53e07c96d0eaab",
+        "nano_cpus": 2000000000,
+        "memory_limit_bytes": 3221225472,
+        "memory_current_bytes": 345776128,
+        "memory_peak_bytes": 381632512,
+        "cpu_stat": "usage_usec 51521229\nuser_usec 48561669\nsystem_usec 2959559\nnr_periods 760\nnr_throttled 90\nthrottled_usec 357637\nnr_bursts 0\nburst_usec 0",
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+      },
+      {
+        "service": "replica-3",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "container_id": "0179de4c0b8c95e0b8bdfb841d76659051d39bb494947c5ee4f4b22cc6ad0620",
+        "nano_cpus": 2000000000,
+        "memory_limit_bytes": 3221225472,
+        "memory_current_bytes": 343670784,
+        "memory_peak_bytes": 379117568,
+        "cpu_stat": "usage_usec 52614062\nuser_usec 49544172\nsystem_usec 3069890\nnr_periods 718\nnr_throttled 94\nthrottled_usec 468091\nnr_bursts 0\nburst_usec 0",
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+      },
+      {
+        "service": "replica-4",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "container_id": "10f910d7bc0683de28c757c3bd3c374837bf0d6d1a8bef0696ca71cffbd5b069",
+        "nano_cpus": 2000000000,
+        "memory_limit_bytes": 3221225472,
+        "memory_current_bytes": 345522176,
+        "memory_peak_bytes": 381382656,
+        "cpu_stat": "usage_usec 52212985\nuser_usec 49322580\nsystem_usec 2890404\nnr_periods 705\nnr_throttled 79\nthrottled_usec 502070\nnr_bursts 0\nburst_usec 0",
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+      },
+      {
+        "service": "pipeline-benchmark",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "container_id": "a7b5706fd4242d7b2235f3d7ebf81a7b2b7a78a873356e47e5828f69c77b2cfb",
+        "nano_cpus": 1000000000,
+        "memory_limit_bytes": 1073741824,
+        "memory_current_bytes": 6819840,
+        "memory_peak_bytes": 39387136,
+        "cpu_stat": "usage_usec 29466490\nuser_usec 18211988\nsystem_usec 11254501\nnr_periods 1761\nnr_throttled 6\nthrottled_usec 11540\nnr_bursts 0\nburst_usec 0",
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+      }
+    ]
+  },
+  "matched_pipeline": {
+    "run_id": "m5-20261016T214719497Z-40eb40cb",
+    "runtime_image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+    "plan_sha256": "ccd73aea7437ff3010d36dbed459f46398ef1638bf9e752b28b6932b5c72a8a8",
+    "summary": {
+      "run_id": "m5-20261016T214719497Z-40eb40cb",
+      "success": true,
+      "cases": [
+        {
+          "index": 0,
+          "config": {
+            "profile": "lan",
+            "delay_ms": 0,
+            "rate_mbit": 0,
+            "prompt_tokens": 128,
+            "new_tokens": 64,
+            "concurrency": 3,
+            "requests": 100,
+            "completion_target": 100,
+            "maximum_attempts": 200,
+            "repetition": 1
+          },
+          "success": true,
+          "reset_verified": true,
+          "error": null,
+          "reset_error": null,
+          "probe_stop_errors": []
+        },
+        {
+          "index": 1,
+          "config": {
+            "profile": "lan",
+            "delay_ms": 0,
+            "rate_mbit": 0,
+            "prompt_tokens": 128,
+            "new_tokens": 64,
+            "concurrency": 3,
+            "requests": 100,
+            "completion_target": 100,
+            "maximum_attempts": 200,
+            "repetition": 2
+          },
+          "success": true,
+          "reset_verified": true,
+          "error": null,
+          "reset_error": null,
+          "probe_stop_errors": []
+        },
+        {
+          "index": 2,
+          "config": {
+            "profile": "lan",
+            "delay_ms": 0,
+            "rate_mbit": 0,
+            "prompt_tokens": 128,
+            "new_tokens": 64,
+            "concurrency": 3,
+            "requests": 100,
+            "completion_target": 100,
+            "maximum_attempts": 200,
+            "repetition": 3
+          },
+          "success": true,
+          "reset_verified": true,
+          "error": null,
+          "reset_error": null,
+          "probe_stop_errors": []
+        }
+      ],
+      "final_reset_verified": true,
+      "error": null
+    },
+    "runs": [
+      {
+        "report": "000-lan-p128-c3-r1-benchmark.json",
+        "report_sha256": "5137823e40678b75f81c6d46de2a8d6d9669a0102c8cfde5a2b9162560d1804c",
+        "profile": "lan",
+        "repetition": 1,
+        "backend": "pipeline",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 41.31008748599561,
+        "aggregate_output_tokens_per_second": 158.02435669527534,
+        "ttft_seconds_p50": 0.03803244600567268,
+        "ttft_seconds_p95": 0.05468457099777879,
+        "inter_token_seconds_p50": 0.017686888997559436,
+        "inter_token_seconds_p95": 0.02374894099921221,
+        "session_itl_p50_median_seconds": 0.017715935999149224,
+        "session_itl_p95_median_seconds": 0.02116993950039614,
+        "session_itl_p95_p95_seconds": 0.044011153004248627,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "worker-1",
+            "cpu_seconds": 66.590219,
+            "throttled_seconds": 1.183715,
+            "nr_throttled": 21,
+            "memory_current_before_bytes": 321531904,
+            "memory_current_after_bytes": 318922752
+          },
+          {
+            "service": "worker-2",
+            "cpu_seconds": 67.196276,
+            "throttled_seconds": 1.373601,
+            "nr_throttled": 19,
+            "memory_current_before_bytes": 323002368,
+            "memory_current_after_bytes": 321081344
+          },
+          {
+            "service": "worker-3",
+            "cpu_seconds": 65.482551,
+            "throttled_seconds": 0.583103,
+            "nr_throttled": 18,
+            "memory_current_before_bytes": 315944960,
+            "memory_current_after_bytes": 313356288
+          },
+          {
+            "service": "coordinator",
+            "cpu_seconds": 48.174024,
+            "throttled_seconds": 0.191772,
+            "nr_throttled": 16,
+            "memory_current_before_bytes": 376995840,
+            "memory_current_after_bytes": 369831936
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 4.59029,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 0,
+            "memory_current_before_bytes": 6553600,
+            "memory_current_after_bytes": 7458816
+          }
+        ],
+        "probes": {
+          "samples": 15,
+          "rtt_median_ms": 0.1383540002279915,
+          "upload_mbit_range": [
+            34131.07650100148,
+            46674.71875658856
+          ],
+          "download_mbit_range": [
+            35024.88157470702,
+            39817.22320789845
+          ]
+        }
+      },
+      {
+        "report": "001-lan-p128-c3-r2-benchmark.json",
+        "report_sha256": "51db74a69ae1e3a40385d4d826ba36620526cf126da305fcfdc86b84c20a06f1",
+        "profile": "lan",
+        "repetition": 2,
+        "backend": "pipeline",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 41.520168112001556,
+        "aggregate_output_tokens_per_second": 157.22479693219395,
+        "ttft_seconds_p50": 0.03716937800345477,
+        "ttft_seconds_p95": 0.0467465380061185,
+        "inter_token_seconds_p50": 0.01781838900205912,
+        "inter_token_seconds_p95": 0.023549570003524423,
+        "session_itl_p50_median_seconds": 0.017715451500407653,
+        "session_itl_p95_median_seconds": 0.021613982997223502,
+        "session_itl_p95_p95_seconds": 0.03948483699787175,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "worker-1",
+            "cpu_seconds": 65.628892,
+            "throttled_seconds": 1.002694,
+            "nr_throttled": 19,
+            "memory_current_before_bytes": 319414272,
+            "memory_current_after_bytes": 319283200
+          },
+          {
+            "service": "worker-2",
+            "cpu_seconds": 67.069342,
+            "throttled_seconds": 1.271086,
+            "nr_throttled": 20,
+            "memory_current_before_bytes": 320733184,
+            "memory_current_after_bytes": 320839680
+          },
+          {
+            "service": "worker-3",
+            "cpu_seconds": 65.410764,
+            "throttled_seconds": 0.598203,
+            "nr_throttled": 16,
+            "memory_current_before_bytes": 314142720,
+            "memory_current_after_bytes": 313864192
+          },
+          {
+            "service": "coordinator",
+            "cpu_seconds": 48.566296,
+            "throttled_seconds": 0.222688,
+            "nr_throttled": 15,
+            "memory_current_before_bytes": 370110464,
+            "memory_current_after_bytes": 368971776
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 4.6047,
+            "throttled_seconds": 0.003487,
+            "nr_throttled": 1,
+            "memory_current_before_bytes": 7503872,
+            "memory_current_after_bytes": 7467008
+          }
+        ],
+        "probes": {
+          "samples": 15,
+          "rtt_median_ms": 0.13285499881021678,
+          "upload_mbit_range": [
+            39484.5818621294,
+            42273.35336853372
+          ],
+          "download_mbit_range": [
+            19632.164644035973,
+            46119.34878433428
+          ]
+        }
+      },
+      {
+        "report": "002-lan-p128-c3-r3-benchmark.json",
+        "report_sha256": "353e728924d393dc5a81ee9d509b021fe9d55ecaffbe11792186af9286e24389",
+        "profile": "lan",
+        "repetition": 3,
+        "backend": "pipeline",
+        "attempted": 102,
+        "completed": 102,
+        "failed": 0,
+        "accepted_output_tokens": 6528,
+        "measurement_seconds": 41.14428286099428,
+        "aggregate_output_tokens_per_second": 158.66116860159673,
+        "ttft_seconds_p50": 0.03797111899621086,
+        "ttft_seconds_p95": 0.045573411996883806,
+        "inter_token_seconds_p50": 0.01772079600050347,
+        "inter_token_seconds_p95": 0.023207105994515587,
+        "session_itl_p50_median_seconds": 0.017689500000415137,
+        "session_itl_p95_median_seconds": 0.020898480503092287,
+        "session_itl_p95_p95_seconds": 0.04260167400207138,
+        "retry_count": 0,
+        "reset_verified": true,
+        "resources": [
+          {
+            "service": "worker-1",
+            "cpu_seconds": 65.945892,
+            "throttled_seconds": 0.72696,
+            "nr_throttled": 17,
+            "memory_current_before_bytes": 319315968,
+            "memory_current_after_bytes": 319795200
+          },
+          {
+            "service": "worker-2",
+            "cpu_seconds": 66.644389,
+            "throttled_seconds": 1.132082,
+            "nr_throttled": 19,
+            "memory_current_before_bytes": 321064960,
+            "memory_current_after_bytes": 321236992
+          },
+          {
+            "service": "worker-3",
+            "cpu_seconds": 64.889206,
+            "throttled_seconds": 0.687561,
+            "nr_throttled": 17,
+            "memory_current_before_bytes": 314417152,
+            "memory_current_after_bytes": 314195968
+          },
+          {
+            "service": "coordinator",
+            "cpu_seconds": 48.66102,
+            "throttled_seconds": 0.187255,
+            "nr_throttled": 17,
+            "memory_current_before_bytes": 369127424,
+            "memory_current_after_bytes": 371240960
+          },
+          {
+            "service": "pipeline-benchmark",
+            "cpu_seconds": 4.56602,
+            "throttled_seconds": 0.0,
+            "nr_throttled": 1,
+            "memory_current_before_bytes": 7073792,
+            "memory_current_after_bytes": 7057408
+          }
+        ],
+        "probes": {
+          "samples": 15,
+          "rtt_median_ms": 0.14219300646800548,
+          "upload_mbit_range": [
+            38177.628255336895,
+            41063.78743996528
+          ],
+          "download_mbit_range": [
+            37003.0619103726,
+            45622.02905806085
+          ]
+        }
+      }
+    ],
+    "source_fingerprint": "0e5a9880649c890c0cc5cb7d1c6ea9f09d8afe035c6463f730401608791f95eb",
+    "source_sha256": null,
+    "resource_peaks": [
+      {
+        "service": "worker-1",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "ab4e4747ad6b5ea64af90fd08d2477263feab1b8819ca43e93549428b67f986c",
+        "oom_killed": false,
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "cap_add": [
+          "CAP_NET_ADMIN"
+        ],
+        "memory_peak_bytes": 461815808,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-worker-1.log"
+      },
+      {
+        "service": "worker-2",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "a32b75c9749cb54893a4232f31de3b8521134d3d1eaa04426f33e00394a4999b",
+        "oom_killed": false,
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "cap_add": [
+          "CAP_NET_ADMIN"
+        ],
+        "memory_peak_bytes": 463392768,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-worker-2.log"
+      },
+      {
+        "service": "worker-3",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "e6e3a707c206e47c9c4f618e6c2c15ed74773075cf586b0f829575bf8fb2c4f5",
+        "oom_killed": false,
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "cap_add": [
+          "CAP_NET_ADMIN"
+        ],
+        "memory_peak_bytes": 465735680,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-worker-3.log"
+      },
+      {
+        "service": "coordinator",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "4890acb64b250511a0767f424121a42d11b8f99be564c67698baac032d9142de",
+        "oom_killed": false,
+        "memory_limit_bytes": 3221225472,
+        "nano_cpus": 2000000000,
+        "port_bindings": {},
+        "cap_add": [
+          "CAP_NET_ADMIN"
+        ],
+        "memory_peak_bytes": 403886080,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-coordinator.log"
+      },
+      {
+        "service": "pipeline-benchmark",
+        "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6",
+        "image_reference": "steamboat-pytorch:cpu",
+        "running": true,
+        "config_fingerprint": "75c568e321d317909ac0acc050b4dbfe3195d71038516fb67249023c90ee2a7d",
+        "oom_killed": false,
+        "memory_limit_bytes": 1073741824,
+        "nano_cpus": 1000000000,
+        "port_bindings": {},
+        "cap_add": null,
+        "memory_peak_bytes": 39387136,
+        "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+        "memory_peak_scope": "container lifetime; not reset per case",
+        "ready_log": "resources-after-pipeline-benchmark.log"
+      }
+    ]
+  },
+  "matched_pipeline_audit": {
+    "issues": [],
+    "coverage": {
+      "planned": 3,
+      "observed": 3,
+      "missing_case_indices": [],
+      "unexpected_case_indices": [],
+      "configuration_mismatch_indices": [],
+      "repetition_mismatch_indices": [],
+      "completion_target_miss_indices": [],
+      "attempt_policy_miss_indices": [],
+      "complete": true
+    },
+    "final_reset_state": "verified"
+  },
+  "limitations": [
+    "Per-run interval percentiles pool only intervals within that run; no average percentile is a pooled percentile.",
+    "CPU counter deltas include warm-up, command overhead and container health checks.",
+    "Current memory is sampled; peaks are container lifetime.",
+    "No energy or thermal measurements; same shared laptop, no physical-device isolation.",
+    "Control after-counter snapshots also include per-case network reset; CPU ratios are not isolated efficiency comparisons."
+  ],
+  "retained_failed_control_attempt": {
+    "run_id": "matched-20261016T214039273Z-6c6e778a",
+    "plan_sha256": "e0ca6bb0307229260a5ba55a8f776d9881714ab7dbcfe41502850eaeba11ff62",
+    "summary_sha256": "b7f323fb12a627c5ed66d1f9877d39f0cd8f6412985e47b865dabb0dfcabb85e",
+    "failed_setup_cases": 3,
+    "benchmark_requests_started": 0,
+    "reason": "probe port 50053 collided with replica service; corrected probe port to 50054 in a new run",
+    "final_reset_verified": true
+  },
+  "verification": {
+    "tests": 255,
+    "skipped": 0,
+    "test_seconds": 69.193,
+    "test_log_sha256": "eca5f7da22a8fc6219dfe5e90f00ef56ded7c485c070076281d2e9df9ba0f682",
+    "pipeline_gate_comparisons": 144,
+    "replica_gate_comparisons": 256,
+    "source_base_commit": "d889ae8"
+  },
+  "retained_failed_control_client": {
+    "run_id": "matched-20261016T214259193Z-6d85bfb4",
+    "plan_sha256": "d00bce9292d13a2e237fa92770ac635ef6943cd5024c4b77dae3ed2be84b829b",
+    "summary_sha256": "93ec70740b75557e8cfc9687cbc9a586e87d8b613da983f192cd520d8b5e2069",
+    "failed_pre_measurement_cases": 3,
+    "reason": "gRPC clients constructed outside measurement loop; new image and matched LAN measurements followed",
+    "final_reset_verified": true,
+    "reports": [
+      {
+        "name": "r1-benchmark.json",
+        "sha256": "9ace79ed079a0551509af6b075f15de356ced8ffff70f38aceb5a551e104a72c",
+        "error": "RuntimeError: Task <Task pending name='Task-2' coro=<RemoteClient.describe() running at /app/src/steamboat_runtime/remote_client.py:150> cb=[gather.<locals>._done_callback() at /usr/local/lib/python3.12/asyncio/tasks.py:767]> got Future <Task pending name='Task-6' coro=<UnaryUnaryCall._invoke() running at /usr/local/lib/python3.12/site-packages/grpc/aio/_call.py:586>> attached to a different loop"
+      },
+      {
+        "name": "r2-benchmark.json",
+        "sha256": "772f5f37e571c445e2acec058949260957622a7c5846040936e0084a92934530",
+        "error": "RuntimeError: Task <Task pending name='Task-2' coro=<RemoteClient.describe() running at /app/src/steamboat_runtime/remote_client.py:150> cb=[gather.<locals>._done_callback() at /usr/local/lib/python3.12/asyncio/tasks.py:767]> got Future <Task pending name='Task-6' coro=<UnaryUnaryCall._invoke() running at /usr/local/lib/python3.12/site-packages/grpc/aio/_call.py:586>> attached to a different loop"
+      },
+      {
+        "name": "r3-benchmark.json",
+        "sha256": "b31755db3a29b76760f1bec4cd64cdc3dd306171df80e11eda01a322ed731eea",
+        "error": "RuntimeError: Task <Task pending name='Task-2' coro=<RemoteClient.describe() running at /app/src/steamboat_runtime/remote_client.py:150> cb=[gather.<locals>._done_callback() at /usr/local/lib/python3.12/asyncio/tasks.py:767]> got Future <Task pending name='Task-6' coro=<UnaryUnaryCall._invoke() running at /usr/local/lib/python3.12/site-packages/grpc/aio/_call.py:586>> attached to a different loop"
+      }
+    ]
+  },
+  "corrected_image_verification": {
+    "tests": 256,
+    "skipped": 0,
+    "test_seconds": 68.505,
+    "test_log_sha256": "900661b61149e0ce376455838727613e1e3a02a19a54a78e4b0c9e2190638df6",
+    "cli_smoke": {
+      "attempted": 6,
+      "completed": 6,
+      "failed": 0,
+      "accepted_output_tokens": 48,
+      "measurement_seconds": 0.08262402899708832,
+      "aggregate_output_tokens_per_second": 580.9447999890144,
+      "ttft_seconds_p50": 0.010958111997751985,
+      "ttft_seconds_p95": 0.013361124001676217,
+      "inter_token_seconds_p50": 0.00396809600351844,
+      "inter_token_seconds_p95": 0.004901074993540533
+    },
+    "replica_gate_comparisons": 256
+  },
+  "configuration": {
+    "model": "Maykeye/TinyLLama-v0",
+    "revision": "298338802ab94432b917bcce11382aa151aee50f",
+    "tokenizer_revision": "298338802ab94432b917bcce11382aa151aee50f",
+    "runtime": {
+      "torch": "2.14.1+cpu",
+      "transformers": "5.19.0",
+      "petals": null,
+      "hivemind": null,
+      "numpy": "2.5.4",
+      "huggingface-hub": "2.2.0",
+      "grpcio": "1.84.0",
+      "protobuf": "7.36.2",
+      "safetensors": "0.8.0"
+    },
+    "python": "3.12.15",
+    "precision": "float32",
+    "attention": "eager",
+    "activation_compression": "NONE",
+    "workload": "public repeated fixture, greedy sampling, fixed output length; EOS ignored",
+    "arrival_policy": "closed-loop: at most concurrency active requests; no queued driver backlog",
+    "throughput_policy": "only complete requests counted; failed partial tokens reported separately",
+    "timing": "monotonic client wall time from RPC submission; includes admission; loading, tokenization and warm-up excluded",
+    "prompt_tokens": 128,
+    "new_tokens": 64,
+    "concurrency": 3,
+    "completion_target": 100,
+    "maximum_attempts": 200,
+    "repetitions": 3,
+    "inference_cpu_quota": 8,
+    "client_cpu_quota": 1,
+    "inference_memory_limit_bytes": 12884901888,
+    "client_memory_limit_bytes": 1073741824
+  },
+  "host_observations": {
+    "docker_logical_cpus": 24,
+    "docker_memory_bytes": 16299229184,
+    "docker_engine": "29.8.2",
+    "scope": "same laptop as M5; CPU only; energy and thermal state unmeasured"
+  },
+  "numerical_gates": [
+    {
+      "run_id": "m5-20261016T212532066Z-66bfda4d",
+      "report": "20261016T212557859964Z-fc46fedd-m5-service.json",
+      "sha256": "45457d1da88d6111cdcff318f76c6c76a0b3205e86cf5abc358145ea3f3abb18",
+      "comparisons": 144,
+      "max_absolute_error": 3.814697265625e-06,
+      "atol": 0.001,
+      "rtol": 0
+    },
+    {
+      "run_id": "m5-20261016T214719497Z-40eb40cb",
+      "report": "20261016T214745442035Z-a71ce52b-m5-service.json",
+      "sha256": "ac595b27e09b20e6208017b4f8c5a35962479a953d79569b9cb71e729852f217",
+      "comparisons": 144,
+      "max_absolute_error": 3.814697265625e-06,
+      "atol": 0.001,
+      "rtol": 0
+    },
+    {
+      "run_id": "matched-20261016T215146484Z-d822a13a",
+      "report": "gate.json",
+      "sha256": "68d07f26448286fe1d117346d91e26336d95e146d8a4f43359f01d4a29b56b09",
+      "comparisons": 256,
+      "max_absolute_error": 0.0,
+      "atol": 0.001,
+      "rtol": 0
+    }
+  ]
+}

@@ -5,6 +5,7 @@ Run: python -m lab.experiment_audit --output audit.json RUN_DIR [RUN_DIR ...]
 
 import argparse
 from collections import Counter, defaultdict
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -43,6 +44,26 @@ def _integer(value, name, minimum=0):
     if type(value) is not int or value < minimum:
         raise ValueError(f"{name} must be an integer >= {minimum}")
     return value
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _evidence_sha256(directory):
+    root = Path(directory)
+    digest = hashlib.sha256()
+    for path in sorted((item for item in root.rglob("*") if item.is_file()),
+                       key=lambda item: item.relative_to(root).as_posix()):
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(_file_sha256(path)))
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 def _number(value):
@@ -102,6 +123,33 @@ def _validate_plan(path):
     cases = plan.get("cases")
     if not isinstance(cases, list) or not cases:
         raise ValueError("plan.cases must be a non-empty list")
+    continuation = plan.get("continuation")
+    if continuation is not None:
+        if (not isinstance(continuation, dict)
+                or not isinstance(continuation.get("parent_run_id"), str)
+                or not isinstance(continuation.get("parent_plan_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", continuation["parent_plan_sha256"])
+                or not isinstance(continuation.get("parent_evidence_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", continuation["parent_evidence_sha256"])
+                or not isinstance(continuation.get("parent_runtime_image"), str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", continuation["parent_runtime_image"])
+                or not isinstance(plan.get("source_commit"), str)
+                or not isinstance(plan.get("compose_sha256"), str)):
+            raise ValueError("continuation plan lacks valid parent and compatibility references")
+        parent_dir = Path(continuation.get("parent_directory", "")).resolve()
+        parent_plan_path = parent_dir / "plan.json"
+        if (_file_sha256(parent_plan_path) != continuation["parent_plan_sha256"]
+                or _evidence_sha256(parent_dir) != continuation["parent_evidence_sha256"]):
+            raise ValueError("continuation parent evidence hashes do not match")
+        parent_plan = _read_json(parent_plan_path)
+        indices = continuation.get("unfinished_case_indices")
+        if (not isinstance(indices, list) or len(indices) != len(cases)
+                or any(type(index) is not int or index < 0 or index >= len(parent_plan.get("cases", []))
+                       for index in indices)
+                or len(set(indices)) != len(indices)):
+            raise ValueError("continuation unfinished-case references are invalid")
+        if any(case != parent_plan["cases"][index] for case, index in zip(cases, indices)):
+            raise ValueError("continuation cases differ from their referenced parent plan")
     seen = set()
     for index, case in enumerate(cases):
         if not isinstance(case, dict):
@@ -124,16 +172,24 @@ def _validate_plan(path):
         if key in seen:
             raise ValueError(f"duplicate planned configuration/repetition at case {index}")
         seen.add(key)
-    if plan["mode"] == "Smoke":
+    if plan["mode"] == "Smoke" and continuation is None:
         actual = {tuple(case[key] for key in CONFIG_FIELDS): case["requests"] for case in cases}
         if actual != SMOKE_CASES or any(case["repetition"] != 1 for case in cases):
             raise ValueError("Smoke plan must contain the six fixed cases and repetition 1")
-    else:
+    elif plan["mode"] == "Smoke":
+        if any(tuple(case[key] for key in CONFIG_FIELDS) not in SMOKE_CASES
+               or case["repetition"] != 1
+               or case["requests"] != SMOKE_CASES[tuple(case[key] for key in CONFIG_FIELDS)]
+               for case in cases):
+            raise ValueError("Smoke continuation contains a case outside the frozen six-case plan")
+    elif continuation is None:
         repetitions = defaultdict(set)
         for case in cases:
             repetitions[_config_key(_config(case))].add(case["repetition"])
         if any(values != {1, 2, 3} for values in repetitions.values()):
             raise ValueError("Full plan must include repetitions 1, 2, and 3 for every configuration")
+    elif any(case["repetition"] not in (1, 2, 3) for case in cases):
+        raise ValueError("Full continuation contains an invalid repetition")
     return plan
 
 
@@ -167,6 +223,10 @@ def _validate_benchmark(path):
         raise ValueError("request success flags disagree with summary.failed")
     if not isinstance(data.get("arguments"), dict):
         raise ValueError("benchmark.arguments must be an object")
+    args = data["arguments"]
+    requested = args.get("requests")
+    if type(requested) is not int or requested < 1:
+        raise ValueError("benchmark.arguments.requests must be a positive integer")
     metrics = {}
     for name in METRICS:
         value = summary.get(name)
@@ -281,6 +341,8 @@ def audit_run(directory):
         "image_identities": identities, "planned_cases": [], "benchmarks": [],
         "failure_count": 0, "error_code_counts": {},
         "reset_counts": {"verified": 0, "failed": 0, "missing": 0}})
+    if plan.get("continuation") is not None:
+        result["continuation"] = plan["continuation"]
     if aggregate is not None:
         result["aggregate_success"] = aggregate.get("success")
     records = []
@@ -301,6 +363,9 @@ def audit_run(directory):
                 data, metrics = _validate_benchmark(path)
                 observed_indices.add(index)
                 args = data.get("arguments", {})
+                request_limit_matches = args.get("requests") == case["requests"]
+                if not request_limit_matches:
+                    result["issues"].append(f"{path.name}: requested attempt limit disagrees with frozen plan")
                 actual = {"profile": None, "delay_ms": None, "rate_mbit": None,
                           "profile_applied": False,
                           "prompt_tokens": args.get("prompt_tokens"),
@@ -321,7 +386,8 @@ def audit_run(directory):
                     (actual["profile"] == "custom" and actual["delay_ms"] == case["delay_ms"]
                      and actual["rate_mbit"] == case["rate_mbit"]))
                 config_matches = (actual["profile_applied"] and profile_matches
-                                  and all(actual[key] == case[key] for key in CONFIG_FIELDS[1:]))
+                                  and all(actual[key] == case[key] for key in CONFIG_FIELDS[1:])
+                                  and request_limit_matches)
                 outcome["configuration_matches"] = config_matches
                 if not config_matches:
                     result["issues"].append(f"{path.name}: observed workload/network configuration disagrees with plan")
@@ -335,8 +401,20 @@ def audit_run(directory):
                     met = metrics["completed"] >= case["completion_target"]
                     outcome["completion_target_met"] = met
                     outcome["attempt_policy_met"] = metrics["attempted"] <= case["maximum_attempts"]
+                    policy = data.get("attempt_policy", {})
+                    if (policy.get("completion_target") != case["completion_target"]
+                            or policy.get("maximum_attempts") != case["maximum_attempts"]
+                            or metrics["attempted"] > case["maximum_attempts"]):
+                        outcome["attempt_policy_met"] = False
+                        result["issues"].append(f"{path.name}: attempt policy disagrees with frozen plan")
                 else:
-                    outcome["attempt_policy_met"] = metrics["attempted"] == case["requests"]
+                    policy = data.get("attempt_policy", {})
+                    outcome["attempt_policy_met"] = (
+                        policy.get("completion_target") is None
+                        and policy.get("maximum_attempts") == case["maximum_attempts"]
+                        and metrics["attempted"] == case["requests"])
+                    if not outcome["attempt_policy_met"]:
+                        result["issues"].append(f"{path.name}: smoke attempt policy disagrees with frozen plan")
                 outcome["reset_state"], outcome["reset_evidence"] = _reset_audit(
                     index, outcome_paths, reset_paths, aggregate_cases)
                 outcome["report"] = path.name
@@ -350,6 +428,13 @@ def audit_run(directory):
                           "report": path.name, **metrics,
                           "completion_target_met": outcome["completion_target_met"],
                           "reset_state": outcome["reset_state"]}
+                throughput = metrics["aggregate_output_tokens_per_second"]
+                output_tokens = sum(_integer(request.get("output_tokens", 0),
+                    "request.output_tokens") for request in data["requests"]
+                    if request["success"])
+                if throughput and output_tokens:
+                    # The runner defines throughput from monotonic benchmark wall time.
+                    record["observed_duration_seconds"] = output_tokens / throughput
                 if config_matches and repetition_matches:
                     records.append(record)
                 result["benchmarks"].append(record)

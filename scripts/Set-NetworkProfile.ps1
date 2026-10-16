@@ -20,7 +20,7 @@ Custom independent packet loss percentage, from 0 through 100. Default 0.
 .PARAMETER RateMbit
 Custom egress bandwidth cap, in Mbit/s. Zero means no configured cap. Default 0.
 .PARAMETER Services
-Selected worker-1, worker-2, worker-3, client or coordinator services.
+Selected worker, client, coordinator or complete-model replica services.
 Defaults to the three workers and the selected lab's relay.
 .PARAMETER ComposeFile
 Explicit Compose configuration. Defaults to the historical Petals lab.
@@ -62,7 +62,7 @@ param (
     [double]$RateMbit = 0,
 
     [ValidateCount(1, 4)]
-    [ValidateSet('worker-1', 'worker-2', 'worker-3', 'client', 'coordinator')]
+    [ValidateSet('worker-1', 'worker-2', 'worker-3', 'client', 'coordinator', 'replica-1', 'replica-2', 'replica-3', 'replica-4')]
     [string[]]$Services,
 
     [string]$ComposeFile,

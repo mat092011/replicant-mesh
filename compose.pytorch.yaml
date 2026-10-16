@@ -172,6 +172,51 @@ services:
       coordinator:
         condition: service_healthy
 
+  replica-1: &matched-replica
+    <<: *common
+    command: [python, -m, lab.matched_control, serve, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --host, "0.0.0.0:50053"]
+    mem_limit: 3g
+    cap_add: [NET_ADMIN]
+    stop_grace_period: 20s
+    volumes:
+      - pytorch-model-cache:/cache:ro
+      - pytorch-artifacts:/artifacts:ro
+      - ./.lab/pytorch-results:/results
+    networks: [workers]
+    healthcheck:
+      test: [CMD, python, -c, "import socket; s=socket.create_connection(('127.0.0.1',50053),2); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  replica-2:
+    <<: *matched-replica
+
+  replica-3:
+    <<: *matched-replica
+
+  replica-4:
+    <<: *matched-replica
+
+  matched-control-check:
+    <<: *common
+    command: [python, -m, lab.matched_control, check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --replicas, "replica-1:50053", "replica-2:50053", "replica-3:50053", "replica-4:50053", --output, /results/matched-control-check.json]
+    volumes:
+      - pytorch-model-cache:/cache:ro
+      - pytorch-artifacts:/artifacts:ro
+      - ./.lab/pytorch-results:/results
+    networks: [workers]
+    depends_on:
+      replica-1:
+        condition: service_healthy
+      replica-2:
+        condition: service_healthy
+      replica-3:
+        condition: service_healthy
+      replica-4:
+        condition: service_healthy
+
 networks:
   download: {}
   workers:

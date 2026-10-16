@@ -195,10 +195,25 @@ def generate_request(model, mode, prompt, new_tokens, request_id):
 def run_bench(args, report):
     validate_workload(args.prompt_tokens, args.new_tokens, args.concurrency, args.requests)
     target, maximum = validate_attempt_policy(args)
-    if getattr(args, "backend", None) == "pipeline" and args.mode == "pipeline":
+    if getattr(args, "backend", None) in {"pipeline", "matched"} and args.mode == "pipeline":
         import asyncio
         from lab.pipeline_benchmark import run_remote_bench
-        asyncio.run(run_remote_bench(args, report))
+        if args.backend == "matched":
+            from lab.matched_control import MatchedReplicaPool
+            from steamboat_runtime.remote_client import RemoteClient
+            endpoints = getattr(args, "replicas", None) or [
+                f"replica-{index}:50053" for index in range(1, 5)]
+            report.update(control="resource-matched complete-model replicas",
+                          routing="thin client selects least-loaded full-model replica, rotating ties",
+                          aggregate_inference_cpu_quota=8,
+                          topology_limit="four independent same-host replicas; coordinator RPC and pipeline relay work is not part of this control")
+            async def run_matched():
+                # grpc.aio channels belong to the running measurement loop.
+                clients = [RemoteClient(endpoint, private_network=True) for endpoint in endpoints]
+                await run_remote_bench(args, report, client=MatchedReplicaPool(clients))
+            asyncio.run(run_matched())
+        else:
+            asyncio.run(run_remote_bench(args, report))
         return
     model, tokenizer, loading = load_model(args.mode, **model_options(args))
     report["model_loading_seconds"] = loading
@@ -315,7 +330,7 @@ def run_check(args, report):
 
 def metadata(args):
     backend = getattr(args, "backend", "petals")
-    if backend in ("pytorch", "pipeline"):
+    if backend in ("pytorch", "pipeline", "matched"):
         from steamboat_runtime.manifest import MODEL_ID, MODEL_REVISION
         model, revision = MODEL_ID, MODEL_REVISION
     else:
@@ -387,7 +402,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["check", "bench"])
     parser.add_argument("--mode", choices=["local", "pipeline"], default="pipeline")
-    parser.add_argument("--backend", choices=["petals", "pytorch", "pipeline"], default="petals")
+    parser.add_argument("--backend", choices=["petals", "pytorch", "pipeline", "matched"], default="petals")
     parser.add_argument("--artifacts", default="/artifacts", help="verified PyTorch shard directory")
     parser.add_argument("--reference", help="pinned source snapshot for the PyTorch whole-model reference")
     parser.add_argument("--requests", type=int, default=10)
@@ -396,6 +411,7 @@ def main():
     parser.add_argument("--max-attempts", type=int,
                         help="attempt cap with --completion-target (default 200)")
     parser.add_argument("--coordinator", default="coordinator:50052")
+    parser.add_argument("--replicas", nargs=4, help="four matched complete-model replica endpoints")
     parser.add_argument("--timeout-seconds", type=float, default=300)
     parser.add_argument("--repetition", type=int, default=1)
     parser.add_argument("--run-order-index", type=int, default=0)
