@@ -31,6 +31,9 @@ M5 adds a standalone coordinator service, a thin benchmark client and measured
 Docker network simulation. Its lab gate passes; the full performance sweep remains
 incomplete. See the [network lab guide](docs/PYTORCH_LAB.md) and
 [M5 results](docs/experiments/2026-10-16-pytorch-m5.md).
+Follow-on tools [audit saved experiments](docs/PYTORCH_EXPERIMENT_ANALYSIS.md)
+and [prepare memory-capacity budgets](docs/PYTORCH_CAPACITY.md). They support the
+broader research plan without claiming a pooled-GPU demonstration.
 
 A CPU container lab now defines three Petals workers, a private discovery service,
 and a client on one laptop. It includes a complete-model reference, correctness

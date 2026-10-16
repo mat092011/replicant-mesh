@@ -23,6 +23,13 @@ Petals stays an optional baseline. The [M5 lab gate and selected measurements](e
 pass. The full performance sweep, separate devices and broader research gates
 remain incomplete.
 
+**Research tooling, 2026-10-16:** the [experiment auditor](PYTORCH_EXPERIMENT_ANALYSIS.md)
+checks saved run coverage, repetitions, failures and resets. The
+[capacity preparation tool](PYTORCH_CAPACITY.md) records local hardware observations
+and checks explicit component budgets without claiming execution fit. See the
+[tooling validation record](experiments/2026-10-16-research-tooling.md). Only this
+laptop is currently available; pooled-GPU and separate-device evidence remains pending.
+
 The first intended deployment uses invited GPU-equipped desktops and one fixed
 model. Device count, GPU types, available memory, and internet connections still
 need to be inventoried. CPU processes can establish correctness; hardware support
@@ -84,7 +91,7 @@ research gates below.
 | P1 | Reproducible complete-model reference | P0 | Petals smoke baseline and owned PyTorch full-logit reference validated; detailed timing/peak memory incomplete |
 | P2 | Correct fixed pipeline across processes and devices | P1 | PyTorch M4 concurrent remote parity, lifecycle and same-host compute-overlap traces passed; separate devices pending |
 | P3 | Measured LAN and WAN performance envelope | P2 | M5 network smoke and selected LAN repetitions measured; full sweeps and real links pending |
-| P4 | Demonstrated pooled-memory benefit | P3 | Pending |
+| P4 | Demonstrated pooled-memory benefit | P3 | Local inventory and explicit memory-fit planner implemented; GPU capacities, suitable model and demonstration pending |
 | P5 | Scheduling and recovery under changing availability | P4 | Pending |
 | P6 | Auditable reciprocal credits | P5 | Pending |
 | P7 | Evidence from an invited community pilot | P6 | Pending |

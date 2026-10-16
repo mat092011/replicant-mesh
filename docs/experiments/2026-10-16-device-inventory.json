@@ -1,0 +1,24 @@
+{
+  "basis": "host measurement snapshot; free capacity is time-sensitive",
+  "cpu": {
+    "logical_count": 24,
+    "name": "AMD Ryzen AI 9 HX 370 w/ Radeon 890M"
+  },
+  "gpu": {
+    "devices": [],
+    "reason": "nvidia-smi unavailable; GPU vendor and free VRAM not established",
+    "status": "unknown"
+  },
+  "memory": {
+    "available_bytes": 15799058432,
+    "source": "Windows CIM snapshot",
+    "total_bytes": 33413771264
+  },
+  "observed_at_utc": "2026-10-16T19:56:53.583991+00:00",
+  "schema_version": 1,
+  "system": {
+    "architecture": "AMD64",
+    "os": "Windows",
+    "os_release": "11"
+  }
+}
