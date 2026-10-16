@@ -14,8 +14,9 @@ records the top-level choices for intentional future updates. The build tool
 
 The Python `3.12.15-slim-bookworm` **linux/amd64 manifest digest** is
 `sha256:2ed6491b93cd49272ee6de2b5a38440c3448360322c089fc23e370722d74179d`.
-There are no mutable `apt` installs in this milestone's image. Network shaping
-tools belong to the later container-network milestone.
+M5 installs Debian's `iproute2` package for container-local `tc` shaping. The tested
+package version is captured in experiment evidence; this OS tooling layer uses
+the Debian package repository and is separate from the hash-locked Python stack.
 
 From the repository root:
 
@@ -30,10 +31,13 @@ modules are absent and the PyTorch build is CPU-only. Model equivalence tests
 are separate: this environment check cannot establish partition correctness.
 Weights are downloaded/prepared at runtime, not baked into the image.
 
-The M0–M4 Compose lab uses its own project, cache and artifact volumes. Run the
+The M0–M5 Compose lab uses its own project, cache and artifact volumes. Run the
 following services sequentially; `prepare` is the only one with internet access.
 Tests and comparisons mount the prepared weights read-only and run with
 `network_mode: none`, two CPUs and a 6 GiB memory limit per invocation.
+The separate worker/coordinator services use an internal network with no published
+ports. The thin benchmark mounts only its results directory. See the
+[M5 lab guide](../../docs/PYTORCH_LAB.md) for service budgets and network experiments.
 
 ```powershell
 docker compose -f compose.pytorch.yaml build prepare

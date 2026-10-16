@@ -107,6 +107,10 @@ accounting is bounded by 12,288 reserved positions and 16 MiB of KV tensors. The
 is one active compute call and a FIFO queue capped at eight calls. Only one step
 per session may be active or queued. The eight-session bound means at most seven
 other sessions can wait behind one running session in the normal configuration.
+Terminal session IDs remain protected by 30-second tombstones. The default hard
+limit is 4,096 total active sessions plus tombstones; once reached, admission fails
+until tombstones expire. This bounds retained replay metadata while allowing the
+100-request benchmark cohorts to complete without shortening the protection window.
 The event loop handles renewals, status and cancellation while a dedicated thread
 executes inference. A long prefill is not preemptible, so FIFO fairness applies at
 whole-stage-call boundaries.

@@ -16,6 +16,11 @@ RUN python /opt/steamboat/verify_environment.py
 WORKDIR /app
 
 FROM dependencies AS runtime
+# tc is used only inside explicitly selected lab network namespaces. Versions
+# are captured with each experiment; Python/model dependencies stay hash-locked.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
 COPY src /app/src
 COPY lab /app/lab
 COPY tests /app/tests

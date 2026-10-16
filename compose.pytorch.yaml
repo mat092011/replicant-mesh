@@ -1,5 +1,5 @@
-# M0-M4: partition/protocol tests, supervised workers and coordinator validation.
-# A standalone coordinator service and network-profile experiments follow in M5.
+# M0-M5: supervised workers/coordinator, private lab and offline validation.
+# Network shaping is confined to the four inference-service network namespaces.
 name: steamboat-pytorch-m1
 
 x-common: &common
@@ -52,6 +52,7 @@ services:
       STEAMBOAT_PROTOCOL_REPORT: ${STEAMBOAT_PROTOCOL_REPORT:-/results}
       STEAMBOAT_PROCESS_TESTS: "1"
       STEAMBOAT_COORDINATOR_TESTS: "1"
+      STEAMBOAT_SERVICE_TESTS: "1"
 
   benchmark:
     <<: *common
@@ -72,6 +73,7 @@ services:
     <<: *common
     command: [python, -m, steamboat_runtime.worker, serve, --artifacts, /artifacts, --worker, worker-1, --host, "0.0.0.0:50051", --private-network]
     mem_limit: 3g
+    cap_add: [NET_ADMIN]
     stop_grace_period: 20s
     volumes:
       - pytorch-artifacts:/artifacts:ro
@@ -125,6 +127,49 @@ services:
       worker-2:
         condition: service_healthy
       worker-3:
+        condition: service_healthy
+
+  coordinator:
+    <<: *common
+    command: [python, -m, steamboat_runtime.coordinator_service, serve, --artifacts, /artifacts, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --host, "0.0.0.0:50052", --private-network]
+    mem_limit: 3g
+    cap_add: [NET_ADMIN]
+    stop_grace_period: 40s
+    volumes:
+      - pytorch-artifacts:/artifacts:ro
+    networks: [workers]
+    depends_on:
+      worker-1:
+        condition: service_healthy
+      worker-2:
+        condition: service_healthy
+      worker-3:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -m, steamboat_runtime.coordinator_service, health, --target, "127.0.0.1:50052", --artifacts, /artifacts]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  pipeline-benchmark:
+    <<: *common
+    command: [python, -c, "import time; time.sleep(10**9)"]
+    cpus: 1.0
+    mem_limit: 1g
+    volumes:
+      - ./.lab/pytorch-results:/results
+    networks: [workers]
+    depends_on:
+      coordinator:
+        condition: service_healthy
+
+  service-check:
+    <<: *common
+    command: [python, -m, steamboat_runtime.service_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --coordinator, "coordinator:50052", --output, /results]
+    networks: [workers]
+    depends_on:
+      coordinator:
         condition: service_healthy
 
 networks:

@@ -7,7 +7,8 @@ one process. [M2 protocol/lifecycle](PYTORCH_PROTOCOL.md) is also implemented as
 separate worker handler and binary transport with lease expiry. The direct M1
 benchmark path described here remains sequential. Separate worker services and
 supervision are available in [M3](PYTORCH_WORKERS.md), with concurrent scheduling in
-[M4](PYTORCH_COORDINATOR.md). Network experiments for this backend remain M5 work.
+[M4](PYTORCH_COORDINATOR.md). [M5](PYTORCH_LAB.md) adds the standalone coordinator,
+thin remote benchmark and measured Docker network experiments.
 
 ## Run
 

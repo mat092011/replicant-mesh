@@ -27,7 +27,10 @@ across stages. Concurrent requests match the complete-model reference, and a tra
 verifies actual worker compute overlap on this laptop. See the
 [coordinator guide](docs/PYTORCH_COORDINATOR.md) and
 [M4 validation results](docs/experiments/2026-10-15-pytorch-m4.md).
-Network-performance experiments and the standalone coordinator service follow in M5.
+M5 adds a standalone coordinator service, a thin benchmark client and measured
+Docker network simulation. Its lab gate passes; the full performance sweep remains
+incomplete. See the [network lab guide](docs/PYTORCH_LAB.md) and
+[M5 results](docs/experiments/2026-10-16-pytorch-m5.md).
 
 A CPU container lab now defines three Petals workers, a private discovery service,
 and a client on one laptop. It includes a complete-model reference, correctness
@@ -42,10 +45,10 @@ Separate consumer GPUs, pooled-memory benefits, and credits remain future work.
 
 ## Run the local experiment
 
-Follow [the container lab guide](docs/LOCAL_LAB.md) for prerequisites, launch,
-correctness checks, benchmarks, and cleanup. The default checkpoint is the tiny
-real transformer `Maykeye/TinyLLama-v0`; the guide also describes an optional
-`bigscience/bloom-560m` configuration.
+Follow [the PyTorch network lab guide](docs/PYTORCH_LAB.md) for launch, correctness
+checks, benchmarks and network reset. The checkpoint is the tiny real transformer
+`Maykeye/TinyLLama-v0`. The historical [Petals lab guide](docs/LOCAL_LAB.md)
+also describes an optional `bigscience/bloom-560m` configuration.
 
 ## Project documents
 
@@ -57,6 +60,8 @@ real transformer `Maykeye/TinyLLama-v0`; the guide also describes an optional
   bounded queues, process supervision and remote numerical checks.
 - [PyTorch coordinator guide](docs/PYTORCH_COORDINATOR.md): admission, concurrent
   scheduling, streamed tokens, cancellation and compute-overlap evidence.
+- [PyTorch network lab guide](docs/PYTORCH_LAB.md): standalone coordinator,
+  remote benchmark, measured network profiles and reproducible experiments.
 - [PyTorch pipeline implementation plan](docs/PYTORCH_PIPELINE_PLAN.md): fixed
   workers, session protocol, coordinator scheduling, and reusable lab comparisons.
 - [Container lab guide](docs/LOCAL_LAB.md): setup, simulation commands, and limits.

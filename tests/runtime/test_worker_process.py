@@ -331,6 +331,43 @@ while True:
         self.assertTrue(any(fields.get("reason") == "compute_deadline_grace_exceeded"
                             for _, fields in events))
 
+    def test_shutdown_observes_cancellation_deadline_during_wedged_child(self):
+        from steamboat_runtime.supervisor import ProcessSupervisor
+        code = """
+import json, signal, time
+status = dict(ready=True, active_compute=True, compute_id='wedged',
+              compute_deadline=time.monotonic() + 30, terminate_deadline=None)
+stopping = False
+def terminate(*_):
+    global stopping
+    stopping = True
+    status['terminate_deadline'] = time.monotonic() + 0.25
+signal.signal(signal.SIGTERM, terminate)
+print(json.dumps(dict(event='ready', status=status)), flush=True)
+while True:
+    print(json.dumps(dict(event='heartbeat', status=status)), flush=True)
+    time.sleep(0.02)
+"""
+        events = []
+        stop = threading.Event()
+        supervisor = ProcessSupervisor([sys.executable, "-u", "-c", code],
+            shutdown_grace=0.25, child_shutdown_grace=5, restart_limit=0,
+            log=lambda event, **fields: events.append((event, fields)))
+        runner = threading.Thread(target=supervisor.run, args=(stop,))
+        runner.start()
+        deadline = time.monotonic() + 2
+        while supervisor.child is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        while not any(event == "worker_ready" for event, _ in events) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(any(event == "worker_ready" for event, _ in events))
+        stopped_at = time.monotonic()
+        stop.set()
+        runner.join(timeout=2)
+        self.assertFalse(runner.is_alive(), "supervisor exceeded the compute cancellation bound")
+        self.assertLess(time.monotonic() - stopped_at, 1.5)
+        self.assertIsNotNone(supervisor.child.poll())
+
     def test_startup_heartbeats_do_not_extend_the_readiness_deadline(self):
         from steamboat_runtime.supervisor import ProcessSupervisor
         code = """

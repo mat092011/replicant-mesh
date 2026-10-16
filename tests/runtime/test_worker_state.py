@@ -385,6 +385,30 @@ class WorkerStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stale.code, "INVALID_INPUT")
         self.assertEqual((await self.step("A")).code, "OK")
 
+    async def test_default_tombstone_capacity_supports_100_request_cohort(self):
+        # Benchmark cohorts close each request while their IDs remain protected
+        # for the full RPC replay window. That retention must not cap a cohort
+        # at the historical 64-record default.
+        self.assertEqual(self.handler.max_tombstones, 4096)
+        for index in range(100):
+            session_id = f"cohort-{index}"
+            opened = await self.open(session_id)
+            self.assertEqual(opened.code, "OK", session_id)
+            closed = await self.call("CloseSession", session_id)
+            self.assertEqual(closed.code, "OK", session_id)
+        status = await self.call("Describe")
+        self.assertEqual(status.active_sessions, 0)
+        self.assertEqual(status.tombstones, 100)
+        # Recent IDs stay protected for duplicate/delayed calls throughout the
+        # retention period, even after the cohort has completed.
+        duplicate = await self.call("OpenSession", "cohort-0", lease_token="",
+                                    max_positions=32, lifetime_ms=300000,
+                                    idle_lease_ms=120000)
+        self.assertEqual(duplicate.code, "CLOSED_SESSION")
+        self.assertEqual((await self.open("cohort-after-100")).code, "OK")
+        self.assertEqual((await self.call("CloseSession", "cohort-after-100")).code, "OK")
+        await self.assert_no_live_cache()
+
     async def test_busy_worker_and_duplicate_inflight_operation_fail_without_queueing(self):
         await self.open("A")
         await self.open("B")

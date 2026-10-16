@@ -108,10 +108,12 @@ cache references cleared. An execution failure after possible mutation invalidat
 that session; another session's prefix is preserved. Close/cancel are idempotent.
 
 Completed terminal sessions leave tombstones for 30 seconds, the maximum RPC
-lifetime. Default total active-plus-tombstone capacity is 64. Admission fails when
-that bound is reached; protected IDs are never evicted early to admit new work.
-After expiry an ID may be reused with a new lease, but callers should generate fresh
-IDs. Delayed Steps with the old lease cannot operate on the replacement session.
+lifetime. Default total active-plus-tombstone capacity is 4,096 records, enough for
+100-request benchmark cohorts while retaining replay protection. Admission fails
+when that hard bound is reached; protected IDs are never evicted early to admit new
+work. After expiry an ID may be reused with a new lease, but callers should generate
+fresh IDs. Delayed Steps with the old lease cannot operate on the replacement
+session. Tombstones retain only bounded session metadata, not caches or tensors.
 
 If a terminal operation still has not finished after the configured 15-second
 grace, readiness becomes false and `requires_restart=true`. Shutdown waits at most

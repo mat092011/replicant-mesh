@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 from typing import TYPE_CHECKING
+import uuid
 
 from lab.config import model_settings, percentile, read_peers, summarize_requests
 
@@ -152,7 +153,8 @@ def make_session(model, mode, max_length) -> "InferenceSession":
 
 
 def model_options(args):
-    return dict(backend=getattr(args, "backend", "petals"),
+    backend = getattr(args, "backend", "petals")
+    return dict(backend="pytorch" if backend == "pipeline" else backend,
                 artifacts=getattr(args, "artifacts", "/artifacts"),
                 reference=getattr(args, "reference", None))
 
@@ -192,6 +194,12 @@ def generate_request(model, mode, prompt, new_tokens, request_id):
 
 def run_bench(args, report):
     validate_workload(args.prompt_tokens, args.new_tokens, args.concurrency, args.requests)
+    target, maximum = validate_attempt_policy(args)
+    if getattr(args, "backend", None) == "pipeline" and args.mode == "pipeline":
+        import asyncio
+        from lab.pipeline_benchmark import run_remote_bench
+        asyncio.run(run_remote_bench(args, report))
+        return
     model, tokenizer, loading = load_model(args.mode, **model_options(args))
     report["model_loading_seconds"] = loading
     position_limit = getattr(model.config, "max_position_embeddings", MAX_SESSION_TOKENS)
@@ -204,19 +212,20 @@ def run_bench(args, report):
     if not warmup["success"]:
         raise RuntimeError(f"Warm-up failed: {warmup['error']}")
 
-    records, lock, next_id = [], threading.Lock(), 0
+    records, lock, next_id, completed = [], threading.Lock(), 0, 0
 
     def client_loop():
-        nonlocal next_id
+        nonlocal next_id, completed
         while True:
             with lock:
-                if next_id >= args.requests:
+                if next_id >= maximum or (target is not None and completed >= target):
                     return
                 request_id = next_id
                 next_id += 1
             record = generate_request(model, args.mode, prompt, args.new_tokens, request_id)
             with lock:
                 records.append(record)
+                completed += int(record["success"])
 
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
@@ -230,11 +239,18 @@ def run_bench(args, report):
         r["output_tokens"] for r in records if not r["success"]
     )
     report["success"] = all(r["success"] for r in records)
+    record_attempt_policy(report, target, maximum)
     if getattr(model, "runtime_backend", None) == "pytorch":
         report["runtime_diagnostics_after_close"] = model.diagnostics()
 
 
 def run_check(args, report):
+    if getattr(args, "backend", None) == "pipeline":
+        import asyncio
+        from steamboat_runtime.service_check import run_validation
+        asyncio.run(run_validation(args, report))
+        report["success"] = report.get("status") == "passed"
+        return
     import torch
 
     local, tokenizer, local_loading = load_model("local", **model_options(args))
@@ -299,7 +315,7 @@ def run_check(args, report):
 
 def metadata(args):
     backend = getattr(args, "backend", "petals")
-    if backend == "pytorch":
+    if backend in ("pytorch", "pipeline"):
         from steamboat_runtime.manifest import MODEL_ID, MODEL_REVISION
         model, revision = MODEL_ID, MODEL_REVISION
     else:
@@ -323,6 +339,8 @@ def metadata(args):
     routing = ("in-process serialized stages [0,3), [3,6), [6,8); no network transport"
                if backend == "pytorch" else
                "client relays activations between fixed stages; server-to-server push disabled")
+    if backend == "pipeline":
+        routing = "thin client streams from coordinator; coordinator relays activations across three fixed workers"
     if args.mode == "local" and args.command == "bench":
         routing = "complete-model local reference; no network transport"
     return {
@@ -343,14 +361,44 @@ def metadata(args):
     }
 
 
+def validate_attempt_policy(args):
+    """Fixed attempts remain the default; completion targets retain every failure."""
+    target = getattr(args, "completion_target", None)
+    maximum = getattr(args, "max_attempts", None)
+    if target is None:
+        if maximum is not None:
+            raise ValueError("--max-attempts requires --completion-target")
+        return None, args.requests
+    maximum = 200 if maximum is None else maximum
+    if type(target) is not int or type(maximum) is not int or not 1 <= target <= maximum:
+        raise ValueError("Completion target must be positive and no greater than max attempts")
+    return target, maximum
+
+
+def record_attempt_policy(report, target, maximum):
+    reached = target is None or report["summary"]["completed"] >= target
+    report["attempt_policy"] = {"completion_target": target, "maximum_attempts": maximum,
+                                "target_reached": reached,
+                                "stop_reason": "target_reached" if target is not None and reached else "attempt_limit"}
+    report["success"] = bool(report["success"] and reached)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["check", "bench"])
     parser.add_argument("--mode", choices=["local", "pipeline"], default="pipeline")
-    parser.add_argument("--backend", choices=["petals", "pytorch"], default="petals")
+    parser.add_argument("--backend", choices=["petals", "pytorch", "pipeline"], default="petals")
     parser.add_argument("--artifacts", default="/artifacts", help="verified PyTorch shard directory")
     parser.add_argument("--reference", help="pinned source snapshot for the PyTorch whole-model reference")
     parser.add_argument("--requests", type=int, default=10)
+    parser.add_argument("--completion-target", type=int,
+                        help="stop after at least this many completed requests, retaining failed attempts")
+    parser.add_argument("--max-attempts", type=int,
+                        help="attempt cap with --completion-target (default 200)")
+    parser.add_argument("--coordinator", default="coordinator:50052")
+    parser.add_argument("--timeout-seconds", type=float, default=300)
+    parser.add_argument("--repetition", type=int, default=1)
+    parser.add_argument("--run-order-index", type=int, default=0)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--prompt-tokens", type=int, default=128)
     parser.add_argument("--new-tokens", type=int, default=8)
@@ -364,11 +412,13 @@ def main():
             raise ValueError("atol must be finite and positive")
         (run_check if args.command == "check" else run_bench)(args, report)
     except Exception as error:
+        report["success"] = False
         report["error"] = f"{type(error).__name__}: {error}"
-    filename = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{args.command}-{args.mode}.json"
+    filename = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex[:8]}-{args.command}-{args.mode}.json"
     destination = Path(args.output) if args.output else Path("/results") / filename
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    with destination.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(report, indent=2, allow_nan=False) + "\n")
     print(json.dumps({"report": str(destination), "success": report["success"],
                       "summary": report.get("summary"), "error": report.get("error")}, indent=2))
     raise SystemExit(0 if report["success"] else 1)

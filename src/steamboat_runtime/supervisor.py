@@ -23,8 +23,10 @@ def emit_event(event, **fields):
 class ProcessSupervisor:
     def __init__(self, command, *, startup_timeout=60.0, heartbeat_timeout=2.0,
                  shutdown_grace=15.0, restart_limit=3, restart_window=60.0,
+                 child_shutdown_grace=None,
                  log=emit_event):
-        for value in (startup_timeout, heartbeat_timeout, shutdown_grace, restart_window):
+        child_shutdown_grace = shutdown_grace if child_shutdown_grace is None else child_shutdown_grace
+        for value in (startup_timeout, heartbeat_timeout, shutdown_grace, restart_window, child_shutdown_grace):
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError("Supervisor time budgets must be finite and positive")
         if type(restart_limit) is not int or restart_limit < 0:
@@ -34,6 +36,7 @@ class ProcessSupervisor:
         self.command = command
         self.startup_timeout, self.heartbeat_timeout = startup_timeout, heartbeat_timeout
         self.shutdown_grace = shutdown_grace
+        self.child_shutdown_grace = child_shutdown_grace
         self.restart_limit, self.restart_window = restart_limit, restart_window
         self.log = log
         self.child = None
@@ -79,17 +82,56 @@ class ProcessSupervisor:
         child.wait(timeout=2)
         self.log("worker_exit", pid=child.pid, exit_code=child.returncode, reason=reason)
 
-    def _shutdown(self):
+    def _shutdown(self, frames=None, compute_id=None, compute_deadline=None,
+                  terminate_deadline=None):
         child = self.child
         if child is None:
             return
         if child.poll() is None:
-            self.log("worker_shutdown", pid=child.pid, grace_seconds=self.shutdown_grace)
+            self.log("worker_shutdown", pid=child.pid, grace_seconds=self.child_shutdown_grace)
             child.terminate()
-            try:
-                child.wait(timeout=self.shutdown_grace)
-            except subprocess.TimeoutExpired:
-                pass
+            # The ordinary shutdown allowance can be longer than the compute
+            # cancellation allowance (the coordinator uses 40s vs 15s). Keep
+            # draining control frames while the child tears down so newly
+            # published deadlines can shorten the wait. A wedged event loop
+            # cannot publish again, so retain its last observed compute bound.
+            drain_deadline = time.monotonic() + self.child_shutdown_grace
+            while child.poll() is None:
+                now = time.monotonic()
+                compute_limit = None
+                if compute_deadline is not None:
+                    compute_limit = compute_deadline + self.shutdown_grace
+                if terminate_deadline is not None:
+                    compute_limit = (terminate_deadline if compute_limit is None
+                                     else min(compute_limit, terminate_deadline))
+                limit = drain_deadline if compute_limit is None else min(drain_deadline, compute_limit)
+                if now >= limit:
+                    break
+                try:
+                    frame = frames.get(timeout=min(0.05, limit - now)) if frames is not None else None
+                except queue.Empty:
+                    continue
+                if frame is None:
+                    continue
+                status = frame.get("status")
+                if frame.get("event") not in ("ready", "heartbeat") or not isinstance(status, dict):
+                    continue
+                if status.get("active_compute"):
+                    identity, deadline = status.get("compute_id"), status.get("compute_deadline")
+                    termination = status.get("terminate_deadline")
+                    if (not isinstance(identity, str) or not identity or len(identity) > 128
+                            or not isinstance(deadline, (int, float)) or not math.isfinite(deadline)
+                            or (termination is not None and (not isinstance(termination, (int, float))
+                                or not math.isfinite(termination)))):
+                        continue
+                    if compute_id != identity:
+                        compute_id, terminate_deadline = identity, None
+                    compute_deadline = deadline
+                    if termination is not None:
+                        terminate_deadline = (termination if terminate_deadline is None
+                                              else min(terminate_deadline, termination))
+                else:
+                    compute_id = compute_deadline = terminate_deadline = None
         self._kill_and_reap("shutdown")
 
     def run(self, stop=None):
@@ -179,7 +221,7 @@ class ProcessSupervisor:
                     else:
                         compute_id = compute_deadline = terminate_deadline = None
                 if stop.is_set():
-                    self._shutdown()
+                    self._shutdown(frames, compute_id, compute_deadline, terminate_deadline)
                     reader_stop.set()
                     reader.join(timeout=1)
                     return 0

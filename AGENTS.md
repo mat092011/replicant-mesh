@@ -19,14 +19,17 @@ limitations. The broader research phase gates remain incomplete.
 For the planned runtime replacement, also read
 [docs/PYTORCH_PIPELINE_PLAN.md](docs/PYTORCH_PIPELINE_PLAN.md). That plan adds an
 owned PyTorch execution path; Petals remains an optional comparison baseline.
-M0–M4 are implemented: see [docs/PYTORCH_RUNTIME.md](docs/PYTORCH_RUNTIME.md) for
+M0–M5 are implemented: see [docs/PYTORCH_RUNTIME.md](docs/PYTORCH_RUNTIME.md) for
 the verified setup, current limits and test commands.
 [docs/PYTORCH_PROTOCOL.md](docs/PYTORCH_PROTOCOL.md) describes the binary protocol
 and worker lifecycle. [docs/PYTORCH_WORKERS.md](docs/PYTORCH_WORKERS.md) runs three
 supervised worker containers with bounded queues and remote numerical validation.
 [docs/PYTORCH_COORDINATOR.md](docs/PYTORCH_COORDINATOR.md) adds bounded scheduling,
-streaming and verified same-host compute overlap. M5 network experiments remain
-pending; same-host container tests do not establish separate-device performance.
+streaming and verified same-host compute overlap. [docs/PYTORCH_LAB.md](docs/PYTORCH_LAB.md)
+adds the standalone service, thin benchmark and measured network simulation.
+The [M5 report](docs/experiments/2026-10-16-pytorch-m5.md) records the lab gate and
+selected measurements. The full performance sweep remains incomplete; same-host
+container tests do not establish separate-device performance.
 
 ## Technical principles
 

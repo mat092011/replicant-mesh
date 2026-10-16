@@ -95,7 +95,7 @@ class Operation:
 
 class WorkerHandler:
     def __init__(self, manifest, worker_name, executor, *, clock=time.monotonic,
-                 boot_id=None, max_tombstones=64, enable_queue=False, queue_capacity=None,
+                 boot_id=None, max_tombstones=4096, enable_queue=False, queue_capacity=None,
                  on_supervision=None):
         validate_manifest(manifest)
         if worker_name not in ("worker-1", "worker-2", "worker-3"):

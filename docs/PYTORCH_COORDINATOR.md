@@ -9,8 +9,8 @@ between stages through the existing binary protocol.
 The [M4 experiment](experiments/2026-10-15-pytorch-m4.md) passed 179 tests and
 144 remote logit comparisons, including verified compute overlap with eight
 concurrent requests. These results establish correctness and scheduling mechanics.
-M5 network sweeps, the thin remote benchmark client and performance comparisons
-remain separate work.
+The [M5 lab](PYTORCH_LAB.md) adds the standalone service, thin remote benchmark and
+network experiments. Their measurements remain separate from this M4 evidence.
 
 ## Scheduling and limits
 
@@ -74,8 +74,8 @@ vector. The default streamed result carries tokens and timing metadata.
 
 ## Python interface
 
-The coordinator is an asynchronous Python service object. It does not expose a
-public network listener in M4. The following example assumes the pinned artifacts
+The coordinator is an asynchronous Python service object. M5 wraps it in a
+private network listener. The following example assumes the pinned artifacts
 and tokenizer are already prepared, as in [PYTORCH_RUNTIME.md](PYTORCH_RUNTIME.md).
 
 ```python
@@ -104,8 +104,8 @@ The coordinator owns its clients and model and closes them on shutdown. Model
 operations run in one dedicated executor thread with at most eight accepted
 operations. Cancelling an await retains its slot until the underlying operation
 finishes. `close()` reports `False` if the model thread cannot drain within its
-15-second grace; it cannot kill a running CPU kernel. A standalone process
-supervisor for the coordinator is future service-deployment work.
+15-second grace; it cannot kill a running CPU kernel. M5's standalone service
+adds an independent process supervisor to enforce those deadlines.
 
 `CoordinatorClient.generate()` accepts text or token IDs and streams the same
 events. Explicitly close its async generator when abandoning it, for example with
