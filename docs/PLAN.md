@@ -58,6 +58,14 @@ repository, hosted CI and verified GitHub private reporting without email.
 The new correctness/smoke checks do not extend the performance envelope;
 all P0–P8 research statuses remain unchanged.
 
+**Participant-network planning, 2026-10-17:**
+[PARTICIPANT_NETWORK_PLAN.md](PARTICIPANT_NETWORK_PLAN.md) proposes the next
+connector and network work: consumer/host/orchestrator roles, secure admission,
+participant resource controls, real-device GPU experiments, measured placement,
+recovery, reciprocal credits and eventual federation. Its C0–C9 work packages
+map to the existing research gates; they are proposed work, not implementation
+or new experimental evidence. All P0–P8 statuses remain unchanged.
+
 ## Questions to answer
 
 1. Can partitioning preserve the model's computation and session state?
