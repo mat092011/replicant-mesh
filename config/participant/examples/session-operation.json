@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "kind": "session_operation",
+  "status": "synthetic_binding_fixture_not_authorization",
+  "control_protocol": 1,
+  "inference_protocol": 1,
+  "method": "Step",
+  "consumer": {
+    "account_id": "acct_00000000000000000000000000000001",
+    "device_id": "dev_00000000000000000000000000000001",
+    "boot_id": "00000000000000000000000000000001"
+  },
+  "coordinator": {
+    "account_id": "acct_00000000000000000000000000000001",
+    "device_id": "dev_00000000000000000000000000000001",
+    "boot_id": "00000000000000000000000000000008"
+  },
+  "worker": {
+    "account_id": "acct_00000000000000000000000000000001",
+    "device_id": "dev_00000000000000000000000000000001",
+    "boot_id": "00000000000000000000000000000002"
+  },
+  "credential_epoch": 1,
+  "request_id": "req_00000000000000000000000000000001",
+  "session_id": "ses_00000000000000000000000000000001",
+  "route_id": "route_00000000000000000000000000000001",
+  "route_epoch": 1,
+  "operation_id": "op_00000000000000000000000000000001",
+  "attempt": 1,
+  "component": "worker-1",
+  "compatibility_sha256": "f008f340c210e21e42c79119291871daaadce8fb6a0f8da03ffee3491afb1763",
+  "lease_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "payload_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "sequence": 0,
+  "position": 0,
+  "token_count": 128,
+  "reserved_context": 1152,
+  "remaining_request_ms": 300000,
+  "timeout_ms": 30000,
+  "binding_version": 1,
+  "assignment_id": "asg_00000000000000000000000000000001"
+}

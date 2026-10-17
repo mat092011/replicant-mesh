@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "kind": "normative_contract_boundaries",
+  "status": "contract_only_not_implementation_or_phase_acceptance",
+  "schema_dialect": "steamboat.closed-types.v1",
+  "role_permissions": {
+    "consumer": {
+      "operations": [
+        "submit_own_request",
+        "stream_own_tokens",
+        "cancel_own_request",
+        "inspect_own_status"
+      ],
+      "requires": [
+        "invited_account_device_credential",
+        "request_ownership",
+        "bounded_request"
+      ],
+      "execution_environment_required": false
+    },
+    "host": {
+      "operations": [
+        "Describe",
+        "OpenSession",
+        "Step",
+        "RenewSession",
+        "SessionStatus",
+        "CloseSession",
+        "CancelSession"
+      ],
+      "requires": [
+        "explicit_host_opt_in",
+        "verified_assigned_artifacts",
+        "fresh_registry_grant",
+        "authorized_coordinator_and_tenant",
+        "shared_local_reservation"
+      ],
+      "arbitrary_remote_code": false,
+      "grants_orchestration_authority": false
+    },
+    "personal_orchestrator": {
+      "operations": [
+        "tokenize",
+        "execute_embedding_norm_head_sampler",
+        "reserve_complete_fixed_route",
+        "sequence_own_account_requests",
+        "cleanup_all_stages"
+      ],
+      "requires": [
+        "separate_orchestrator_opt_in",
+        "coordinator_credential",
+        "worker_authorization",
+        "own_account_only",
+        "coordinator_component_reservation"
+      ],
+      "consumer_ingress": "admitted_mtls_same_account_fixed_endpoints",
+      "grants_ledger_authority": false
+    },
+    "community_operator": {
+      "supported_in_v1": false
+    },
+    "ledger": {
+      "supported_in_v1": false
+    },
+    "public_enrollment": {
+      "supported_in_v1": false
+    }
+  },
+  "trusted_services": {
+    "registry": "Invited account/device membership, role scopes, fixed cohort/endpoint/assignment authorization, expiring revocation snapshots. Advertisements are candidates, not correctness or capacity proof.",
+    "catalog": "Approved pinned model and tokenizer metadata and SHA256-verified assigned artifacts. No arbitrary peer URLs, remote code, pickle or operator dispatch. Prepared manifest verifies every artifact and source file before offline loading.",
+    "coordinator": "Trusted for tokenization, all input/output components, route reservation, request/session ownership, ordering and cleanup. Sees prompts, activations and tokens. Personal mode serves its owner only.",
+    "gateway": "C2b only: trusted encryption-terminating gateway can read and modify relayed traffic. Both legs require mTLS and registry-authorized original coordinator/device/role/route bindings. It is not opaque end-to-end encryption and does not gain arbitrary host execution permission.",
+    "worker_owner": "Can inspect or alter owned computation. TLS and activation transport do not hide prompts from operators or prove honest computation.",
+    "local_daemon": "Trusted local process supervisor and sole shared reservation authority; AF_UNIX same-UID plus per-daemon-boot token owner management, at most four local connections, no TCP management, browser bridge, shell or Docker socket exposed to peers. Credentials protected by local OS, no secrets/prompts in logs. No implementation is supplied in C0."
+  },
+  "identity_semantics": {
+    "encoding": "Case-sensitive type-prefixed 128-bit lowercase hex identifiers: acct_, dev_, req_, ses_, route_, op_, asg_ followed by exactly 32 lowercase hex digits. Process boot IDs instead use exactly 32 raw lowercase hex digits, matching existing worker encoding. Generate randomly, not from user text. Synthetic examples are not enrollment credentials.",
+    "account_id": "Stable invited tenant/owner; never derived solely from a network address or caller-supplied claim.",
+    "device_id": "Stable enrolled installation bound by registry to account and device key/certificate. Reinstall/removal requires enrollment; a boot is not a new device.",
+    "boot_id": "Fresh and distinct per daemon, coordinator and worker process incarnation, even on one device. Personal coordinator account/device matches the local owner, never its daemon boot. A future authenticated boot handshake binds the process to the device key and credential epoch. Restart invalidates all old leases/results.",
+    "assignment_id": "An asg_ identity names one fixed stage assignment. Each stage has a distinct assignment_id and binding_version 1; synthetic session-operation bindings must match both fields of their selected stage.",
+    "request_id": "Fresh logical consumer request, bound to owner account/device and coordinator. Retries/recovery are not supported by v1.",
+    "session_id": "Fresh cache reservation, bound to request, consumer, coordinator, worker boot, route/epoch, compatibility digest, credential epoch and unguessable worker-issued lease. ID knowledge alone is not access.",
+    "route_id": "Fresh immutable exact ordered fixed cohort assignment; route epoch is 1. No migration or live route replacement; changed placement requires a new request and route identity.",
+    "operation_id": "Fresh RPC correlation identity bound to method, all session bindings, sequence, absolute position, context, timeout and payload digest. Replies must echo it; no unsolicited/stale result is accepted.",
+    "digests": "SHA256 of canonical sorted-key compact ASCII JSON for compatibility/config snapshots. Lease/payload hashes in the synthetic fixture describe identity, not actual bearer credentials or tensor bytes. Inference wire remains existing version 1; control version 1 and binding_version 1 are separate discriminators, not modifications of worker.proto. SessionOperation is not the actual flat steamboat-binding-bin metadata envelope."
+  },
+  "authorization_lifecycle": {
+    "admission": "Every non-discovery operation requires authenticated peer identity and explicit registry-issued account/device/role/coordinator/component scope. Describe is authenticated and bounded, never anonymous discovery. A valid certificate alone is not permission. Partial route admission cleans known reservations and lets unknown opens expire.",
+    "rotation": "Stop new admissions, drain old-epoch sessions within drain_ms (or invalidate them at the bound), then install new credential epoch. No simultaneous live old/new binding reinterpretation; no rewriting existing leases, boot IDs, routes or hard deadlines. Expiry during drain invalidates immediately.",
+    "credentials": "TLS minimum 1.2. credential_lifetime_ms is at most 900000 and exceeds credential_renew_before_ms, fixed at 300000. authorization_snapshot_lifetime_ms is at most 300000, authorization_refresh_ms at most 30000 and authorization_expiry_check_ms at most 5000. Refresh plus expiry-check interval must precede snapshot expiry; connection lifetime cannot exceed credential lifetime. These are declarations, not certificate or revocation checks.",
+    "revocation": "On known account/device/key/role revocation, stop admission, invalidate affected sessions immediately, discard queued/in-flight outputs and cleanup. Retain memory until compute finishes or supervised process death is confirmed. Authority loss never extends authorization_snapshot_lifetime_ms; authorization_expiry_check_ms bounds expiry detection. No indefinite offline grace.",
+    "disconnect": "Fail affected requests after ambiguous mutation, cancel known sessions, expire unknown opens. Reconnect is bounded connection establishment only, never replay of Step, migration, resume or transparent coordinator failover.",
+    "sequence": "Open begins at sequence/position zero; Step must match next committed sequence and absolute position, one mutator per session. Remaining deadline is local monotonic duration clipped to original request/session limit; renewals cannot extend hard lifetime. Stateless C0 checks do not enforce live sequence or revocation state.",
+    "stop": "Drain rejects new work and ends by drain_ms. Stop invalidates immediately and supervised compute gets at most stop_grace_ms; no release on cancellation acknowledgement alone. Removal stops, revokes, confirms revocation, then optionally deletes only installation-owned artifacts. Local stop remains responsive without registry access."
+  },
+  "resource_semantics": {
+    "scope": "One local atomic ledger across hosts, consumer, daemon, personal coordinator, validation reference, gateway if local, and every competing coordinator. A pool is physical RAM, never a process/container alias. V1 rejects GPU/unified memory claims; no double counting shared pools.",
+    "reservation_equation": "sum(weights_bytes + kv_bytes + temporary_bytes + communication_bytes + runtime_bytes + startup_extra_bytes) over all reservations in pool <= min(ceiling_bytes, free_before_start_bytes - owner_margin_bytes); ceiling_bytes + owner_margin_bytes <= capacity_bytes. Missing free telemetry permits contract declaration only and rejects runtime execution.",
+    "startup": "startup_extra_bytes is additional peak, summed conservatively for simultaneous starts, not an alternative to steady-state allocations. Admission budgeting is not proof of execution fit or OS hard enforcement.",
+    "kv_equation": "2 * owned_layers * 64 * 4 * runtime_context * active_sessions; worker cache positions and bytes must separately cover all admitted sessions. Dense uncompressed batch-one CPU cache; allocator/temporary/loading state is separate.",
+    "weights": "Learned float32 weights: coordinator 16384256, workers 787968/787968/525312, complete reference 18485504 bytes. Tiny checkpoint input/output are untied. No shared storage across processes is assumed; separately account duplicate copies. Offline manifest also validates omitted legacy rotary buffers.",
+    "buffers": "For each local role, conservative minimum communication_bytes = (2*(stage_queue+1) + connections_total + pending_handshakes)*message_bytes + control_queue_bytes + gateway_queue_bytes + output_queue_tokens*active_sessions*token_event_bytes + logit_message_bytes. Coordinator additionally reserves active_sessions*(output_queue_tokens+2)*logit_message_bytes for worst-case captured output. Full wire envelope reserved per connection/handshake; over-counting across roles is deliberate, not extra capacity.",
+    "transport": "Total TLS connections_total <=16 includes established and pending handshakes; connections_per_peer <=2, pending_handshakes <=4, handshake_timeout_ms <=5000. Three stage channels, control_streams, gateway_streams, client_tls_channels and pending_handshakes must fit this total. client_streams <= client_tls_channels*streams_per_connection. At most four AF_UNIX management connections have a separate allocation. Descriptor accounting conservatively budgets extra handshake overhead. These are future enforcement ceilings, not implementation evidence.",
+    "logits": "Only last-position float32 JSON logits are declared on wire: logit_message_bytes >= vocabulary_size*32 +4096, token_event_bytes=4096, and the complete logit message remains <=1 MiB. Full 1152 x32000 all-prefill logits are local-reference data, never a supported wire message. No all-prefill wire collection is implemented or authorized by C0.",
+    "policy": "CPU quota is aggregate millicores, not dedicated cores. Disk includes artifacts, full download staging and bounded retained logs. Bandwidth bytes/s and rolling-day traffic apply across all roles; gateway lifetime bytes consume the same allowance. No hard GPU, thermal or battery control is claimed. FIFO is only at nonpreemptible stage-call boundaries; owner share does not preempt or starve accepted external work."
+  },
+  "evidence_boundary": {
+    "local_C0": "Schemas, declared cross-field invariants, negative fixtures, tests and reviewed role/trust/policy decision only. No phase is passed by this file or a valid declaration.",
+    "awaiting_hardware": "Null commit/image/config/freeze fields, empty actual inventory and named open dependencies. Responsible roles are not confirmation of an available device, owner or operating budget.",
+    "before_trials": "Freeze actual physical host inventory, Linux/CPU/runtime/image/source/artifact/model/tokenizer/route/resource policy hashes, responsible people, fault/workload/numerical criteria and monotonic timing before collecting results. execution_device_ids must map to at least two inventoried physical hosts and exactly match the coordinator/worker route in cross-binding checks. An unused second inventory record cannot establish a remote route. Hashes attest declared provenance, not truth; review actual artifacts and observations.",
+    "checks": "Record exact commands, exits, failures and skips with sanitized report hashes. Templates are not executed reports. Schema checks cannot establish mTLS, numerical parity, multi-device performance, pooled capacity, GPU support or credits. Preserve existing M0-M5 and Petals controls separately."
+  }
+}

@@ -67,8 +67,12 @@ map to the existing research gates; they are proposed work, not implementation
 or new experimental evidence. The derived
 [multiphase execution plan](PARTICIPANT_NETWORK_PHASES.md) adds task checklists,
 local versus real-device sub-gates, dependencies, deliverables and evidence
-requirements for C0–C9; all connector phases remain planned. All P0–P8 statuses
-remain unchanged.
+requirements for C0–C9. The [C0 contract gate](experiments/2026-10-17-participant-c0.md)
+passed after reviewed identity/permission/resource/failure contracts, closed-type
+configuration validation, rebuilt Docker checks and the unchanged CPU controls.
+C1–C9 remain planned; local C1a/C2a and CPU C4a work may proceed independently of
+missing external hardware. C0 implements declarations, not authentication or a
+connector. All P0–P8 statuses remain unchanged.
 
 ## Questions to answer
 

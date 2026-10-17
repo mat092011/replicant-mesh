@@ -18,10 +18,12 @@ WORKDIR /app
 FROM dependencies AS runtime
 # tc is used only inside explicitly selected lab network namespaces. Versions
 # are captured with each experiment; Python/model dependencies stay hash-locked.
+COPY docker/pytorch/requirements.lock /app/docker/pytorch/requirements.lock
 RUN apt-get update \
     && apt-get install -y --no-install-recommends iproute2 \
     && rm -rf /var/lib/apt/lists/*
 COPY src /app/src
+COPY config/participant /app/config/participant
 COPY lab /app/lab
 COPY tests /app/tests
 COPY scripts /app/scripts

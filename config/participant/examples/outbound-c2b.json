@@ -1,0 +1,358 @@
+{
+  "schema_version": 1,
+  "kind": "participant",
+  "status": "contract_only",
+  "public_enrollment": false,
+  "credits": false,
+  "fixture_data": "public_synthetic",
+  "identity": {
+    "account_id": "acct_00000000000000000000000000000001",
+    "device_id": "dev_00000000000000000000000000000001",
+    "boot_id": "00000000000000000000000000000001"
+  },
+  "roles": {
+    "consumer": true,
+    "host": true,
+    "orchestrator": "personal",
+    "community_operator": false,
+    "public_rewards_authority": false
+  },
+  "compatibility": {
+    "control_protocol": 1,
+    "inference_protocol": 1,
+    "os": "linux",
+    "architecture": "amd64",
+    "device": "cpu",
+    "python": "3.12.15",
+    "torch": "2.14.1+cpu",
+    "transformers": "5.19.0",
+    "grpcio": "1.84.0",
+    "protobuf": "7.36.2",
+    "runtime_lock": "docker/pytorch/requirements.lock",
+    "runtime_lock_sha256": "ec074730911798d0d08bd56fcd24f00db53d14dbe13e2be4e031150a52b82be3",
+    "model_id": "Maykeye/TinyLLama-v0",
+    "model_revision": "298338802ab94432b917bcce11382aa151aee50f",
+    "tokenizer_revision": "298338802ab94432b917bcce11382aa151aee50f",
+    "source_weights_sha256": "c302246d91e2854ff350e52a79938a818c203186c2f0671213ce372a0289cd91",
+    "tokenizer_model_sha256": "ab1b681ec7fc02fed5edd3026687d7a692a918c4dd8e150ca2e3994a6229843b",
+    "artifact_manifest_sha256": null,
+    "dtype": "float32",
+    "attention": "eager",
+    "compression": "none",
+    "batch_size": 1,
+    "hidden_size": 64,
+    "vocabulary_size": 32000,
+    "layers": 8,
+    "model_context": 2048,
+    "runtime_context": 1152,
+    "layout": "batch_sequence_hidden",
+    "wire_dtype": "float32_le",
+    "tied_input_output_weights": false,
+    "prefill": "unchunked_nonpreemptible"
+  },
+  "security": {
+    "profile": "outbound_gateway_mtls",
+    "tls_minimum": "1.2",
+    "peer_authentication": "mutual_certificate",
+    "trust_root_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "registry": {
+      "dns_name": "registry.example.invalid",
+      "port": 50051,
+      "identity": {
+        "account_id": "acct_00000000000000000000000000000001",
+        "device_id": "dev_00000000000000000000000000000002",
+        "boot_id": "00000000000000000000000000000005"
+      },
+      "certificate_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "catalog": {
+      "dns_name": "catalog.example.invalid",
+      "port": 50051,
+      "identity": {
+        "account_id": "acct_00000000000000000000000000000001",
+        "device_id": "dev_00000000000000000000000000000003",
+        "boot_id": "00000000000000000000000000000006"
+      },
+      "certificate_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "gateway": {
+      "dns_name": "gateway.example.invalid",
+      "port": 50051,
+      "identity": {
+        "account_id": "acct_00000000000000000000000000000001",
+        "device_id": "dev_00000000000000000000000000000004",
+        "boot_id": "00000000000000000000000000000007"
+      },
+      "certificate_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "gateway_trust": "trusted_terminates_plaintext",
+    "credential_lifetime_ms": 900000,
+    "credential_epoch": 1,
+    "stale_authority": "reject_admission_invalidate_sessions",
+    "rotation": "drain_old_bindings_new_sessions_new_epoch",
+    "revocation": "invalidate_discard_inflight_cleanup",
+    "session_access": "authenticated_binding_and_lease_not_id_alone",
+    "endpoint_policy": "fixed_allowlist_no_peer_supplied_probes",
+    "management": "af_unix_same_uid_and_boot_token_owner_only_no_tcp",
+    "private_network_flag_authorizes": false,
+    "prompts_private_from_operators": false,
+    "credential_renew_before_ms": 300000,
+    "authorization_snapshot_lifetime_ms": 300000,
+    "authorization_refresh_ms": 30000,
+    "authorization_expiry_check_ms": 5000
+  },
+  "route": {
+    "route_id": "route_00000000000000000000000000000001",
+    "epoch": 1,
+    "coordinator": {
+      "dns_name": "coordinator.example.invalid",
+      "port": 50051,
+      "identity": {
+        "account_id": "acct_00000000000000000000000000000001",
+        "device_id": "dev_00000000000000000000000000000001",
+        "boot_id": "00000000000000000000000000000008"
+      },
+      "certificate_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    },
+    "placement": "fixed_three_stages_coordinator_relayed",
+    "component_owner": "coordinator_tokenizer_embedding_norm_head_sampler",
+    "stages": [
+      {
+        "component": "worker-1",
+        "owner": {
+          "dns_name": "worker-1.example.invalid",
+          "port": 50051,
+          "identity": {
+            "account_id": "acct_00000000000000000000000000000001",
+            "device_id": "dev_00000000000000000000000000000001",
+            "boot_id": "00000000000000000000000000000002"
+          },
+          "certificate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "layer_start": 0,
+        "layer_stop": 3,
+        "binding_version": 1,
+        "assignment_id": "asg_00000000000000000000000000000001"
+      },
+      {
+        "component": "worker-2",
+        "owner": {
+          "dns_name": "worker-2.example.invalid",
+          "port": 50051,
+          "identity": {
+            "account_id": "acct_00000000000000000000000000000001",
+            "device_id": "dev_00000000000000000000000000000001",
+            "boot_id": "00000000000000000000000000000003"
+          },
+          "certificate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "layer_start": 3,
+        "layer_stop": 6,
+        "binding_version": 1,
+        "assignment_id": "asg_00000000000000000000000000000002"
+      },
+      {
+        "component": "worker-3",
+        "owner": {
+          "dns_name": "worker-3.example.invalid",
+          "port": 50051,
+          "identity": {
+            "account_id": "acct_00000000000000000000000000000001",
+            "device_id": "dev_00000000000000000000000000000001",
+            "boot_id": "00000000000000000000000000000004"
+          },
+          "certificate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "layer_start": 6,
+        "layer_stop": 8,
+        "binding_version": 1,
+        "assignment_id": "asg_00000000000000000000000000000003"
+      }
+    ]
+  },
+  "limits": {
+    "connections_total": 16,
+    "connections_per_peer": 2,
+    "pending_handshakes": 4,
+    "streams_per_connection": 40,
+    "connect_timeout_ms": 5000,
+    "handshake_timeout_ms": 5000,
+    "connection_lifetime_ms": 900000,
+    "connection_idle_ms": 120000,
+    "connect_attempts": 3,
+    "reconnect_backoff_ms": 1000,
+    "control_streams": 4,
+    "management_connections": 4,
+    "gateway_streams": 1,
+    "gateway_queue_messages": 8,
+    "gateway_queue_bytes": 8388608,
+    "gateway_stall_ms": 30000,
+    "gateway_bytes_per_lifetime": 1073741824,
+    "control_queue_messages": 8,
+    "control_queue_bytes": 524288,
+    "active_sessions": 8,
+    "compute_calls_per_worker": 1,
+    "stage_queue": 8,
+    "waiting_admissions": 32,
+    "client_streams": 40,
+    "output_queue_tokens": 16,
+    "tenant_active_sessions": 8,
+    "tenant_waiting_admissions": 32,
+    "owner_reserved_sessions": 0,
+    "file_descriptors": 256,
+    "message_bytes": 1048576,
+    "control_message_bytes": 65536,
+    "generate_request_bytes": 32768,
+    "tokenize_request_bytes": 524288,
+    "text_bytes": 65536,
+    "activation_bytes": 294912,
+    "logit_message_bytes": 1048576,
+    "token_event_bytes": 4096,
+    "diagnostic_bytes": 4096,
+    "admission_ms": 30000,
+    "request_ms": 300000,
+    "rpc_ms": 30000,
+    "idle_lease_ms": 120000,
+    "lease_check_ms": 5000,
+    "renew_ms": 30000,
+    "output_stall_ms": 30000,
+    "compute_cancel_grace_ms": 15000,
+    "cleanup_ms": 20000,
+    "shutdown_ms": 40000,
+    "tombstone_ms": 30000,
+    "session_records": 4096,
+    "trace_events": 8192,
+    "cache_positions_per_worker": 12288,
+    "cache_bytes_per_worker": 16777216,
+    "mutation_attempts": 1,
+    "client_tls_channels": 1
+  },
+  "policy": {
+    "reservation_authority": "one_atomic_ledger_per_physical_pool_all_roles_coordinators",
+    "reservation_release": "after_compute_finished_or_process_death_confirmed",
+    "capacity_claim": "budget_not_execution_fit",
+    "unknown_telemetry": "unavailable_reject_execution",
+    "enforcement": "unimplemented_contract_only",
+    "scheduler": "fifo_stage_boundaries_no_prefill_preemption",
+    "drain_ms": 300000,
+    "stop_grace_ms": 15000,
+    "remove": "stop_revoke_confirm_then_optional_owned_artifact_delete",
+    "unsupported_platform": "reject_no_fallback",
+    "ambiguous_mutation": "fail_request_cancel_known_expire_unknown_no_retry",
+    "cpu_quota_millicores": 8000,
+    "torch_threads": 2,
+    "disk_ceiling_bytes": 1073741824,
+    "artifact_bytes": 134217728,
+    "download_staging_bytes": 134217728,
+    "logs_bytes": 16777216,
+    "log_retention_ms": 86400000,
+    "download_timeout_ms": 300000,
+    "download_attempts": 3,
+    "bandwidth_bytes_per_second": 10485760,
+    "traffic_bytes_per_day": 10737418240,
+    "traffic_window_ms": 86400000,
+    "prompt_logging": false,
+    "secret_logging": false,
+    "artifact_loading": "approved_catalog_sha256_verified_readonly_offline_no_remote_code",
+    "readiness": "verified_weights_healthy_executor_reserved_capacity_fresh_authority",
+    "battery_temperature": "unavailable_no_hard_limit_claim"
+  },
+  "pools": [
+    {
+      "pool_id": "local_ram",
+      "device_id": "dev_00000000000000000000000000000001",
+      "kind": "physical_ram",
+      "capacity_bytes": 34359738368,
+      "owner_margin_bytes": 8589934592,
+      "ceiling_bytes": 25769803776,
+      "free_before_start_bytes": 34359738368,
+      "observation": "synthetic"
+    }
+  ],
+  "reservations": [
+    {
+      "reservation_id": "daemon_reservation",
+      "pool_id": "local_ram",
+      "role": "daemon",
+      "component": "daemon",
+      "weights_bytes": 0,
+      "kv_bytes": 0,
+      "temporary_bytes": 33554432,
+      "communication_bytes": 67108864,
+      "runtime_bytes": 134217728,
+      "startup_extra_bytes": 33554432
+    },
+    {
+      "reservation_id": "consumer_reservation",
+      "pool_id": "local_ram",
+      "role": "consumer",
+      "component": "consumer",
+      "weights_bytes": 0,
+      "kv_bytes": 0,
+      "temporary_bytes": 33554432,
+      "communication_bytes": 67108864,
+      "runtime_bytes": 134217728,
+      "startup_extra_bytes": 33554432
+    },
+    {
+      "reservation_id": "coordinator_reservation",
+      "pool_id": "local_ram",
+      "role": "orchestrator",
+      "component": "coordinator",
+      "weights_bytes": 16384256,
+      "kv_bytes": 0,
+      "temporary_bytes": 33554432,
+      "communication_bytes": 268435456,
+      "runtime_bytes": 134217728,
+      "startup_extra_bytes": 33554432
+    },
+    {
+      "reservation_id": "worker_1_reservation",
+      "pool_id": "local_ram",
+      "role": "host",
+      "component": "worker-1",
+      "weights_bytes": 787968,
+      "kv_bytes": 16777216,
+      "temporary_bytes": 33554432,
+      "communication_bytes": 67108864,
+      "runtime_bytes": 134217728,
+      "startup_extra_bytes": 33554432
+    },
+    {
+      "reservation_id": "worker_2_reservation",
+      "pool_id": "local_ram",
+      "role": "host",
+      "component": "worker-2",
+      "weights_bytes": 787968,
+      "kv_bytes": 16777216,
+      "temporary_bytes": 33554432,
+      "communication_bytes": 67108864,
+      "runtime_bytes": 134217728,
+      "startup_extra_bytes": 33554432
+    },
+    {
+      "reservation_id": "worker_3_reservation",
+      "pool_id": "local_ram",
+      "role": "host",
+      "component": "worker-3",
+      "weights_bytes": 525312,
+      "kv_bytes": 16777216,
+      "temporary_bytes": 33554432,
+      "communication_bytes": 67108864,
+      "runtime_bytes": 134217728,
+      "startup_extra_bytes": 33554432
+    },
+    {
+      "reservation_id": "reference_reservation",
+      "pool_id": "local_ram",
+      "role": "reference",
+      "component": "reference",
+      "weights_bytes": 18485504,
+      "kv_bytes": 41943040,
+      "temporary_bytes": 33554432,
+      "communication_bytes": 67108864,
+      "runtime_bytes": 134217728,
+      "startup_extra_bytes": 33554432
+    }
+  ]
+}

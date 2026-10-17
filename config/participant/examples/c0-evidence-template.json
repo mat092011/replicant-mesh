@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "kind": "evidence",
+  "gate": "C0",
+  "status": "template_not_executed",
+  "scope": "contract_validation_only",
+  "source_commit": null,
+  "reviewer_account_id": null,
+  "checks": [
+    {
+      "check_id": "contract_suite",
+      "command": "python -B scripts/check_participant_contracts.py",
+      "outcome": "not_run",
+      "exit_code": null,
+      "reason": "Template only; replace with exact executed command and sanitized output hash.",
+      "sanitized_report_sha256": null
+    }
+  ],
+  "limitations": [
+    "No network or security enforcement is implemented by contract validation.",
+    "No actual hardware has been frozen; no remote or GPU trial has run.",
+    "Passing configuration arithmetic does not establish execution fit or phase completion."
+  ],
+  "network_implemented": false,
+  "security_implemented": false,
+  "hardware_trials_executed": false,
+  "phase_passed": false,
+  "public_enrollment": false,
+  "credits": false
+}

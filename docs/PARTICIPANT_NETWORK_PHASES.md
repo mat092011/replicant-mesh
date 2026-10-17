@@ -1,7 +1,9 @@
 # Multiphase execution plan: participant network
 
 Prepared 2026-10-17 from [PARTICIPANT_NETWORK_PLAN.md](PARTICIPANT_NETWORK_PLAN.md).
-**All phases below are planned; none is completed by writing this document.**
+**C0 passed on 2026-10-17; C1–C9 remain planned.** See the
+[C0 validation record](experiments/2026-10-17-participant-c0.md). Writing a plan
+does not complete its implementation or evidence gates.
 Only the current laptop is available. Hardware, operators and dates for later
 work remain unconfirmed.
 
@@ -21,7 +23,7 @@ bounded subset of compatible machines.
 
 ## Phase overview
 
-Every phase is **Planned**. The hardware column describes an exit requirement,
+C0 is **Passed**; C1–C9 are **Planned**. The hardware column describes an exit requirement,
 not a reason to stop independent preparation. Responsibility labels are proposed
 roles, not assigned people or staffing commitments.
 
@@ -88,20 +90,20 @@ architecture plan; do not treat existing design prose as an approved contract.
 
 **Tasks**
 
-- [ ] **C0.1** Record an architecture decision for consumer, host and orchestrator
+- [x] **C0.1** Record an architecture decision for consumer, host and orchestrator
   permissions; trusted registry/coordinator/catalog boundaries; and personal
   versus community operator mode. Keep public enrollment and credits out of the
   first runtime slice.
-- [ ] **C0.2** Specify account, device, boot, request, session, route and operation
+- [x] **C0.2** Specify account, device, boot, request, session, route and operation
   identities; model/runtime/placement compatibility; credential rotation and
   revocation; and a versioned control/inference protocol boundary.
-- [ ] **C0.3** Specify resource policy and shared local reservations for memory,
+- [x] **C0.3** Specify resource policy and shared local reservations for memory,
   disk, bandwidth, queues, concurrency and deadlines. Define drain, immediate
   stop, removal, unavailable telemetry and unsupported-platform behavior.
-- [ ] **C0.4** Choose the initial supported platform and secure route approach.
+- [x] **C0.4** Choose the initial supported platform and secure route approach.
   Record hardware recruitment, gateway ownership and operating budgets as open
   dependencies where unconfirmed; assign responsibility before remote trials.
-- [ ] **C0.5** Prepare the first fixed-cohort experiment manifest, numerical
+- [x] **C0.5** Prepare the first fixed-cohort experiment manifest, numerical
   criteria, fault cases and evidence schema. Define fields for later hardware
   values; freeze those values before their associated experiment starts.
 
@@ -114,8 +116,13 @@ semantics; no unresolved choice prevents local C1a/C2a work. Unconfirmed hardwar
 and later usability targets remain named dependencies, not assumed facts. The
 existing CPU/Petals paths remain the controls.
 
-**Evidence / next:** link the reviewed decision and schemas in the phase record;
-start C1a and C2a, plus C3a if supported hardware is actually available.
+**Evidence / next:** the [reviewed decision](decisions/0001-participant-contracts.md),
+[normative contract and dependency register](PARTICIPANT_CONTRACTS.md),
+[versioned declarations](../config/participant/README.md) and
+[Docker validation record](experiments/2026-10-17-participant-c0.md) complete C0.
+Start isolated C1a and C2a, and CPU C4a preparation. C3a execution awaits supported
+GPU access. No security implementation, physical-route, GPU or research gate is
+completed by C0; external operator/hardware dependencies remain open.
 
 ## C1 — Secure a fixed invited cohort
 

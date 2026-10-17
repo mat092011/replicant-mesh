@@ -1,0 +1,130 @@
+# C0 only: declaration/docs checks and the unchanged real-model CPU control.
+# Preparation uses the existing private lab; validation mounts its artifacts read-only.
+name: steamboat-participant-c0
+
+x-contracts: &contracts
+  image: steamboat-participant-contracts:c0-v1
+  platform: linux/amd64
+  build:
+    context: .
+    dockerfile: config/participant/Dockerfile.validation
+  init: true
+  network_mode: none
+  restart: "no"
+  cpus: 1.0
+  mem_limit: 256m
+  pids_limit: 64
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/app/.lab:size=16777216, /tmp:size=16777216]
+
+x-control: &control
+  image: steamboat-participant-runtime:cpu-c0-v1
+  platform: linux/amd64
+  build:
+    context: .
+    dockerfile: docker/pytorch/Dockerfile
+    target: runtime
+  init: true
+  network_mode: none
+  restart: "no"
+  cpus: 2.0
+  mem_limit: 6g
+  pids_limit: 256
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp:size=134217728]
+  environment:
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    OMP_NUM_THREADS: "2"
+    MKL_NUM_THREADS: "2"
+    STEAMBOAT_ARTIFACT_DIR: /artifacts
+    STEAMBOAT_REFERENCE_DIR: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+    STEAMBOAT_TEST_REPORT: /results
+    STEAMBOAT_PROTOCOL_REPORT: /results
+    STEAMBOAT_TEST_SNAPSHOT: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+    STEAMBOAT_PROTOCOL_TESTS: "1"
+    STEAMBOAT_PROCESS_TESTS: "1"
+    STEAMBOAT_COORDINATOR_TESTS: "1"
+    STEAMBOAT_SERVICE_TESTS: "1"
+  volumes:
+    - pytorch-artifacts:/artifacts:ro
+    - pytorch-model-cache:/cache:ro
+    - ./.lab/participant-network/c0-results:/results
+
+services:
+  contracts:
+    <<: *contracts
+
+  documents:
+    <<: *contracts
+    command:
+      - python
+      - -B
+      - -c
+      - |
+        import json
+        from pathlib import Path
+        from scripts.check_release import check_files
+        root = Path('/app')
+        names = sorted(p.relative_to(root).as_posix() for p in root.rglob('*')
+                       if p.is_file() and not {'.lab', '__pycache__'} & set(p.relative_to(root).parts))
+        report = check_files(root, names)
+        print(json.dumps(report, indent=2))
+        raise SystemExit(bool(report['errors']))
+
+  model-tests:
+    <<: *control
+    command: [python, -m, unittest, tests.runtime.test_model, -v]
+
+  runtime-tests:
+    <<: *control
+    tmpfs:
+      - /tmp:size=134217728
+      - /test-app:size=134217728
+    command:
+      - python
+      - -c
+      - |
+        import os
+        import shutil
+        import subprocess
+        import sys
+
+        source = "/app"
+        scratch = "/test-app"
+        shutil.copytree(source, scratch, dirs_exist_ok=True)
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = "/test-app/src:/test-app"
+        result = subprocess.run(
+            [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
+            cwd=scratch,
+            env=environment,
+            check=False,
+        )
+        raise SystemExit(result.returncode)
+
+  smoke:
+    <<: *control
+    command:
+      - python
+      - -m
+      - lab.benchmark
+      - check
+      - --backend
+      - pytorch
+      - --artifacts
+      - /artifacts
+      - --reference
+      - /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+
+volumes:
+  pytorch-model-cache:
+    external: true
+    name: steamboat-pytorch-m1_pytorch-model-cache
+  pytorch-artifacts:
+    external: true
+    name: steamboat-pytorch-m1_pytorch-artifacts

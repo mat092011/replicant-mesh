@@ -1,0 +1,1705 @@
+[
+  {
+    "name": "boolean_schema_version",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "schema_version"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unknown_version",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "schema_version"
+        ],
+        "value": 2
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unknown_root_property",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "unexpected"
+        ],
+        "value": 1
+      }
+    ],
+    "rule": "schema_properties"
+  },
+  {
+    "name": "boolean_session_limit",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "active_sessions"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "floating_session_limit",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "active_sessions"
+        ],
+        "value": 8.5
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "negative_queue",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "stage_queue"
+        ],
+        "value": -1
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "zero_connection_lifetime",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "connection_lifetime_ms"
+        ],
+        "value": 0
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "consumer_integer",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "roles",
+          "consumer"
+        ],
+        "value": 1
+      }
+    ],
+    "rule": "schema_bool"
+  },
+  {
+    "name": "community_not_supported",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "roles",
+          "community_operator"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "public_enrollment_off",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "public_enrollment"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "credits_off",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "credits"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "malformed_account",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "identity",
+          "account_id"
+        ],
+        "value": "acct_not-a-uuid"
+      }
+    ],
+    "rule": "schema_string"
+  },
+  {
+    "name": "unicode_device",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "identity",
+          "device_id"
+        ],
+        "value": "dev_\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+      }
+    ],
+    "rule": "schema_string"
+  },
+  {
+    "name": "malformed_boot",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "identity",
+          "boot_id"
+        ],
+        "value": "123"
+      }
+    ],
+    "rule": "schema_string"
+  },
+  {
+    "name": "unknown_nested",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "bypass"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_properties"
+  },
+  {
+    "name": "unsupported_windows",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "os"
+        ],
+        "value": "windows"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unsupported_arm",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "architecture"
+        ],
+        "value": "arm64"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unsupported_gpu",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "device"
+        ],
+        "value": "cuda"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unsupported_dtype",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "dtype"
+        ],
+        "value": "float16"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unsupported_attention",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "attention"
+        ],
+        "value": "sdpa"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unsupported_batch",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "batch_size"
+        ],
+        "value": 2
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "model_branch_not_pin",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "model_revision"
+        ],
+        "value": "main"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unlocked_runtime",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "runtime_lock_sha256"
+        ],
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "legacy_context_extension",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "runtime_context"
+        ],
+        "value": 2048
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "unknown_protocol",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "compatibility",
+          "inference_protocol"
+        ],
+        "value": 2
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "insecure_profile",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "profile"
+        ],
+        "value": "insecure_private_network"
+      }
+    ],
+    "rule": "schema_enum"
+  },
+  {
+    "name": "old_tls",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "tls_minimum"
+        ],
+        "value": "1.1"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "no_peer_auth",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "peer_authentication"
+        ],
+        "value": "none"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "private_flag_not_auth",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "private_network_flag_authorizes"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "offline_fail_open",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "stale_authority"
+        ],
+        "value": "allow_cached_forever"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "invalid_root_hash",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "trust_root_sha256"
+        ],
+        "value": "xyz"
+      }
+    ],
+    "rule": "schema_string"
+  },
+  {
+    "name": "missing_outbound_gateway",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "profile"
+        ],
+        "value": "outbound_gateway_mtls"
+      }
+    ],
+    "rule": "security_gateway"
+  },
+  {
+    "name": "opaque_trust_on_direct",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "gateway_trust"
+        ],
+        "value": "trusted_terminates_plaintext"
+      }
+    ],
+    "rule": "security_gateway"
+  },
+  {
+    "name": "bad_dns_label",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "coordinator",
+          "dns_name"
+        ],
+        "value": "a..example.invalid"
+      }
+    ],
+    "rule": "security_endpoint"
+  },
+  {
+    "name": "coordinator_wrong_account",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "coordinator",
+          "identity",
+          "account_id"
+        ],
+        "value": "acct_22222222222222222222222222222222"
+      }
+    ],
+    "rule": "identity_device"
+  },
+  {
+    "name": "host_disabled_with_local_stages",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "roles",
+          "host"
+        ],
+        "value": false
+      }
+    ],
+    "rule": "role_binding"
+  },
+  {
+    "name": "disabled_orchestrator_still_reserves",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "roles",
+          "orchestrator"
+        ],
+        "value": "disabled"
+      }
+    ],
+    "rule": "role_binding"
+  },
+  {
+    "name": "layer_gap",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "stages",
+          1,
+          "layer_start"
+        ],
+        "value": 4
+      }
+    ],
+    "rule": "placement_range"
+  },
+  {
+    "name": "layer_overlap",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "stages",
+          2,
+          "layer_start"
+        ],
+        "value": 5
+      }
+    ],
+    "rule": "placement_range"
+  },
+  {
+    "name": "empty_range",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "stages",
+          0,
+          "layer_stop"
+        ],
+        "value": 0
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "omitted_input_output_weights",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "reservations",
+          2,
+          "weights_bytes"
+        ],
+        "value": 0
+      }
+    ],
+    "rule": "reservation_weights"
+  },
+  {
+    "name": "insufficient_stage_kv",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "reservations",
+          3,
+          "kv_bytes"
+        ],
+        "value": 1
+      }
+    ],
+    "rule": "reservation_kv"
+  },
+  {
+    "name": "insufficient_reference_kv",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "reservations",
+          6,
+          "kv_bytes"
+        ],
+        "value": 1
+      }
+    ],
+    "rule": "reservation_kv"
+  },
+  {
+    "name": "unbudgeted_buffers",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "reservations",
+          0,
+          "communication_bytes"
+        ],
+        "value": 1
+      }
+    ],
+    "rule": "reservation_buffers"
+  },
+  {
+    "name": "unknown_reservation_pool",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "reservations",
+          1,
+          "pool_id"
+        ],
+        "value": "other_ram"
+      }
+    ],
+    "rule": "pool_binding"
+  },
+  {
+    "name": "role_component_mismatch",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "reservations",
+          2,
+          "role"
+        ],
+        "value": "host"
+      }
+    ],
+    "rule": "role_reservation"
+  },
+  {
+    "name": "pool_ceilings_overcommit",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "pools",
+          0,
+          "ceiling_bytes"
+        ],
+        "value": 34359738368
+      }
+    ],
+    "rule": "pool_capacity"
+  },
+  {
+    "name": "aggregate_peak_exceeds_pool",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "pools",
+          0,
+          "ceiling_bytes"
+        ],
+        "value": 1073741824
+      }
+    ],
+    "rule": "pool_reservation"
+  },
+  {
+    "name": "oversized_loading_peak",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "reservations",
+          0,
+          "startup_extra_bytes"
+        ],
+        "value": 25769803776
+      }
+    ],
+    "rule": "pool_reservation"
+  },
+  {
+    "name": "free_bytes_over_capacity",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "pools",
+          0,
+          "free_before_start_bytes"
+        ],
+        "value": 34359738369
+      }
+    ],
+    "rule": "pool_capacity"
+  },
+  {
+    "name": "fabricated_missing_telemetry",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "pools",
+          0,
+          "observation"
+        ],
+        "value": "unavailable"
+      }
+    ],
+    "rule": "pool_observation"
+  },
+  {
+    "name": "unknown_pool_kind",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "pools",
+          0,
+          "kind"
+        ],
+        "value": "cuda_vram"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "queue_bytes_under_count",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "control_queue_bytes"
+        ],
+        "value": 65536
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "rpc_exceeds_hard_bound",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "rpc_ms"
+        ],
+        "value": 30001
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "renew_too_late",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "idle_lease_ms"
+        ],
+        "value": 35000
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "request_shorter_than_lease",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "request_ms"
+        ],
+        "value": 100000
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "tombstone_shorter_than_rpc",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "tombstone_ms"
+        ],
+        "value": 29999
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "activation_shape_mismatch",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "activation_bytes"
+        ],
+        "value": 256
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "too_small_message_envelope",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "message_bytes"
+        ],
+        "value": 300000
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "cache_position_underreservation",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "cache_positions_per_worker"
+        ],
+        "value": 1
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "too_few_stream_slots",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "client_streams"
+        ],
+        "value": 39
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "connection_overcommit",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "connections_total"
+        ],
+        "value": 7
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "tenant_exceeds_global",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "tenant_waiting_admissions"
+        ],
+        "value": 33
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "disk_overcommit",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "policy",
+          "disk_ceiling_bytes"
+        ],
+        "value": 134217728
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "false_enforcement_claim",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "policy",
+          "enforcement"
+        ],
+        "value": "hard_isolation_enforced"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unsafe_retries",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "mutation_attempts"
+        ],
+        "value": 2
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "premature_release",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "policy",
+          "reservation_release"
+        ],
+        "value": "on_cancel_reply"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "template_cannot_be_frozen_without_hardware",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "status"
+        ],
+        "value": "frozen_for_trials"
+      }
+    ],
+    "rule": "experiment_freeze"
+  },
+  {
+    "name": "invented_freeze_provenance",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "source_commit"
+        ],
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "rule": "experiment_awaiting"
+  },
+  {
+    "name": "missing_dependency_register",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "dependencies"
+        ],
+        "value": []
+      }
+    ],
+    "rule": "schema_list"
+  },
+  {
+    "name": "unowned_dependency_confirmation",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "dependencies",
+          0,
+          "state"
+        ],
+        "value": "confirmed"
+      }
+    ],
+    "rule": "dependency_confirmation"
+  },
+  {
+    "name": "dependency_wrong_gate",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "dependencies",
+          0,
+          "required_for"
+        ],
+        "value": "C0"
+      }
+    ],
+    "rule": "dependency_scope"
+  },
+  {
+    "name": "missing_fault_matrix",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "fault_cases"
+        ],
+        "value": [
+          "cleanup"
+        ]
+      }
+    ],
+    "rule": "experiment_faults"
+  },
+  {
+    "name": "context_overflow",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "prompt_tokens"
+        ],
+        "value": [
+          1152
+        ]
+      }
+    ],
+    "rule": "experiment_context"
+  },
+  {
+    "name": "relaxed_numerical_tolerance",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "atol"
+        ],
+        "value": 0.01
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "unfounded_performance_claim",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "performance_target"
+        ],
+        "value": "5_tokens_per_second"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "evidence_not_a_pass",
+    "base": "c0-evidence-template.json",
+    "changes": [
+      {
+        "path": [
+          "phase_passed"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "template_claims_run",
+    "base": "c0-evidence-template.json",
+    "changes": [
+      {
+        "path": [
+          "checks",
+          0,
+          "outcome"
+        ],
+        "value": "passed"
+      }
+    ],
+    "rule": "evidence_template"
+  },
+  {
+    "name": "omitted_check_reason",
+    "base": "c0-evidence-template.json",
+    "changes": [
+      {
+        "path": [
+          "checks",
+          0,
+          "reason"
+        ],
+        "value": null
+      }
+    ],
+    "rule": "evidence_skip"
+  },
+  {
+    "name": "security_implementation_not_claimed",
+    "base": "c0-evidence-template.json",
+    "changes": [
+      {
+        "path": [
+          "security_implemented"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "malformed_request",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "request_id"
+        ],
+        "value": "req_1"
+      }
+    ],
+    "rule": "schema_string"
+  },
+  {
+    "name": "malformed_session",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "session_id"
+        ],
+        "value": "ses_../secret"
+      }
+    ],
+    "rule": "schema_string"
+  },
+  {
+    "name": "malformed_route",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "route_id"
+        ],
+        "value": "route_1"
+      }
+    ],
+    "rule": "schema_string"
+  },
+  {
+    "name": "malformed_operation",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "operation_id"
+        ],
+        "value": "op_1"
+      }
+    ],
+    "rule": "schema_string"
+  },
+  {
+    "name": "operation_boolean_sequence",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "sequence"
+        ],
+        "value": true
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "unknown_route_epoch",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "route_epoch"
+        ],
+        "value": 2
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "operation_context_overflow",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "position"
+        ],
+        "value": 1100
+      }
+    ],
+    "rule": "operation_context"
+  },
+  {
+    "name": "missing_session_lease",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "lease_sha256"
+        ],
+        "value": null
+      }
+    ],
+    "rule": "operation_lease"
+  },
+  {
+    "name": "missing_step_payload",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "payload_sha256"
+        ],
+        "value": null
+      }
+    ],
+    "rule": "operation_payload"
+  },
+  {
+    "name": "zero_step_count",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "token_count"
+        ],
+        "value": 0
+      }
+    ],
+    "rule": "operation_payload"
+  },
+  {
+    "name": "unclipped_rpc_budget",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "remaining_request_ms"
+        ],
+        "value": 1000
+      }
+    ],
+    "rule": "operation_deadline"
+  },
+  {
+    "name": "no_live_cache_retries",
+    "base": "session-operation.json",
+    "changes": [
+      {
+        "path": [
+          "attempt"
+        ],
+        "value": 2
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "duplicate_physical_ram_pool",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "pools"
+        ],
+        "value": [
+          {
+            "pool_id": "local_ram",
+            "device_id": "dev_00000000000000000000000000000001",
+            "kind": "physical_ram",
+            "capacity_bytes": 34359738368,
+            "owner_margin_bytes": 8589934592,
+            "ceiling_bytes": 25769803776,
+            "free_before_start_bytes": 34359738368,
+            "observation": "synthetic"
+          },
+          {
+            "pool_id": "second_process_same_ram",
+            "device_id": "dev_00000000000000000000000000000001",
+            "kind": "physical_ram",
+            "capacity_bytes": 34359738368,
+            "owner_margin_bytes": 8589934592,
+            "ceiling_bytes": 25769803776,
+            "free_before_start_bytes": 34359738368,
+            "observation": "synthetic"
+          }
+        ]
+      }
+    ],
+    "rule": "pool_identity"
+  },
+  {
+    "name": "duplicate_stage_range",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "stages",
+          1
+        ],
+        "value": {
+          "component": "worker-1",
+          "owner": {
+            "dns_name": "worker-1.example.invalid",
+            "port": 50051,
+            "identity": {
+              "account_id": "acct_00000000000000000000000000000001",
+              "device_id": "dev_00000000000000000000000000000001",
+              "boot_id": "00000000000000000000000000000002"
+            },
+            "certificate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "layer_start": 0,
+          "layer_stop": 3,
+          "binding_version": 1,
+          "assignment_id": "asg_00000000000000000000000000000001"
+        }
+      }
+    ],
+    "rule": "schema_unique"
+  },
+  {
+    "name": "missing_required_field",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "authorization_snapshot_lifetime_ms"
+        ],
+        "remove": true
+      }
+    ],
+    "rule": "schema_properties"
+  },
+  {
+    "name": "missing_named_hardware_dependency",
+    "base": "experiment-awaiting-hardware.json",
+    "changes": [
+      {
+        "path": [
+          "dependencies",
+          4
+        ],
+        "remove": true
+      }
+    ],
+    "rule": "dependency_missing"
+  },
+  {
+    "name": "prefixed_boot_is_not_worker_encoding",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "identity",
+          "boot_id"
+        ],
+        "value": "boot_00000000000000000000000000000000"
+      }
+    ],
+    "rule": "schema_string"
+  },
+  {
+    "name": "coordinator_cannot_share_daemon_boot",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "coordinator",
+          "identity",
+          "boot_id"
+        ],
+        "value": "00000000000000000000000000000001"
+      }
+    ],
+    "rule": "identity_boot"
+  },
+  {
+    "name": "stable_device_cannot_change_account",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "stages",
+          0,
+          "owner",
+          "identity",
+          "account_id"
+        ],
+        "value": "acct_22222222222222222222222222222222"
+      }
+    ],
+    "rule": "identity_device"
+  },
+  {
+    "name": "tls_connection_ceiling",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "connections_total"
+        ],
+        "value": 17
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "tls_peer_ceiling",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "connections_per_peer"
+        ],
+        "value": 3
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "tls_handshake_ceiling",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "pending_handshakes"
+        ],
+        "value": 5
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "unix_management_ceiling",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "management_connections"
+        ],
+        "value": 5
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "tcp_management_not_supported",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "management"
+        ],
+        "value": "loopback_authenticated_owner_only_no_browser_origins"
+      }
+    ],
+    "rule": "schema_const"
+  },
+  {
+    "name": "credential_lifetime_ceiling",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "credential_lifetime_ms"
+        ],
+        "value": 900001
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "renewal_must_precede_credential_expiry",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "credential_lifetime_ms"
+        ],
+        "value": 300000
+      }
+    ],
+    "rule": "security_lifetime"
+  },
+  {
+    "name": "authorization_snapshot_ceiling",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "authorization_snapshot_lifetime_ms"
+        ],
+        "value": 300001
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "authorization_refresh_ceiling",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "authorization_refresh_ms"
+        ],
+        "value": 30001
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "authorization_expiry_check_ceiling",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "authorization_expiry_check_ms"
+        ],
+        "value": 5001
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "authorization_refresh_before_expiry",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "security",
+          "authorization_snapshot_lifetime_ms"
+        ],
+        "value": 35000
+      }
+    ],
+    "rule": "security_lifetime"
+  },
+  {
+    "name": "insufficient_stream_capacity",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "streams_per_connection"
+        ],
+        "value": 1
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "raw_logits_are_not_a_json_envelope",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "logit_message_bytes"
+        ],
+        "value": 128000
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "token_event_requires_metadata_budget",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "token_event_bytes"
+        ],
+        "value": 4095
+      }
+    ],
+    "rule": "schema_int"
+  },
+  {
+    "name": "coordinator_capture_buffer_underreservation",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "reservations",
+          2,
+          "communication_bytes"
+        ],
+        "value": 67108864
+      }
+    ],
+    "rule": "reservation_buffers"
+  },
+  {
+    "name": "assignment_identity_must_be_unique",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "stages",
+          1,
+          "assignment_id"
+        ],
+        "value": "asg_00000000000000000000000000000001"
+      }
+    ],
+    "rule": "assignment_identity"
+  },
+  {
+    "name": "pending_handshakes_share_total_tls_ceiling",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "limits",
+          "connections_total"
+        ],
+        "value": 8
+      }
+    ],
+    "rule": "limits_relation"
+  },
+  {
+    "name": "capture_producer_slots_require_additional_reservation",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "reservations",
+          2,
+          "communication_bytes"
+        ],
+        "value": 176160768
+      }
+    ],
+    "rule": "reservation_buffers"
+  },
+  {
+    "name": "coordinator_host_certificate_roles_are_distinct",
+    "base": "local-c1a-c2a.json",
+    "changes": [
+      {
+        "path": [
+          "route",
+          "coordinator",
+          "certificate_sha256"
+        ],
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "rule": "identity_certificate_role"
+  }
+]

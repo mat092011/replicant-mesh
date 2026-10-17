@@ -19,6 +19,7 @@ def main():
     suite = unittest.TestSuite(loader.discover(str(ROOT / 'tests'), pattern=name)
                                for name in TEST_FILES)
     suite.addTests(loader.loadTestsFromName('test_matched_control.MatchedControlTests'))
+    suite.addTests(loader.loadTestsFromName('participant.test_participant_contracts'))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     print(f'Fast checks: {result.testsRun} tests; {len(result.skipped)} skipped')
     return int(not result.wasSuccessful() or bool(result.skipped))

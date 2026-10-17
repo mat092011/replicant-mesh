@@ -1,0 +1,197 @@
+{
+  "dialect": "steamboat.closed-types.v1",
+  "schema_version": 1,
+  "documents": {
+    "participant": "Participant",
+    "experiment": "Experiment",
+    "evidence": "Evidence",
+    "session_operation": "SessionOperation"
+  },
+  "types": {
+    "Sha256": {"string": {"pattern": "[0-9a-f]{64}", "max": 64}},
+    "Revision": {"const": "298338802ab94432b917bcce11382aa151aee50f"},
+    "AccountId": {"string": {"pattern": "acct_[0-9a-f]{32}", "max": 37}},
+    "DeviceId": {"string": {"pattern": "dev_[0-9a-f]{32}", "max": 36}},
+    "BootId": {"string": {"pattern": "[0-9a-f]{32}", "max": 32}},
+    "RequestId": {"string": {"pattern": "req_[0-9a-f]{32}", "max": 36}},
+    "SessionId": {"string": {"pattern": "ses_[0-9a-f]{32}", "max": 36}},
+    "RouteId": {"string": {"pattern": "route_[0-9a-f]{32}", "max": 38}},
+    "OperationId": {"string": {"pattern": "op_[0-9a-f]{32}", "max": 35}},
+    "AssignmentId": {"string": {"pattern": "asg_[0-9a-f]{32}", "max": 36}},
+    "Label": {"string": {"pattern": "[a-z][a-z0-9_-]{0,63}", "max": 64}},
+    "Text": {"string": {"pattern": "[^\\x00-\\x1f]{1,1024}", "max": 1024}},
+    "Identity": {"object": {"account_id": "AccountId", "device_id": "DeviceId", "boot_id": "BootId"}},
+    "Endpoint": {"object": {
+      "dns_name": {"string": {"pattern": "[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", "max": 253}},
+      "port": {"int": [1, 65535]}, "identity": "Identity", "certificate_sha256": "Sha256"
+    }},
+    "Compatibility": {"object": {
+      "control_protocol": {"const": 1}, "inference_protocol": {"const": 1},
+      "os": {"const": "linux"}, "architecture": {"const": "amd64"}, "device": {"const": "cpu"},
+      "python": {"const": "3.12.15"}, "torch": {"const": "2.14.1+cpu"},
+      "transformers": {"const": "5.19.0"}, "grpcio": {"const": "1.84.0"}, "protobuf": {"const": "7.36.2"},
+      "runtime_lock": {"const": "docker/pytorch/requirements.lock"},
+      "runtime_lock_sha256": {"const": "ec074730911798d0d08bd56fcd24f00db53d14dbe13e2be4e031150a52b82be3"},
+      "model_id": {"const": "Maykeye/TinyLLama-v0"}, "model_revision": "Revision", "tokenizer_revision": "Revision",
+      "source_weights_sha256": {"const": "c302246d91e2854ff350e52a79938a818c203186c2f0671213ce372a0289cd91"},
+      "tokenizer_model_sha256": {"const": "ab1b681ec7fc02fed5edd3026687d7a692a918c4dd8e150ca2e3994a6229843b"},
+      "artifact_manifest_sha256": {"nullable": "Sha256"},
+      "dtype": {"const": "float32"}, "attention": {"const": "eager"}, "compression": {"const": "none"},
+      "batch_size": {"const": 1}, "hidden_size": {"const": 64}, "vocabulary_size": {"const": 32000},
+      "layers": {"const": 8}, "model_context": {"const": 2048}, "runtime_context": {"int": [2, 1152]},
+      "layout": {"const": "batch_sequence_hidden"}, "wire_dtype": {"const": "float32_le"},
+      "tied_input_output_weights": {"const": false}, "prefill": {"const": "unchunked_nonpreemptible"}
+    }},
+    "Roles": {"object": {
+      "consumer": {"bool": true}, "host": {"bool": true}, "orchestrator": {"enum": ["disabled", "personal"]},
+      "community_operator": {"const": false}, "public_rewards_authority": {"const": false}
+    }},
+    "Security": {"object": {
+      "profile": {"enum": ["direct_mtls_fixed_cohort", "outbound_gateway_mtls"]},
+      "tls_minimum": {"const": "1.2"}, "peer_authentication": {"const": "mutual_certificate"},
+      "trust_root_sha256": "Sha256", "registry": "Endpoint", "catalog": "Endpoint",
+      "gateway": {"nullable": "Endpoint"}, "gateway_trust": {"enum": ["not_used", "trusted_terminates_plaintext"]},
+      "authorization_snapshot_lifetime_ms": {"int": [1, 300000]},
+      "authorization_refresh_ms": {"int": [1, 30000]}, "authorization_expiry_check_ms": {"int": [1, 5000]},
+      "credential_lifetime_ms": {"int": [1, 900000]}, "credential_renew_before_ms": {"const": 300000},
+      "credential_epoch": {"int": [1, 2147483647]},
+      "stale_authority": {"const": "reject_admission_invalidate_sessions"},
+      "rotation": {"const": "drain_old_bindings_new_sessions_new_epoch"},
+      "revocation": {"const": "invalidate_discard_inflight_cleanup"},
+      "session_access": {"const": "authenticated_binding_and_lease_not_id_alone"},
+      "endpoint_policy": {"const": "fixed_allowlist_no_peer_supplied_probes"},
+      "management": {"const": "af_unix_same_uid_and_boot_token_owner_only_no_tcp"},
+      "private_network_flag_authorizes": {"const": false}, "prompts_private_from_operators": {"const": false}
+    }},
+    "Stage": {"object": {
+      "binding_version": {"const": 1}, "assignment_id": "AssignmentId",
+      "component": {"enum": ["worker-1", "worker-2", "worker-3"]}, "owner": "Endpoint",
+      "layer_start": {"int": [0, 7]}, "layer_stop": {"int": [1, 8]}
+    }},
+    "Route": {"object": {
+      "route_id": "RouteId", "epoch": {"const": 1}, "coordinator": "Endpoint",
+      "placement": {"const": "fixed_three_stages_coordinator_relayed"},
+      "component_owner": {"const": "coordinator_tokenizer_embedding_norm_head_sampler"},
+      "stages": {"list": {"items": "Stage", "min": 3, "max": 3, "unique": true}}
+    }},
+    "Limits": {"object": {
+      "connections_total": {"int": [1, 16]}, "connections_per_peer": {"int": [1, 2]},
+      "pending_handshakes": {"int": [1, 4]}, "client_tls_channels": {"int": [1, 16]},
+      "streams_per_connection": {"int": [1, 40]}, "connect_timeout_ms": {"int": [1, 5000]},
+      "handshake_timeout_ms": {"int": [1, 5000]}, "connection_lifetime_ms": {"int": [1, 900000]},
+      "connection_idle_ms": {"int": [1, 120000]}, "connect_attempts": {"int": [1, 3]},
+      "reconnect_backoff_ms": {"int": [1000, 30000]}, "control_streams": {"int": [1, 4]},
+      "management_connections": {"int": [1, 4]}, "gateway_streams": {"int": [0, 1]},
+      "gateway_queue_messages": {"int": [0, 8]}, "gateway_queue_bytes": {"int": [0, 8388608]},
+      "gateway_stall_ms": {"int": [1, 30000]}, "gateway_bytes_per_lifetime": {"int": [1, 1073741824]},
+      "control_queue_messages": {"int": [1, 8]}, "control_queue_bytes": {"int": [65536, 524288]},
+      "active_sessions": {"int": [1, 8]}, "compute_calls_per_worker": {"const": 1},
+      "stage_queue": {"int": [1, 8]}, "waiting_admissions": {"int": [1, 32]},
+      "client_streams": {"int": [1, 40]}, "output_queue_tokens": {"int": [1, 16]},
+      "tenant_active_sessions": {"int": [1, 8]}, "tenant_waiting_admissions": {"int": [1, 32]},
+      "owner_reserved_sessions": {"int": [0, 8]}, "file_descriptors": {"int": [32, 1024]},
+      "message_bytes": {"int": [65536, 1048576]}, "control_message_bytes": {"int": [1, 65536]},
+      "generate_request_bytes": {"int": [1, 32768]}, "tokenize_request_bytes": {"int": [1, 524288]},
+      "text_bytes": {"int": [1, 65536]}, "activation_bytes": {"int": [256, 294912]},
+      "logit_message_bytes": {"int": [1028096, 1048576]}, "token_event_bytes": {"int": [4096, 4096]}, "diagnostic_bytes": {"int": [1, 4096]},
+      "admission_ms": {"int": [1, 30000]}, "request_ms": {"int": [1, 300000]},
+      "rpc_ms": {"int": [1, 30000]}, "idle_lease_ms": {"int": [1, 120000]},
+      "lease_check_ms": {"int": [1, 5000]}, "renew_ms": {"int": [1, 30000]},
+      "output_stall_ms": {"int": [1, 30000]}, "compute_cancel_grace_ms": {"int": [1, 15000]},
+      "cleanup_ms": {"int": [1, 20000]}, "shutdown_ms": {"int": [1, 40000]},
+      "tombstone_ms": {"int": [1, 30000]}, "session_records": {"int": [1, 4096]},
+      "trace_events": {"int": [1, 8192]}, "cache_positions_per_worker": {"int": [1, 12288]},
+      "cache_bytes_per_worker": {"int": [1, 16777216]}, "mutation_attempts": {"const": 1}
+    }},
+    "Pool": {"object": {
+      "pool_id": "Label", "device_id": "DeviceId", "kind": {"const": "physical_ram"},
+      "capacity_bytes": {"int": [1, 1099511627776]}, "owner_margin_bytes": {"int": [1, 1099511627776]},
+      "ceiling_bytes": {"int": [1, 1099511627776]}, "free_before_start_bytes": {"nullable": {"int": [1, 1099511627776]}},
+      "observation": {"enum": ["synthetic", "measured", "unavailable"]}
+    }},
+    "Reservation": {"object": {
+      "reservation_id": "Label", "pool_id": "Label", "role": {"enum": ["consumer", "host", "orchestrator", "daemon", "reference", "gateway"]},
+      "component": {"enum": ["consumer", "daemon", "coordinator", "worker-1", "worker-2", "worker-3", "reference", "gateway"]},
+      "weights_bytes": {"int": [0, 1099511627776]}, "kv_bytes": {"int": [0, 1099511627776]},
+      "temporary_bytes": {"int": [1, 1099511627776]}, "communication_bytes": {"int": [1, 1099511627776]},
+      "runtime_bytes": {"int": [1, 1099511627776]}, "startup_extra_bytes": {"int": [0, 1099511627776]}
+    }},
+    "Policy": {"object": {
+      "reservation_authority": {"const": "one_atomic_ledger_per_physical_pool_all_roles_coordinators"},
+      "reservation_release": {"const": "after_compute_finished_or_process_death_confirmed"},
+      "capacity_claim": {"const": "budget_not_execution_fit"}, "unknown_telemetry": {"const": "unavailable_reject_execution"},
+      "enforcement": {"const": "unimplemented_contract_only"}, "scheduler": {"const": "fifo_stage_boundaries_no_prefill_preemption"},
+      "drain_ms": {"int": [1, 300000]}, "stop_grace_ms": {"int": [1, 15000]},
+      "remove": {"const": "stop_revoke_confirm_then_optional_owned_artifact_delete"},
+      "unsupported_platform": {"const": "reject_no_fallback"}, "ambiguous_mutation": {"const": "fail_request_cancel_known_expire_unknown_no_retry"},
+      "cpu_quota_millicores": {"int": [1, 16000]}, "torch_threads": {"int": [1, 2]},
+      "disk_ceiling_bytes": {"int": [1, 1099511627776]}, "artifact_bytes": {"int": [1, 1099511627776]},
+      "download_staging_bytes": {"int": [1, 1099511627776]}, "logs_bytes": {"int": [1, 1073741824]},
+      "log_retention_ms": {"int": [1, 604800000]}, "download_timeout_ms": {"int": [1, 300000]},
+      "download_attempts": {"int": [1, 3]}, "bandwidth_bytes_per_second": {"int": [1, 1073741824]},
+      "traffic_bytes_per_day": {"int": [1, 1099511627776]}, "traffic_window_ms": {"const": 86400000},
+      "prompt_logging": {"const": false}, "secret_logging": {"const": false},
+      "artifact_loading": {"const": "approved_catalog_sha256_verified_readonly_offline_no_remote_code"},
+      "readiness": {"const": "verified_weights_healthy_executor_reserved_capacity_fresh_authority"},
+      "battery_temperature": {"const": "unavailable_no_hard_limit_claim"}
+    }},
+    "Participant": {"object": {
+      "schema_version": {"const": 1}, "kind": {"const": "participant"}, "status": {"const": "contract_only"},
+      "public_enrollment": {"const": false}, "credits": {"const": false}, "fixture_data": {"const": "public_synthetic"},
+      "identity": "Identity", "roles": "Roles", "compatibility": "Compatibility", "security": "Security", "route": "Route",
+      "limits": "Limits", "policy": "Policy", "pools": {"list": {"items": "Pool", "min": 1, "max": 8, "unique": true}},
+      "reservations": {"list": {"items": "Reservation", "min": 1, "max": 16, "unique": true}}
+    }},
+    "Dependency": {"object": {
+      "dependency_id": "Label", "state": {"enum": ["open", "confirmed"]}, "required_for": {"enum": ["C0", "C1b", "C2b", "C3a", "remote_trials"]},
+      "responsible_role": "Label", "owner_account_id": {"nullable": "AccountId"}, "resolution": {"nullable": "Text"}
+    }},
+    "Hardware": {"object": {
+      "device_id": "DeviceId", "physical_host_id": "Label", "cpu_model": "Text", "ram_bytes": {"int": [1, 1099511627776]},
+      "os_release": "Text", "kernel": "Text", "cpu_quota_millicores": {"int": [1, 16000]},
+      "inventory_sha256": "Sha256", "network_route_sha256": "Sha256", "resource_policy_sha256": "Sha256"
+    }},
+    "Experiment": {"object": {
+      "schema_version": {"const": 1}, "kind": {"const": "experiment"}, "experiment_id": "Label",
+      "status": {"enum": ["awaiting_hardware", "frozen_for_trials"]}, "gate": {"enum": ["C0", "C1b", "C2b"]},
+      "local_c0_gate": {"const": "contracts_fixtures_tests_review_only"}, "fixture_data": {"const": "public_synthetic"},
+      "participant_config_sha256": {"nullable": "Sha256"}, "source_commit": {"nullable": {"string": {"pattern": "[0-9a-f]{40}", "max": 40}}},
+      "image_digest": {"nullable": "Sha256"}, "frozen_at_utc": {"nullable": {"string": {"pattern": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", "max": 20}}},
+      "hardware": {"list": {"items": "Hardware", "min": 0, "max": 8, "unique": true}},
+      "execution_device_ids": {"list": {"items": "DeviceId", "min": 0, "max": 8, "unique": true}},
+      "dependencies": {"list": {"items": "Dependency", "min": 1, "max": 16, "unique": true}},
+      "compatibility": "Compatibility", "route_profile": {"enum": ["direct_mtls_fixed_cohort", "outbound_gateway_mtls"]},
+      "prompt_tokens": {"list": {"items": {"int": [1, 1152]}, "min": 1, "max": 8, "unique": true}},
+      "forced_decode_tokens": {"int": [1, 128]}, "concurrency": {"list": {"items": {"int": [1, 8]}, "min": 1, "max": 8, "unique": true}},
+      "atol": {"const": 0.001}, "rtol": {"const": 0}, "finite_logits": {"const": true},
+      "numerical_scope": {"const": "same_stack_identical_inputs_all_prefill_logits_forced_decode_then_separate_greedy"},
+      "fault_cases": {"list": {"items": "Label", "min": 1, "max": 32, "unique": true}},
+      "cleanup_deadline_ms": {"int": [1, 40000]}, "timing": {"const": "monotonic_client_no_cross_host_subtraction_without_uncertainty"},
+      "performance_target": {"const": "not_adopted_correctness_only"}, "claims": {"const": "no_network_security_execution_or_pooled_memory_evidence"}
+    }},
+    "Check": {"object": {
+      "check_id": "Label", "command": "Text", "outcome": {"enum": ["not_run", "passed", "failed", "skipped"]},
+      "exit_code": {"nullable": {"int": [0, 255]}}, "reason": {"nullable": "Text"}, "sanitized_report_sha256": {"nullable": "Sha256"}
+    }},
+    "Evidence": {"object": {
+      "schema_version": {"const": 1}, "kind": {"const": "evidence"}, "gate": {"const": "C0"},
+      "status": {"enum": ["template_not_executed", "recorded_checks_not_phase_pass"]}, "scope": {"const": "contract_validation_only"},
+      "source_commit": {"nullable": {"string": {"pattern": "[0-9a-f]{40}", "max": 40}}},
+      "reviewer_account_id": {"nullable": "AccountId"}, "checks": {"list": {"items": "Check", "min": 1, "max": 32, "unique": true}},
+      "limitations": {"list": {"items": "Text", "min": 1, "max": 16, "unique": true}},
+      "network_implemented": {"const": false}, "security_implemented": {"const": false}, "hardware_trials_executed": {"const": false},
+      "phase_passed": {"const": false}, "public_enrollment": {"const": false}, "credits": {"const": false}
+    }},
+    "SessionOperation": {"object": {
+      "binding_version": {"const": 1}, "assignment_id": "AssignmentId",
+      "schema_version": {"const": 1}, "kind": {"const": "session_operation"}, "status": {"const": "synthetic_binding_fixture_not_authorization"},
+      "control_protocol": {"const": 1}, "inference_protocol": {"const": 1}, "method": {"enum": ["OpenSession", "Step", "RenewSession", "SessionStatus", "CloseSession", "CancelSession"]},
+      "consumer": "Identity", "coordinator": "Identity", "worker": "Identity", "credential_epoch": {"int": [1, 2147483647]},
+      "request_id": "RequestId", "session_id": "SessionId", "route_id": "RouteId", "route_epoch": {"const": 1}, "operation_id": "OperationId",
+      "attempt": {"const": 1}, "component": {"enum": ["worker-1", "worker-2", "worker-3"]},
+      "compatibility_sha256": "Sha256", "lease_sha256": {"nullable": "Sha256"}, "payload_sha256": {"nullable": "Sha256"},
+      "sequence": {"int": [0, 1152]}, "position": {"int": [0, 1152]}, "token_count": {"int": [0, 1152]},
+      "reserved_context": {"int": [1, 1152]}, "remaining_request_ms": {"int": [1, 300000]}, "timeout_ms": {"int": [1, 30000]}
+    }}
+  }
+}
