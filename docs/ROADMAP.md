@@ -27,16 +27,18 @@ code/docs; third-party terms remain separate.
 
 **Acceptance:** the reviewed commit passes documented checks, contains no model
 weights/caches/private traces, and has a compact clean-start evidence record.
-README commands work in that recorded environment. The maintainer separately
-decides whether and where to publish; preparation itself publishes nothing.
+README commands work in that recorded environment. Source publication requires
+maintainer authorization and does not authorize a hosted inference service or
+binary/model distribution.
 
 **Implementation update, 2026-10-17:** source/manual-runtime CI definitions,
 pinned secret scanning, installed license/OS inventories, tokenizer provenance,
 ownership attestation and a clean local-clone runtime reproduction are recorded
 in the [release validation report](experiments/2026-10-17-release-readiness.md).
-Hosted CI has not run because these changes remain local. GitHub private
-reporting requires publication; the no-email policy and verification tool retain
-that explicit gate without changing visibility. Keep each change reviewable.
+The subsequent [publication record](experiments/2026-10-17-publication.md) tracks
+the maintainer-authorized public source repository, hosted CI and enabled/verified
+GitHub private reporting. No public inference service or versioned release tag
+is part of this source preview. Keep each change reviewable.
 
 ## 2. Strengthen reproducibility and the CPU baseline (P0–P3)
 
@@ -153,7 +155,7 @@ Spot checks and signed receipts are limited checks, not proof against collusion.
 | Priority | Work item | Completion evidence |
 | --- | --- | --- |
 | Now | Review the local release evidence and remaining distribution boundaries | Inventories, ownership attestation, secret scan and reproduction report |
-| At approved publication | Run hosted CI and enable/verify GitHub private reporting without email | Hosted job results and verified repository setting |
+| Publication follow-up | Review hosted CI, private reporting and retained test intermittency | [Publication evidence](experiments/2026-10-17-publication.md) and verified repository setting |
 | Next | Select a bounded remaining CPU experiment subset | Frozen plan, duration estimate, audit and report |
 | Next | Recruit/inventory a second device and choose an initial GPU cohort | Confirmed access and measured hardware/network inventory |
 | After access | Secure transport/admission and separate-device parity | Negative admission tests and numerical/lifecycle report |

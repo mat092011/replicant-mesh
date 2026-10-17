@@ -4,7 +4,7 @@ Cooperative LLM inference across consumer devices: a research prototype for
 testing whether pooled memory and otherwise idle compute can provide useful
 access to larger models or additional inference capacity.
 
-**Status:** local CPU research lab; open-source release preparation.
+**Status:** public experimental source preview; local CPU research lab.
 **License:** [Apache-2.0](LICENSE) for this project's code and documentation;
 third-party software and model artifacts retain their own terms.
 
@@ -28,8 +28,9 @@ hypothesis. Reciprocal credits are a later research phase; no credit system exis
   and verifies network reset.
 
 Runtime milestones **M0–M5 are implemented**, but the broader research gates
-**P0–P3 remain incomplete**. All recorded execution uses CPU containers on one
-laptop. Separate devices, GPU execution, useful pooled-memory inference,
+**P0–P3 remain incomplete**. Research measurements use CPU containers on one
+laptop; hosted CI checks the same colocated CPU topology on a GitHub runner.
+Separate-device stages, GPU execution, useful pooled-memory inference,
 automatic replay recovery and public internet deployment remain unverified or
 unimplemented. See the [development roadmap](docs/ROADMAP.md) and
 [research acceptance criteria](docs/PLAN.md).
@@ -100,6 +101,13 @@ batch size one per session, and fixed layer assignments. The
 [runtime environment](docker/pytorch/README.md) records the dependency lock.
 The root `.env.example` configures the legacy Petals lab; editing it does not
 change the owned PyTorch manifest.
+
+Clone the public source if you do not already have a checkout:
+
+```powershell
+git clone https://github.com/mat092011/steamboat_net.git
+cd steamboat_net
+```
 
 Run these commands sequentially from the repository root in PowerShell:
 
@@ -190,5 +198,6 @@ contributor patent grant and does not grant trademark rights.
 Dependencies, model weights, tokenizers and datasets are not relicensed by this
 repository. Weights and prepared shards are downloaded locally rather than
 committed or included in the runtime image. See the [third-party review](docs/THIRD_PARTY.md)
-before redistributing artifacts or images. Release preparation remains local;
-publishing and a release tag require a later maintainer decision.
+before redistributing artifacts or images. The source repository is public;
+no package, container image, model bundle or versioned release tag is published
+as part of this preview. See the [publication record](docs/experiments/2026-10-17-publication.md).

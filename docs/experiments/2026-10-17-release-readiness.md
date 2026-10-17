@@ -1,9 +1,10 @@
 # Source-release engineering validation
 
-Date: 2026-10-17. This work implements release tooling and checks the existing
-CPU lab. It does not publish the project, establish new performance results or
-complete any P0–P8 research phase. The repository remains private and the working
-changes are uncommitted. See the [compact evidence](2026-10-17-release-readiness-summary.json).
+Date: 2026-10-17. This report records the pre-publication release tooling and
+existing CPU-lab checks, when the repository was private and changes uncommitted.
+The subsequent authorized publication is recorded [separately](2026-10-17-publication.md).
+These checks establish no new performance results or completed P0–P8 research
+phase. See the [pre-publication evidence](2026-10-17-release-readiness-summary.json).
 
 ## Scope and ownership
 

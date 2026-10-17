@@ -52,10 +52,11 @@ and [development roadmap](ROADMAP.md) now distinguish the source-preview work fr
 research completion. The [release validation](experiments/2026-10-17-release-readiness.md)
 records maintainer ownership confirmation, installed license/OS inventories,
 tokenizer provenance, pinned secret scanning, CI definitions and clean local-clone
-runtime reproduction. Hosted workflows have not run; GitHub private reporting is
-blocked while the repository remains private and the maintainer prefers no email.
-No publication occurred. The new correctness/smoke checks do not extend the
-performance envelope; all P0–P8 research statuses remain unchanged.
+runtime reproduction. The subsequent maintainer-authorized
+[source publication](experiments/2026-10-17-publication.md) records the public
+repository, hosted CI and verified GitHub private reporting without email.
+The new correctness/smoke checks do not extend the performance envelope;
+all P0–P8 research statuses remain unchanged.
 
 ## Questions to answer
 

@@ -11,24 +11,21 @@ computation and activations do not provide prompt confidentiality.
 
 ## Private vulnerability reporting
 
-The maintainer chose GitHub reporting without publishing an email address.
-The repository is currently private. GitHub private vulnerability reporting is
-available for public repositories, so an external reporting route cannot yet be
-verified under that visibility. No email address or functioning public reporting
-channel is implied by this policy.
+GitHub private vulnerability reporting is enabled and its repository setting was
+verified on 2026-10-17. No email address is required. Use
+[Report a vulnerability](https://github.com/mat092011/steamboat_net/security/advisories/new)
+to submit a private GitHub report to the maintainer.
 
-Before any public source release, the maintainer must enable private reporting
-and verify it with:
+The maintainer can recheck the live setting with:
 
 ```powershell
-python scripts/verify_security_reporting.py --enable
+python scripts/verify_security_reporting.py
 ```
 
-This command never changes visibility. Once the public repository's setting is
-verified, use [Report a vulnerability](https://github.com/mat092011/steamboat_net/security/advisories/new)
-to open a private GitHub report. If the link is unavailable, do not submit
-credentials, private data or exploit details to a public issue. The source
-release remains gated until the intended private route is available.
+The optional `--enable` flag can restore reporting on an already public
+repository; the tool never changes visibility. If the reporting link becomes
+unavailable, do not submit credentials, private data or exploit details to a
+public issue. No test advisory or message was submitted during setup.
 
 A report should identify the affected revision, environment, impact and minimal
 reproduction using synthetic data. Include sensitive detail only inside a
