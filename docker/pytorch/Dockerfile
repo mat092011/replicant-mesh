@@ -24,4 +24,5 @@ RUN apt-get update \
 COPY src /app/src
 COPY lab /app/lab
 COPY tests /app/tests
+COPY scripts /app/scripts
 CMD ["python", "-m", "lab.benchmark", "check", "--backend", "pytorch"]

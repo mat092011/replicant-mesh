@@ -1,0 +1,2399 @@
+{
+  "errors": [],
+  "lock_sha256": null,
+  "locked_packages": 0,
+  "os_packages": [
+    {
+      "architecture": "all",
+      "copyright_sha256": "b143053a4862ab354831487b5f8bd31dc9ffdc589d15de9d9c764332a0209796",
+      "name": "adduser",
+      "version": "3.134"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b4701305243d8d746f4acaafe15d94f946251b05691bd6917fef41dd15e9ee12",
+      "name": "apt",
+      "version": "2.6.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "fd7e4aae7e7b05f217bcf2d02322825c360e66c52c4c2f1b28d784d6297a1c23",
+      "name": "base-files",
+      "version": "12.4+deb12u10"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "0f1cde79bd80a75f9029ae9a8c252b642223027ef36f6989c63a8230aae576a7",
+      "name": "base-passwd",
+      "version": "3.6.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "06319d84c3e5ed096036f6a9310a030c7e84e50dff2b8a6792285c83ec0ada73",
+      "name": "bash",
+      "version": "5.2.15-2+b7"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a81bdd422c2c015deca84bf6ad249bf0d7d19885fc01d1894463291b0b7313e1",
+      "name": "binutils",
+      "version": "2.40-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a81bdd422c2c015deca84bf6ad249bf0d7d19885fc01d1894463291b0b7313e1",
+      "name": "binutils-common:amd64",
+      "version": "2.40-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a81bdd422c2c015deca84bf6ad249bf0d7d19885fc01d1894463291b0b7313e1",
+      "name": "binutils-x86-64-linux-gnu",
+      "version": "2.40-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "bsdutils",
+      "version": "1:2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "5ac244848c8571fcd7044b0c3778cde9e068ce169227b0354a1be519b695358f",
+      "name": "build-essential",
+      "version": "12.9"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "832ed535ff3c3d025a8d2348eb1b697b89addcf2eaadbc17650262040b9145e2",
+      "name": "bzip2",
+      "version": "1.0.8-5+b1"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "e85e1bcad3a915dc7e6f41412bc5bdeba275cadd817896ea0451f2140a93967c",
+      "name": "ca-certificates",
+      "version": "20250419~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "24e86c5ca53d6bfd8e0c47988160daa62d10a74997fe11f651e1d9533c78bff6",
+      "name": "coreutils",
+      "version": "9.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "156004744edbf17a975f0004ac4a9295b160ab403d646c445235711255ca9ff8",
+      "name": "cpp",
+      "version": "4:12.2.0-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "cpp-12",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "d98c53f281321baad38164aa9ae6e368a9253be6ec51bd26a759b5e72b326f4a",
+      "name": "dash",
+      "version": "0.5.12-2"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "57163c71bd8a5289660892827dd0dfaa7fef47f89deedc9dc6711ced7d0a28d7",
+      "name": "debconf",
+      "version": "1.5.82"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "b32aecaae84643700a33bc9ee83fa9b36938d35aa7b61b5042092eca77ddb732",
+      "name": "debian-archive-keyring",
+      "version": "2023.3+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "fd2d797e208bcfb713510e47a89867191180943e1167d44c2acd8ff1b88e5c10",
+      "name": "debianutils",
+      "version": "5.7-0.5~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8654d7cc7cdae1f31bb67a3ce5bf35d512c0bdfffd071df757edc54153cc7930",
+      "name": "diffutils",
+      "version": "1:3.8-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "7442bdadcd44e818fddd786057db07639cc68225c389c7c240d3bb3984b05173",
+      "name": "dpkg",
+      "version": "1.21.23"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "7442bdadcd44e818fddd786057db07639cc68225c389c7c240d3bb3984b05173",
+      "name": "dpkg-dev",
+      "version": "1.21.23"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "e2fsprogs",
+      "version": "1.47.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8fbcc77ed31f480a85654e9b6d1d25cbb95b62e9dc5159ae1565bca684c3e1dc",
+      "name": "findutils",
+      "version": "4.9.0-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "156004744edbf17a975f0004ac4a9295b160ab403d646c445235711255ca9ff8",
+      "name": "g++",
+      "version": "4:12.2.0-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "g++-12",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "156004744edbf17a975f0004ac4a9295b160ab403d646c445235711255ca9ff8",
+      "name": "gcc",
+      "version": "4:12.2.0-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "gcc-12",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "gcc-12-base:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8ceacdebe13249ea8aba6e400418e2b503c83a1f19ad92377380fb32ecf48d0c",
+      "name": "git",
+      "version": "1:2.39.5-0+deb12u3"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "8ceacdebe13249ea8aba6e400418e2b503c83a1f19ad92377380fb32ecf48d0c",
+      "name": "git-man",
+      "version": "1:2.39.5-0+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "84dab06b5c1baf3a7a45c3cdc5f98fb121234e98fdd6266c3f773d54fcdc4f54",
+      "name": "gpgv",
+      "version": "2.2.40-1.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "42d9b4d610396b1e8d1303dcb9487af3f5a2d2709623cf03a04cf76acdf6c5e3",
+      "name": "grep",
+      "version": "3.8-5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca5dd5098fe2e1c0f0d05196f5b3da8b414a807702e6ca8b536eb5fd3059130",
+      "name": "gzip",
+      "version": "1.12-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "94189fc5a9a7b7224d96e1a0cfdfe9be0df2018b04bf21d591627ab96b30cad1",
+      "name": "hostname",
+      "version": "3.23+nmu1"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "7534601cc4fa513804d16490359f5831e7b6a1212da3bbf948bebdd4c8799783",
+      "name": "init-system-helpers",
+      "version": "1.65.2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "64dd431de658b1c6b7f32e4e8ad63270adb3b2b325e45db48f6f313ee6a0fe1b",
+      "name": "iproute2",
+      "version": "6.1.0-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "98d9db67583be21fcd3695b30fde55d9334e83ac07921ee0efc47efffa4e49a1",
+      "name": "iputils-ping",
+      "version": "3:20221126-1+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9a2dfb4a5abc7e84be2cc41f1089be665519c9409549296f6c19de57ab1d37c2",
+      "name": "libacl1:amd64",
+      "version": "2.3.1-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b4701305243d8d746f4acaafe15d94f946251b05691bd6917fef41dd15e9ee12",
+      "name": "libapt-pkg6.0:amd64",
+      "version": "2.6.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libasan8:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libatomic1:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "0cbec745d85ea775450b2d54fac55277197f429e52d611f72852ed420450620e",
+      "name": "libattr1:amd64",
+      "version": "1:2.5.1-4"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc",
+      "name": "libaudit-common",
+      "version": "1:3.0.9-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc",
+      "name": "libaudit1:amd64",
+      "version": "1:3.0.9-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a81bdd422c2c015deca84bf6ad249bf0d7d19885fc01d1894463291b0b7313e1",
+      "name": "libbinutils:amd64",
+      "version": "2.40-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "libblkid1:amd64",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "3ea54ea6d9464e208a8011e5cdebbb2ddcd8cf3f8954606f60ff2b168d9a4c22",
+      "name": "libbpf1:amd64",
+      "version": "1:1.1.2-0+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "24a64e5bb83d0960d1835696a1e23c0896ad6055b0ca47c66ab0eb9a766324b1",
+      "name": "libbrotli1:amd64",
+      "version": "1.0.9-2+b6"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "00fd7be5d907a6bcc409a80f2d565f508673db4761d54623691f89ae3aa20fc7",
+      "name": "libbsd0:amd64",
+      "version": "0.11.7-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "832ed535ff3c3d025a8d2348eb1b697b89addcf2eaadbc17650262040b9145e2",
+      "name": "libbz2-1.0:amd64",
+      "version": "1.0.8-5+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987",
+      "name": "libc-bin",
+      "version": "2.36-9+deb12u14"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987",
+      "name": "libc-dev-bin",
+      "version": "2.36-9+deb12u14"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987",
+      "name": "libc6:amd64",
+      "version": "2.36-9+deb12u14"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987",
+      "name": "libc6-dev:amd64",
+      "version": "2.36-9+deb12u14"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "49b5db19990a3e3cc1a9ed716aed231f6f3c1c217e58f62ae4dc2818c6d3e9cc",
+      "name": "libcap-ng0:amd64",
+      "version": "0.8.3-1+b3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "e60a5642e12e340060e4e519a65b2eb0330be2917854841c644e36268f607d54",
+      "name": "libcap2:amd64",
+      "version": "1:2.66-4+deb12u3+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "e60a5642e12e340060e4e519a65b2eb0330be2917854841c644e36268f607d54",
+      "name": "libcap2-bin",
+      "version": "1:2.66-4+deb12u3+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libcc1-0:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "libcom-err2:amd64",
+      "version": "1.47.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "5a5e7ca0e9f3f9679977e3a3e9ede45ad92885a3297ea78e766979f9866c5a16",
+      "name": "libcrypt-dev:amd64",
+      "version": "1:4.4.33-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "5a5e7ca0e9f3f9679977e3a3e9ede45ad92885a3297ea78e766979f9866c5a16",
+      "name": "libcrypt1:amd64",
+      "version": "1:4.4.33-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a81bdd422c2c015deca84bf6ad249bf0d7d19885fc01d1894463291b0b7313e1",
+      "name": "libctf-nobfd0:amd64",
+      "version": "2.40-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a81bdd422c2c015deca84bf6ad249bf0d7d19885fc01d1894463291b0b7313e1",
+      "name": "libctf0:amd64",
+      "version": "2.40-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a7c131b21e6e73b3b085a7d9f1637b68f5f92b832cc6f462e0c978fbe7841ccb",
+      "name": "libcurl3-gnutls:amd64",
+      "version": "7.88.1-10+deb12u15"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8b53da37d73289d9df7317b3a2dbe16491f1fa9fec8b77b86d69704b40ce2c26",
+      "name": "libdb5.3:amd64",
+      "version": "5.3.28+dfsg2-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "cf63099896d1c0f6529c41b8d95738e6fea342ffba609187d339c4f38ce36ecc",
+      "name": "libdebconfclient0:amd64",
+      "version": "0.270"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "7442bdadcd44e818fddd786057db07639cc68225c389c7c240d3bb3984b05173",
+      "name": "libdpkg-perl",
+      "version": "1.21.23"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "d754a0edec1a510561aa643040456266536e3ec26bdb22e69a11c3f7b5de2339",
+      "name": "libelf1:amd64",
+      "version": "0.188-2.1"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "5ece6f21cf4f64f798479e81abd3f25a20bd7e8fc13d98c680b25a8af6b954af",
+      "name": "liberror-perl",
+      "version": "0.17029-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "60919fe1a156395ff14511bb6ff79756c50ade2fff59ac60c9bae1d8a7fe6292",
+      "name": "libexpat1:amd64",
+      "version": "2.5.0-1+deb12u4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "libext2fs2:amd64",
+      "version": "1.47.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "f83d2ecba1ea4d99957e81c50bebbd076a128194288a3ec22cc8ccdb77c43087",
+      "name": "libffi8:amd64",
+      "version": "3.4.4-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libgcc-12-dev:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libgcc-s1:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "95db2f9da663f2bfe2aabe9c72fce9d6c9ae767b912f397d7823f50bd55a1a7d",
+      "name": "libgcrypt20:amd64",
+      "version": "1.10.1-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8bea8cf2f94cd8b37a0b8b3a2b974122b9194c1165e6ad508e366c74679e8817",
+      "name": "libgdbm-compat4:amd64",
+      "version": "1.23-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8bea8cf2f94cd8b37a0b8b3a2b974122b9194c1165e6ad508e366c74679e8817",
+      "name": "libgdbm6:amd64",
+      "version": "1.23-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "7d366aef5ba325150246de1d7820c4c9926cd27ca61a69948492b26cd3b61601",
+      "name": "libgmp10:amd64",
+      "version": "2:6.2.1+dfsg1-1.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "bb7e5c24b3e27bbba5671dd710d159a0066833bda4caa1d55d8027ffed539337",
+      "name": "libgnutls30:amd64",
+      "version": "3.7.9-2+deb12u4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libgomp1:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8760fd36efa1d7186f8769d4e76a3e678045b94d54465bf6f2db5eb871c7c27f",
+      "name": "libgpg-error0:amd64",
+      "version": "1.46-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a81bdd422c2c015deca84bf6ad249bf0d7d19885fc01d1894463291b0b7313e1",
+      "name": "libgprofng0:amd64",
+      "version": "2.40-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+      "name": "libgssapi-krb5-2:amd64",
+      "version": "1.20.1-2+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "ca2ca597320220c00ef6dc0fe5d0d82025548d6d4ba80e85615eb691f9021f93",
+      "name": "libhogweed6:amd64",
+      "version": "3.8.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "41702469f28e8ff406345e3d1dd0c741f11bdfca319264f67036efd6aaa79e4b",
+      "name": "libidn2-0:amd64",
+      "version": "2.3.3-1+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "fb1ea085945df53c756939eecf5d9bf4072316538bc3b314a5408350b679a637",
+      "name": "libisl23:amd64",
+      "version": "0.25-1.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libitm1:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "29347e2528ab31d20e8582b09aa89cd878d306c59a273541141c9aede1903cb8",
+      "name": "libjansson4:amd64",
+      "version": "2.14-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+      "name": "libk5crypto3:amd64",
+      "version": "1.20.1-2+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "c62fe37d22203046611112bc10a9e03a39a7f73bec1b061e7c615326166d9ff5",
+      "name": "libkeyutils1:amd64",
+      "version": "1.6.3-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+      "name": "libkrb5-3:amd64",
+      "version": "1.20.1-2+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+      "name": "libkrb5support0:amd64",
+      "version": "1.20.1-2+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b4081907f0d9a4110736fa6540dc8ca9d7d60a20878b5d78f84916cc04907bdc",
+      "name": "libldap-2.5-0:amd64",
+      "version": "2.5.13+dfsg-5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "liblsan0:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "d3be0f43fe14da244f97c451bbae789c0acf868612598a69f5f22a289abeca40",
+      "name": "liblz4-1:amd64",
+      "version": "1.9.4-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a2dc8fac0f496e1c58aff67018cf0c6b88336316afa5642f9335b71642e28aa8",
+      "name": "liblzma5:amd64",
+      "version": "5.4.1-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "4365ef6255ad553fce69dd4bc0e093472c5d0e41b8ea493a545cc926ce171aa6",
+      "name": "libmd0:amd64",
+      "version": "1.0.4-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "62d24d881d6d292869b7627fec8e6403bcc83e2268d3e93ee4ad1d26c00cd3f8",
+      "name": "libmnl0:amd64",
+      "version": "1.0.4-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "libmount1:amd64",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "80763e4cca3963670637b98abff467ee09b83d1737d683ad5ccfb1e919bea94b",
+      "name": "libmpc3:amd64",
+      "version": "1.3.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "c434a44e656a89e72b5cee13bba6719011e0899bfc626ab9c08205010ab2dbbe",
+      "name": "libmpfr6:amd64",
+      "version": "4.2.0-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+      "name": "libncursesw6:amd64",
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "ca2ca597320220c00ef6dc0fe5d0d82025548d6d4ba80e85615eb691f9021f93",
+      "name": "libnettle8:amd64",
+      "version": "3.8.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a34ae32a5eba61e535835a8de7c398f47e420247d339bc400a3b9c618ba29a3d",
+      "name": "libnghttp2-14:amd64",
+      "version": "1.52.0-1+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "7d9c79b73fd956319a90cd210441498b225e00960352c4c6d447436481bb0eec",
+      "name": "libnsl-dev:amd64",
+      "version": "1.3.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "7d9c79b73fd956319a90cd210441498b225e00960352c4c6d447436481bb0eec",
+      "name": "libnsl2:amd64",
+      "version": "1.3.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "ed139379f7c874f0ee75f3ddcc2e01091dd828d84ee1a0bdff6a1c5673ee6e58",
+      "name": "libp11-kit0:amd64",
+      "version": "0.24.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+      "name": "libpam-modules:amd64",
+      "version": "1.5.2-6+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+      "name": "libpam-modules-bin",
+      "version": "1.5.2-6+deb12u1"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+      "name": "libpam-runtime",
+      "version": "1.5.2-6+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+      "name": "libpam0g:amd64",
+      "version": "1.5.2-6+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "030511beb4d9d620ad09914c369c36ec0528dcf301d1923cc643c948ee7c6a38",
+      "name": "libpcre2-8-0:amd64",
+      "version": "10.42-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b52f3ca17b45473cb0da6ec46748949101fcf0dda1fd5d8b306e6c97fd41af4d",
+      "name": "libperl5.36:amd64",
+      "version": "5.36.0-7+deb12u4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "bbafb0cf52d34465fc69f5ffd22d724224f6a2f28402c88b045c69d88af06aaf",
+      "name": "libpsl5:amd64",
+      "version": "0.21.2-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libquadmath0:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "3591a8e4de849d910c5ee9045388344ef151c23b10cf8c6b1950f89f1ba1569c",
+      "name": "libreadline8:amd64",
+      "version": "8.2-1.3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "4302abcc1ea1b6cbe8d19c79b892acf78878030220210707c19006828866207c",
+      "name": "librtmp1:amd64",
+      "version": "2.4+20151223.gitfa8646d.1-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "5e77ddcac7fb682d696bc4b034dc2869e5a9011e8c2ed3c570ab8db0f4506931",
+      "name": "libsasl2-2:amd64",
+      "version": "2.1.28+dfsg-10"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "5e77ddcac7fb682d696bc4b034dc2869e5a9011e8c2ed3c570ab8db0f4506931",
+      "name": "libsasl2-modules-db:amd64",
+      "version": "2.1.28+dfsg-10"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "6da0653a365b80ab31478dbfe9e7c358e80d58b6d2b52b4e16b4dbb42d7d9f5c",
+      "name": "libseccomp2:amd64",
+      "version": "2.5.4-1+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "641806738b0c6a3d03168c2649e6b94205198bb66cd557e6bae3a20b71c9bb0b",
+      "name": "libselinux1:amd64",
+      "version": "3.4-1+b6"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51",
+      "name": "libsemanage-common",
+      "version": "3.4-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51",
+      "name": "libsemanage2:amd64",
+      "version": "3.4-1+b5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "78d2a34606a0302057ec499a3b3c07bcbc43ca334064ce4c80891a0f69c8f6c6",
+      "name": "libsepol2:amd64",
+      "version": "3.4-2.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "libsmartcols1:amd64",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "78e9df8f8153c91c762ec970b82d224ac4d30f05aa7773e7e17e268141e53873",
+      "name": "libsqlite3-0:amd64",
+      "version": "3.40.1-2+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "libss2:amd64",
+      "version": "1.47.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "98978241c573785aa7c8504e399bb66cfb3c40c1f20507a0d3c7580bfbf9d8d4",
+      "name": "libssh2-1:amd64",
+      "version": "1.10.0-3+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35",
+      "name": "libssl3:amd64",
+      "version": "3.0.15-1~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libstdc++-12-dev:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libstdc++6:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a7d06854714a1ca99f6dbd1a1641dde5bcf28635be149f6554449618f8f427f3",
+      "name": "libsystemd0:amd64",
+      "version": "252.36-1~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "572ad60ad184d8f52c6dc66d83a61a68f137db560b3452ce00588c9ecf128a65",
+      "name": "libtasn1-6:amd64",
+      "version": "4.19.0-2+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+      "name": "libtinfo6:amd64",
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "401dcf98d8ef2b712ec6ab310dbf727fc2cdce290bfde5b6d0b609a927530217",
+      "name": "libtirpc-common",
+      "version": "1.3.3+ds-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "401dcf98d8ef2b712ec6ab310dbf727fc2cdce290bfde5b6d0b609a927530217",
+      "name": "libtirpc-dev:amd64",
+      "version": "1.3.3+ds-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "401dcf98d8ef2b712ec6ab310dbf727fc2cdce290bfde5b6d0b609a927530217",
+      "name": "libtirpc3:amd64",
+      "version": "1.3.3+ds-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libtsan2:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libubsan1:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a7d06854714a1ca99f6dbd1a1641dde5bcf28635be149f6554449618f8f427f3",
+      "name": "libudev1:amd64",
+      "version": "252.36-1~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "0035f89e5317f3cec389383e8727788521b0fde3e75cea881fa0e92e1d48cb57",
+      "name": "libunistring2:amd64",
+      "version": "1.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "libuuid1:amd64",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "0ee8d65c982acb051d709d3128e8413bf1a15194fddbde3ece711d2f8f295a95",
+      "name": "libxtables12:amd64",
+      "version": "1.8.9-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a123c93b07e781919ae996276ac02bb1c8b19dfde88176cd1240ab277c14a4ce",
+      "name": "libxxhash0:amd64",
+      "version": "0.8.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "35e85e8e9bbb71492c5f5dddf39ed65b68775a02ad8d710c25d097b497f06c49",
+      "name": "libzstd1:amd64",
+      "version": "1.5.4+dfsg2-5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b747c37629e008bbb10bf2d44c5bb6e014ce2dde36b9ef1dc81e1425417c24bf",
+      "name": "linux-libc-dev:amd64",
+      "version": "6.1.187-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a4c3e5b19700dd3cc5961663d204bd7150f65f913314682aede5931548c436d5",
+      "name": "login",
+      "version": "1:4.13+dfsg1-1+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "logsave",
+      "version": "1.47.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "16deb73e706ec72758ce5e079a80d1aab17f3834449da9b718c4a4b60eb1f6ec",
+      "name": "make",
+      "version": "4.3-4.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "167d04422f2fdf76ab565878c23be8ba0c2ebb2c57a5dac0a5a59ccd27e747a5",
+      "name": "mawk",
+      "version": "1.3.4.20200120-3.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "mount",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+      "name": "ncurses-base",
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+      "name": "ncurses-bin",
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "795b66147ea5ad692991caa7008ece551fb0fa88b9c53656223bd1518dc58ab2",
+      "name": "netbase",
+      "version": "6.4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35",
+      "name": "openssl",
+      "version": "3.0.15-1~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a4c3e5b19700dd3cc5961663d204bd7150f65f913314682aede5931548c436d5",
+      "name": "passwd",
+      "version": "1:4.13+dfsg1-1+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8c70d7b0af209abe627c97cd21883931b891c820d0a4affcc10b789a23538a0d",
+      "name": "patch",
+      "version": "2.7.6-7"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b52f3ca17b45473cb0da6ec46748949101fcf0dda1fd5d8b306e6c97fd41af4d",
+      "name": "perl",
+      "version": "5.36.0-7+deb12u4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b52f3ca17b45473cb0da6ec46748949101fcf0dda1fd5d8b306e6c97fd41af4d",
+      "name": "perl-base",
+      "version": "5.36.0-7+deb12u4"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "b52f3ca17b45473cb0da6ec46748949101fcf0dda1fd5d8b306e6c97fd41af4d",
+      "name": "perl-modules-5.36",
+      "version": "5.36.0-7+deb12u4"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "3591a8e4de849d910c5ee9045388344ef151c23b10cf8c6b1950f89f1ba1569c",
+      "name": "readline-common",
+      "version": "8.2-1.3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "824b5da9d19adbc33463cc298cbcb3f8dfeb8016c68845b0d1fa4a8bc6ba0816",
+      "name": "rpcsvc-proto",
+      "version": "1.4.3-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "719320e425e8e6da53a55e0fcfa2f2ed9b1332cea16abd65321bd651b2a88568",
+      "name": "sed",
+      "version": "4.9-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "ad7cb339e58a88918a883d553ca236795191f027e158788a8b33f747ff502fb2",
+      "name": "sysvinit-utils",
+      "version": "3.06-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "bea61e0c172868e07845cf50423f97f093a9a46de167dbbe333a38be610c8e00",
+      "name": "tar",
+      "version": "1.34+dfsg-1.2+deb12u1"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "cb61132bc0fc7b26ef5a82ee18b2fb644a1362f4f286ed980ff22e408471f59a",
+      "name": "tzdata",
+      "version": "2025b-0+deb12u1"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "9836bfe2ef94505bbf29701e8c90799ab1a5fd966d26d60d019a822cdbf3d61a",
+      "name": "usr-is-merged",
+      "version": "37~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "util-linux",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "util-linux-extra",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a2dc8fac0f496e1c58aff67018cf0c6b88336316afa5642f9335b71642e28aa8",
+      "name": "xz-utils",
+      "version": "5.4.1-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9e5b96d63773a5d177ba264254390f792be07e41748ebd94730981c6cac31cc6",
+      "name": "zlib1g:amd64",
+      "version": "1:1.2.13.dfsg-1"
+    }
+  ],
+  "packages": [
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 11357,
+          "path": "accelerate-0.31.0.dist-info/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ],
+      "license_metadata": "Apache",
+      "locked": false,
+      "name": "accelerate",
+      "version": "0.31.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1083,
+          "path": "annotated_types-0.8.0.dist-info/licenses/LICENSE",
+          "sha256": "fe1049884b1a0d9342901e88e07f32925d24b3121d9972b6a6805fb9824b095d"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "annotated-types",
+      "version": "0.8.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 568,
+          "path": "async_timeout-5.0.1.dist-info/LICENSE",
+          "sha256": "e18d7bb8f513e2c46bb585c94b585bd30720dd3ccb21ddb0786f72d16658f92c"
+        }
+      ],
+      "license_metadata": "Apache 2",
+      "locked": false,
+      "name": "async-timeout",
+      "version": "5.0.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1057,
+          "path": "base58-2.1.1.dist-info/COPYING",
+          "sha256": "cf4694f040b7a31cd8ec3dbcd0b583a601c0d4c37de016be7aa0a06e3a6a3a54"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "base58",
+      "version": "2.1.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1086,
+          "path": "bitsandbytes-0.41.1.dist-info/LICENSE",
+          "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85"
+        },
+        {
+          "bytes": 265,
+          "path": "bitsandbytes-0.41.1.dist-info/NOTICE.md",
+          "sha256": "ff8cc32f62fc06a530b66be8ce747fc2a8509ac3f64307571eb0079c1333025f"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "bitsandbytes",
+      "version": "0.41.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 18674,
+          "path": "blake3-1.0.10.dist-info/licenses/LICENSE",
+          "sha256": "f1d7009e06288836c56e3b5d421b3b17f83572b780d49d70ded7b7945198a5e5"
+        }
+      ],
+      "license_metadata": "CC0-1.0 OR Apache-2.0",
+      "locked": false,
+      "name": "blake3",
+      "version": "1.0.10"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 989,
+          "path": "certifi-2026.7.22.dist-info/licenses/LICENSE",
+          "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+        }
+      ],
+      "license_metadata": "MPL-2.0",
+      "locked": false,
+      "name": "certifi",
+      "version": "2026.7.22"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "MIT-0",
+      "license_files": [
+        {
+          "bytes": 1123,
+          "path": "cffi-2.1.1.dist-info/licenses/LICENSE",
+          "sha256": "5ba24ddc57067f9249add644c3afc41a5d6dc37e23433ef759d95df370b0af63"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "cffi",
+      "version": "2.1.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1071,
+          "path": "charset_normalizer-3.5.2.dist-info/licenses/LICENSE",
+          "sha256": "6d0d41bfe170ac6c7dc248c9a63e254d0fb45a60d50a8257d0af92c6e249b887"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "charset-normalizer",
+      "version": "3.5.2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1070,
+          "path": "configargparse-1.8.0.dist-info/licenses/LICENSE",
+          "sha256": "4a01a0948e46d7a94f44fda042d3e02e5319c2aa351357cd13492ca827e01d07"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "ConfigArgParse",
+      "version": "1.8.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 6555,
+          "path": "cpufeature-0.2.1.dist-info/LICENSE",
+          "sha256": "36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673"
+        }
+      ],
+      "license_metadata": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+      "locked": false,
+      "name": "cpufeature",
+      "version": "0.2.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "Apache-2.0 OR BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 197,
+          "path": "cryptography-50.0.2.dist-info/licenses/LICENSE",
+          "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"
+        },
+        {
+          "bytes": 11360,
+          "path": "cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "bytes": 1532,
+          "path": "cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "cryptography",
+      "version": "50.0.2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "Dijkstar",
+      "version": "2.6.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1088,
+          "path": "filelock-3.32.3.dist-info/licenses/LICENSE",
+          "sha256": "608c89d5060ae9921adccf3236695bc654a9946e12323ef6c021dfa04e294d48"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "filelock",
+      "version": "3.32.3"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1513,
+          "path": "fsspec-2026.7.0.dist-info/licenses/LICENSE",
+          "sha256": "2dc35496ce53a7307915c008a844aad53e772b49b34cdd00445067691407ec94"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "fsspec",
+      "version": "2026.7.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 29687,
+          "path": "grpcio-1.68.1.dist-info/LICENSE",
+          "sha256": "590198e3f305f2c347fde64d637c65492bbef554db6c8364e149cd375e3797ee"
+        }
+      ],
+      "license_metadata": "Apache License 2.0",
+      "locked": false,
+      "name": "grpcio",
+      "version": "1.68.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": "Apache License 2.0",
+      "locked": false,
+      "name": "grpcio-tools",
+      "version": "1.68.1"
+    },
+    {
+      "direct_url": {
+        "url": "https://github.com/learning-at-home/hivemind.git",
+        "vcs_info": {
+          "commit_id": "213bff98a62accb91f254e2afdccbf1d69ebdea9",
+          "requested_revision": "213bff98a62accb91f254e2afdccbf1d69ebdea9",
+          "vcs": "git"
+        }
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1096,
+          "path": "hivemind-1.2.0.dev0.dist-info/LICENSE",
+          "sha256": "9c31e76fb486b8c6d3d63e24bf86e6701d033749159c6d99facbc10fe783364f"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "hivemind",
+      "version": "1.2.0.dev0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 11357,
+          "path": "huggingface_hub-0.25.2.dist-info/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ],
+      "license_metadata": "Apache",
+      "locked": false,
+      "name": "huggingface-hub",
+      "version": "0.25.2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1056,
+          "path": "humanfriendly-10.0.dist-info/LICENSE.txt",
+          "sha256": "4ac48f4117809f2734066150450f120b3bb110ac1d3b32170795e0560dbbc1f5"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "humanfriendly",
+      "version": "10.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1541,
+          "path": "idna-3.20.dist-info/licenses/LICENSE.md",
+          "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "idna",
+      "version": "3.20"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1475,
+          "path": "jinja2-3.1.6.dist-info/licenses/LICENSE.txt",
+          "sha256": "3b49dcee4105eb37bac10faf1be260408fe85d252b8e9df2e0979fc1e094437b"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "Jinja2",
+      "version": "3.1.6"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1475,
+          "path": "markupsafe-3.0.3.dist-info/licenses/LICENSE.txt",
+          "sha256": "489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "MarkupSafe",
+      "version": "3.0.3"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1074,
+          "path": "mmh3-5.3.1.dist-info/licenses/LICENSE",
+          "sha256": "bf3469397307c3081d44d89c1dd72191348d93837ec6f6bd354d6d4ecdcae8e4"
+        }
+      ],
+      "license_metadata": "Full license text preserved in installed distribution; see license file hashes",
+      "locked": false,
+      "name": "mmh3",
+      "version": "5.3.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "morphys",
+      "version": "1.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1537,
+          "path": "mpmath-1.3.0.dist-info/LICENSE",
+          "sha256": "c26cae81da4508e5e249985777a33821f183223ebb74d7f8cfbf90fe7eef2fb7"
+        }
+      ],
+      "license_metadata": "BSD",
+      "locked": false,
+      "name": "mpmath",
+      "version": "1.3.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "Apache-2.0",
+      "license_files": [
+        {
+          "bytes": 614,
+          "path": "msgpack-1.2.3.dist-info/licenses/COPYING",
+          "sha256": "492dedba85da5872f78e6091bcd1fea474d660d35acb4dee964b8aab3f007427"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "msgpack",
+      "version": "1.2.3"
+    },
+    {
+      "direct_url": {
+        "url": "https://github.com/multiformats/py-multiaddr.git",
+        "vcs_info": {
+          "commit_id": "e01dbd38f2c0464c0f78b556691d655265018cce",
+          "requested_revision": "e01dbd38f2c0464c0f78b556691d655265018cce",
+          "vcs": "git"
+        }
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 552,
+          "path": "multiaddr-0.0.9.dist-info/LICENSE-APACHE2",
+          "sha256": "b135e92e7f062a551ab34dc8f47679c77a68cf33d88565706048668c32e1a60e"
+        },
+        {
+          "bytes": 1125,
+          "path": "multiaddr-0.0.9.dist-info/LICENSE-MIT",
+          "sha256": "6bc236a8f976cf54ca663f67d826647cb1f8cbb99583ce392fe868fe9d9852a1"
+        }
+      ],
+      "license_metadata": "MIT License",
+      "locked": false,
+      "name": "multiaddr",
+      "version": "0.0.9"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1630,
+          "path": "netaddr-1.3.0.dist-info/LICENSE.rst",
+          "sha256": "36dcdc429f76107d1697396ca0d8c43b343808c98beacb3405f472a76b65bffa"
+        }
+      ],
+      "license_metadata": "BSD License",
+      "locked": false,
+      "name": "netaddr",
+      "version": "1.3.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1763,
+          "path": "networkx-3.4.2.dist-info/LICENSE.txt",
+          "sha256": "5b433b90f755eb9bbd06feff1d1a4f5f232c5208a185694199e45fa95d762792"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "networkx",
+      "version": "3.4.2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 47721,
+          "path": "numpy-1.26.4.dist-info/LICENSE.txt",
+          "sha256": "1107b0c831e918d4f1dbc28a33190c77215ef278d4a4c4009572088770d4334a"
+        },
+        {
+          "bytes": 1018,
+          "path": "numpy/core/include/numpy/random/LICENSE.txt",
+          "sha256": "fbc539f47d0cf83bc61378080fb873d5c14630126cacbfe754035c3926daa5ec"
+        },
+        {
+          "bytes": 1593,
+          "path": "numpy/ma/LICENSE",
+          "sha256": "05f3b88351988ecfad10abe92c0c50e5875c6452d5009a0084cc291551ffcca6"
+        },
+        {
+          "bytes": 3511,
+          "path": "numpy/random/LICENSE.md",
+          "sha256": "103166b62b80443afb9eb3488e052ea06be0cff566b908f199e561fde49af19f"
+        }
+      ],
+      "license_metadata": "Full license text preserved in installed distribution; see license file hashes",
+      "locked": false,
+      "name": "numpy",
+      "version": "1.26.4"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "Apache-2.0 OR BSD-2-Clause",
+      "license_files": [
+        {
+          "bytes": 197,
+          "path": "packaging-26.3.dist-info/licenses/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "bytes": 10174,
+          "path": "packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "bytes": 1344,
+          "path": "packaging-26.3.dist-info/licenses/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "packaging",
+      "version": "26.3"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 11357,
+          "path": "peft-0.8.2.dist-info/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ],
+      "license_metadata": "Apache",
+      "locked": false,
+      "name": "peft",
+      "version": "0.8.2"
+    },
+    {
+      "direct_url": {
+        "url": "https://github.com/bigscience-workshop/petals.git",
+        "vcs_info": {
+          "commit_id": "22afba627a7eb4fcfe9418c49472c6a51334b8ac",
+          "requested_revision": "22afba627a7eb4fcfe9418c49472c6a51334b8ac",
+          "vcs": "git"
+        }
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1089,
+          "path": "petals-2.3.0.dev2.dist-info/LICENSE",
+          "sha256": "9acb1f6549d869a99f0df38533c8ab317f2879127c5ccfb87141b177014cabd3"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "petals",
+      "version": "2.3.0.dev2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1093,
+          "path": "pip-24.3.1.dist-info/LICENSE.txt",
+          "sha256": "634300a669d49aeae65b12c6c48c924c51a4cdf3d1ff086dc3456dc8bcaa2104"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "pip",
+      "version": "24.3.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: The Unlicense (Unlicense)"
+      ],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": "The Unlicense",
+      "locked": false,
+      "name": "prefetch_generator",
+      "version": "1.0.3"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1732,
+          "path": "protobuf-5.29.2.dist-info/LICENSE",
+          "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
+        }
+      ],
+      "license_metadata": "3-Clause BSD License",
+      "locked": false,
+      "name": "protobuf",
+      "version": "5.29.2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1548,
+          "path": "psutil-7.2.2.dist-info/LICENSE",
+          "sha256": "b89c063b3786e28e0c0a38f1931db61fed35e69dd2a2966fbecffee0f46c8d10"
+        }
+      ],
+      "license_metadata": "BSD-3-Clause",
+      "locked": false,
+      "name": "psutil",
+      "version": "7.2.2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1072,
+          "path": "py_cid-0.5.0.dist-info/licenses/LICENSE",
+          "sha256": "e5d30f37f8ea042f11a12081bd5c7a08b05ed30a34004a83bfa3d9807644a9b8"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "py-cid",
+      "version": "0.5.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1072,
+          "path": "py_multibase-2.0.0.dist-info/licenses/LICENSE",
+          "sha256": "e5d30f37f8ea042f11a12081bd5c7a08b05ed30a34004a83bfa3d9807644a9b8"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "py-multibase",
+      "version": "2.0.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1072,
+          "path": "py_multicodec-1.0.0.dist-info/licenses/LICENSE",
+          "sha256": "e5d30f37f8ea042f11a12081bd5c7a08b05ed30a34004a83bfa3d9807644a9b8"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "py-multicodec",
+      "version": "1.0.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1071,
+          "path": "py_multihash-3.0.0.dist-info/licenses/LICENSE",
+          "sha256": "ad2d3967605a8109c0835ef3d9385c102e7ee011535e0a2414795a9e2420ee82"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "py-multihash",
+      "version": "3.0.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1543,
+          "path": "pycparser-3.11.dist-info/licenses/LICENSE",
+          "sha256": "0a9e78156ae8b96caf1b4f11ac2df424b83de29736f9e757630548a6272fdf90"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "pycparser",
+      "version": "3.11"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1129,
+          "path": "pydantic-2.14.1.dist-info/licenses/LICENSE",
+          "sha256": "a9e186f3ca16b5eef84318e7a701721351a00cb7b8ae3a4394b67b49e3529ef3"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "pydantic",
+      "version": "2.14.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1080,
+          "path": "pydantic_core-2.50.1.dist-info/licenses/LICENSE",
+          "sha256": "2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "pydantic_core",
+      "version": "2.50.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Python Software Foundation License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 2598,
+          "path": "python_baseconv-1.2.2.dist-info/LICENSE",
+          "sha256": "28a97845cc4455936038947a808a3641591629032bdb37b7d07e3ae223974247"
+        }
+      ],
+      "license_metadata": "Python Software Foundation License",
+      "locked": false,
+      "name": "python-baseconv",
+      "version": "1.2.2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1101,
+          "path": "pyyaml-6.0.3.dist-info/licenses/LICENSE",
+          "sha256": "8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "PyYAML",
+      "version": "6.0.3"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "Apache-2.0 AND CNRI-Python",
+      "license_files": [
+        {
+          "bytes": 11584,
+          "path": "regex-2026.9.29.dist-info/licenses/LICENSE.txt",
+          "sha256": "bff55ef4cdcc8c14ce259f8e8ab60e264418440d6335f4dc138273fbd506144d"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "regex",
+      "version": "2026.9.29"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 10142,
+          "path": "requests-2.34.2.dist-info/licenses/LICENSE",
+          "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b"
+        },
+        {
+          "bytes": 38,
+          "path": "requests-2.34.2.dist-info/licenses/NOTICE",
+          "sha256": "f5110972dedad2b4e9d314518daf3b7d72d6e02e499acd802181de6f74571dcc"
+        }
+      ],
+      "license_metadata": "Apache-2.0",
+      "locked": false,
+      "name": "requests",
+      "version": "2.34.2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": null,
+      "locked": false,
+      "name": "safetensors",
+      "version": "0.4.5"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 46845,
+          "path": "scipy-1.15.3.dist-info/LICENSE.txt",
+          "sha256": "828cb9a7369c0a9f633ce7c10023f8d822f0f76b54ce25c723361d45b088879a"
+        },
+        {
+          "bytes": 1514,
+          "path": "scipy/_lib/_uarray/LICENSE",
+          "sha256": "c80c39b5fce06ba4897e14e0b0a88b54458334d951eb1361402ffad2cfb863b4"
+        },
+        {
+          "bytes": 1498,
+          "path": "scipy/fft/_pocketfft/LICENSE.md",
+          "sha256": "c254b2b5fd30ae3c89d36ba061730563b9760fca04f1b746a1b2c3157da2c789"
+        },
+        {
+          "bytes": 1892,
+          "path": "scipy/sparse/linalg/_eigen/arpack/COPYING",
+          "sha256": "0926566f9f406178d1214f8cc796e166b1213dd7c05e0c5b461a8b8ac9e50bbe"
+        },
+        {
+          "bytes": 1635,
+          "path": "scipy/spatial/qhull_src/COPYING.txt",
+          "sha256": "34db0c0c4f931861d720555c9cd7a2e228d1290ba29af0f2ee80c41bb2038afb"
+        }
+      ],
+      "license_metadata": "Full license text preserved in installed distribution; see license file hashes",
+      "locked": false,
+      "name": "scipy",
+      "version": "1.15.3"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": "Apache",
+      "locked": false,
+      "name": "sentencepiece",
+      "version": "0.2.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1023,
+          "path": "setuptools-75.6.0.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 7634,
+          "path": "setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE",
+          "sha256": "ade78d04982d69972d444a8e14a94f87a2334dd3855cc80348ea8e240aa0df2d"
+        },
+        {
+          "bytes": 1023,
+          "path": "setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 11358,
+          "path": "setuptools/_vendor/importlib_metadata-8.0.0.dist-info/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 1023,
+          "path": "setuptools/_vendor/inflect-7.3.1.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 1023,
+          "path": "setuptools/_vendor/jaraco.collections-5.1.0.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 1023,
+          "path": "setuptools/_vendor/jaraco.context-5.3.0.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 1023,
+          "path": "setuptools/_vendor/jaraco.functools-4.0.1.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 1023,
+          "path": "setuptools/_vendor/jaraco.text-3.12.1.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 1053,
+          "path": "setuptools/_vendor/more_itertools-10.3.0.dist-info/LICENSE",
+          "sha256": "09f1c8c9e941af3e584d59641ea9b87d83c0cb0fd007eb5ef391a7e2643c1a46"
+        },
+        {
+          "bytes": 197,
+          "path": "setuptools/_vendor/packaging-24.2.dist-info/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "bytes": 10174,
+          "path": "setuptools/_vendor/packaging-24.2.dist-info/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "bytes": 1344,
+          "path": "setuptools/_vendor/packaging-24.2.dist-info/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        },
+        {
+          "bytes": 1089,
+          "path": "setuptools/_vendor/platformdirs-4.2.2.dist-info/licenses/LICENSE",
+          "sha256": "29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6"
+        },
+        {
+          "bytes": 1072,
+          "path": "setuptools/_vendor/tomli-2.0.1.dist-info/LICENSE",
+          "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe"
+        },
+        {
+          "bytes": 1130,
+          "path": "setuptools/_vendor/typeguard-4.3.0.dist-info/LICENSE",
+          "sha256": "6163f7987dfb38d6bc320ce2b70b2f02b862bc41126516d552ef1cd43247e758"
+        },
+        {
+          "bytes": 13936,
+          "path": "setuptools/_vendor/typing_extensions-4.12.2.dist-info/LICENSE",
+          "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+        },
+        {
+          "bytes": 1107,
+          "path": "setuptools/_vendor/wheel-0.43.0.dist-info/LICENSE.txt",
+          "sha256": "30c23618679108f3e8ea1d2a658c7ca417bdfc891c98ef1a89fa4ff0c9828654"
+        },
+        {
+          "bytes": 1023,
+          "path": "setuptools/_vendor/zipp-3.19.2.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 493,
+          "path": "setuptools/config/NOTICE",
+          "sha256": "2dddf08818297a3b89d43d95ff659d8da85741108c9136dfa3a4d856c0623bd8"
+        },
+        {
+          "bytes": 18737,
+          "path": "setuptools/config/_validate_pyproject/NOTICE",
+          "sha256": "09c9bcea95ca086f8bc5bed174e40bc835b297d40fb5f86bbbb570fe0a5581a7"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "setuptools",
+      "version": "75.6.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1066,
+          "path": "six-1.17.0.dist-info/LICENSE",
+          "sha256": "4375ba20e2b9c6c4e7cad2940a628fd90e95cc3d50ee92aae755715d8ba1fbd0"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "six",
+      "version": "1.17.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 557,
+          "path": "sortedcontainers-2.4.0.dist-info/LICENSE",
+          "sha256": "1db7cae7fce6452e2e608e401a0f953e0133e4c2d75db69fb8ae851d2086f5b6"
+        }
+      ],
+      "license_metadata": "Apache 2.0",
+      "locked": false,
+      "name": "sortedcontainers",
+      "version": "2.4.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 11358,
+          "path": "speedtest_cli-2.1.3.dist-info/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ],
+      "license_metadata": "Apache License, Version 2.0",
+      "locked": false,
+      "name": "speedtest-cli",
+      "version": "2.1.3"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 7885,
+          "path": "sympy-1.14.0.dist-info/licenses/LICENSE",
+          "sha256": "07a5e9819f727b4986ad2829c7a29a6320d42575f720eb24d71b7fef573a0286"
+        },
+        {
+          "bytes": 1075,
+          "path": "sympy/parsing/latex/LICENSE.txt",
+          "sha256": "007bc30a58fa40a996e772047120de4eaf31f5110e4f9c3b5f93fcdfbe2eaca1"
+        }
+      ],
+      "license_metadata": "BSD",
+      "locked": false,
+      "name": "sympy",
+      "version": "1.14.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1097,
+          "path": "tensor_parallel-1.0.23.dist-info/LICENCE",
+          "sha256": "2309341dfa44957c65f1b3ca788ebcce7d1100086149c2387f17f02751c4421e"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "tensor-parallel",
+      "version": "1.0.23"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": null,
+      "locked": false,
+      "name": "tokenizers",
+      "version": "0.19.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 351851,
+          "path": "torch-2.3.1+cpu.dist-info/LICENSE",
+          "sha256": "9c2916d43b2b8aff6a3c6662ed584b6b2d7d6dcf84dd727181deeadc5472214e"
+        },
+        {
+          "bytes": 23632,
+          "path": "torch-2.3.1+cpu.dist-info/NOTICE",
+          "sha256": "c2cc7bf0caec7652c2b460a8a470bea1677f241e4ab8e431df34cf17f5a9fec0"
+        }
+      ],
+      "license_metadata": "BSD-3",
+      "locked": false,
+      "name": "torch",
+      "version": "2.3.1+cpu"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1985,
+          "path": "tqdm-4.70.1.dist-info/licenses/LICENCE",
+          "sha256": "fcff87c3a47ce8028a8512aa182d4fcf0ad1c90544ee75cf9b343684cac194de"
+        }
+      ],
+      "license_metadata": "MPL-2.0 AND MIT",
+      "locked": false,
+      "name": "tqdm",
+      "version": "4.70.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 11418,
+          "path": "transformers-4.43.1.dist-info/LICENSE",
+          "sha256": "77fd4710def9ec3c0f6225800e0235f15a425abd4a8b03559127fcd782612049"
+        }
+      ],
+      "license_metadata": "Apache 2.0 License",
+      "locked": false,
+      "name": "transformers",
+      "version": "4.43.1"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "PSF-2.0",
+      "license_files": [
+        {
+          "bytes": 13936,
+          "path": "typing_extensions-4.16.0.dist-info/licenses/LICENSE",
+          "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "typing_extensions",
+      "version": "4.16.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1090,
+          "path": "typing_inspection-0.4.4.dist-info/licenses/LICENSE",
+          "sha256": "804b59b25f2c31bd278f9202a19ae49a3945aa2664387e2d0a128c7cacc61ec3"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "typing-inspection",
+      "version": "0.4.4"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1093,
+          "path": "urllib3-2.8.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "urllib3",
+      "version": "2.8.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License",
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 11439,
+          "path": "uvloop-0.23.0.dist-info/licenses/LICENSE-APACHE",
+          "sha256": "377025287798f9dcd819e1f826fa5fc5e2f382528691ab0528c5cf8c8c282c27"
+        },
+        {
+          "bytes": 1105,
+          "path": "uvloop-0.23.0.dist-info/licenses/LICENSE-MIT",
+          "sha256": "6dd4c399f26de043d77a2ad7e31db4cb5bf08ea8368b0a42d6e158635cc8ab62"
+        }
+      ],
+      "license_metadata": "MIT License",
+      "locked": false,
+      "name": "uvloop",
+      "version": "0.23.0"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "varint",
+      "version": "1.0.2"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1107,
+          "path": "wheel-0.45.1.dist-info/LICENSE.txt",
+          "sha256": "30c23618679108f3e8ea1d2a658c7ca417bdfc891c98ef1a89fa4ff0c9828654"
+        },
+        {
+          "bytes": 197,
+          "path": "wheel/vendored/packaging/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "bytes": 10174,
+          "path": "wheel/vendored/packaging/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "bytes": 1344,
+          "path": "wheel/vendored/packaging/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        }
+      ],
+      "license_metadata": null,
+      "locked": false,
+      "name": "wheel",
+      "version": "0.45.1"
+    }
+  ],
+  "schema_version": 1,
+  "stack": "legacy",
+  "observed_on": "2026-10-17",
+  "image": "sha256:5a9f0d29d5fae48bb6f6c10a784d57925e315521b1020b642e145fbffd832760"
+}

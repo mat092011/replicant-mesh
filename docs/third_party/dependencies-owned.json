@@ -1,0 +1,2275 @@
+{
+  "errors": [],
+  "lock_sha256": "ec074730911798d0d08bd56fcd24f00db53d14dbe13e2be4e031150a52b82be3",
+  "locked_packages": 38,
+  "os_packages": [
+    {
+      "architecture": "all",
+      "copyright_sha256": "b143053a4862ab354831487b5f8bd31dc9ffdc589d15de9d9c764332a0209796",
+      "name": "adduser",
+      "version": "3.134"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b4701305243d8d746f4acaafe15d94f946251b05691bd6917fef41dd15e9ee12",
+      "name": "apt",
+      "version": "2.6.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "fd7e4aae7e7b05f217bcf2d02322825c360e66c52c4c2f1b28d784d6297a1c23",
+      "name": "base-files",
+      "version": "12.4+deb12u15"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "0f1cde79bd80a75f9029ae9a8c252b642223027ef36f6989c63a8230aae576a7",
+      "name": "base-passwd",
+      "version": "3.6.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "06319d84c3e5ed096036f6a9310a030c7e84e50dff2b8a6792285c83ec0ada73",
+      "name": "bash",
+      "version": "5.2.15-2+b13"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "bsdutils",
+      "version": "1:2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "e85e1bcad3a915dc7e6f41412bc5bdeba275cadd817896ea0451f2140a93967c",
+      "name": "ca-certificates",
+      "version": "20250419~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "24e86c5ca53d6bfd8e0c47988160daa62d10a74997fe11f651e1d9533c78bff6",
+      "name": "coreutils",
+      "version": "9.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "d98c53f281321baad38164aa9ae6e368a9253be6ec51bd26a759b5e72b326f4a",
+      "name": "dash",
+      "version": "0.5.12-2"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "57163c71bd8a5289660892827dd0dfaa7fef47f89deedc9dc6711ced7d0a28d7",
+      "name": "debconf",
+      "version": "1.5.82"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "b32aecaae84643700a33bc9ee83fa9b36938d35aa7b61b5042092eca77ddb732",
+      "name": "debian-archive-keyring",
+      "version": "2023.3+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "fd2d797e208bcfb713510e47a89867191180943e1167d44c2acd8ff1b88e5c10",
+      "name": "debianutils",
+      "version": "5.7-0.5~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8654d7cc7cdae1f31bb67a3ce5bf35d512c0bdfffd071df757edc54153cc7930",
+      "name": "diffutils",
+      "version": "1:3.8-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "7442bdadcd44e818fddd786057db07639cc68225c389c7c240d3bb3984b05173",
+      "name": "dpkg",
+      "version": "1.21.23"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "e2fsprogs",
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8fbcc77ed31f480a85654e9b6d1d25cbb95b62e9dc5159ae1565bca684c3e1dc",
+      "name": "findutils",
+      "version": "4.9.0-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "gcc-12-base:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "84dab06b5c1baf3a7a45c3cdc5f98fb121234e98fdd6266c3f773d54fcdc4f54",
+      "name": "gpgv",
+      "version": "2.2.40-1.1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "42d9b4d610396b1e8d1303dcb9487af3f5a2d2709623cf03a04cf76acdf6c5e3",
+      "name": "grep",
+      "version": "3.8-5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca5dd5098fe2e1c0f0d05196f5b3da8b414a807702e6ca8b536eb5fd3059130",
+      "name": "gzip",
+      "version": "1.12-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "94189fc5a9a7b7224d96e1a0cfdfe9be0df2018b04bf21d591627ab96b30cad1",
+      "name": "hostname",
+      "version": "3.23+nmu1"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "7534601cc4fa513804d16490359f5831e7b6a1212da3bbf948bebdd4c8799783",
+      "name": "init-system-helpers",
+      "version": "1.65.2+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "64dd431de658b1c6b7f32e4e8ad63270adb3b2b325e45db48f6f313ee6a0fe1b",
+      "name": "iproute2",
+      "version": "6.1.0-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9a2dfb4a5abc7e84be2cc41f1089be665519c9409549296f6c19de57ab1d37c2",
+      "name": "libacl1:amd64",
+      "version": "2.3.1-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b4701305243d8d746f4acaafe15d94f946251b05691bd6917fef41dd15e9ee12",
+      "name": "libapt-pkg6.0:amd64",
+      "version": "2.6.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "0cbec745d85ea775450b2d54fac55277197f429e52d611f72852ed420450620e",
+      "name": "libattr1:amd64",
+      "version": "1:2.5.1-4"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc",
+      "name": "libaudit-common",
+      "version": "1:3.0.9-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "6c7011e93f643b112c4cc3622131e28a30477afad6c4f5efe466b13aa7f603cc",
+      "name": "libaudit1:amd64",
+      "version": "1:3.0.9-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "libblkid1:amd64",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "3ea54ea6d9464e208a8011e5cdebbb2ddcd8cf3f8954606f60ff2b168d9a4c22",
+      "name": "libbpf1:amd64",
+      "version": "1:1.1.2-0+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "00fd7be5d907a6bcc409a80f2d565f508673db4761d54623691f89ae3aa20fc7",
+      "name": "libbsd0:amd64",
+      "version": "0.11.7-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "832ed535ff3c3d025a8d2348eb1b697b89addcf2eaadbc17650262040b9145e2",
+      "name": "libbz2-1.0:amd64",
+      "version": "1.0.8-5+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987",
+      "name": "libc-bin",
+      "version": "2.36-9+deb12u14"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987",
+      "name": "libc6:amd64",
+      "version": "2.36-9+deb12u14"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "49b5db19990a3e3cc1a9ed716aed231f6f3c1c217e58f62ae4dc2818c6d3e9cc",
+      "name": "libcap-ng0:amd64",
+      "version": "0.8.3-1+b3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "e60a5642e12e340060e4e519a65b2eb0330be2917854841c644e36268f607d54",
+      "name": "libcap2:amd64",
+      "version": "1:2.66-4+deb12u3+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "e60a5642e12e340060e4e519a65b2eb0330be2917854841c644e36268f607d54",
+      "name": "libcap2-bin",
+      "version": "1:2.66-4+deb12u3+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "libcom-err2:amd64",
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "5a5e7ca0e9f3f9679977e3a3e9ede45ad92885a3297ea78e766979f9866c5a16",
+      "name": "libcrypt1:amd64",
+      "version": "1:4.4.33-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8b53da37d73289d9df7317b3a2dbe16491f1fa9fec8b77b86d69704b40ce2c26",
+      "name": "libdb5.3:amd64",
+      "version": "5.3.28+dfsg2-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "cf63099896d1c0f6529c41b8d95738e6fea342ffba609187d339c4f38ce36ecc",
+      "name": "libdebconfclient0:amd64",
+      "version": "0.270"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "d754a0edec1a510561aa643040456266536e3ec26bdb22e69a11c3f7b5de2339",
+      "name": "libelf1:amd64",
+      "version": "0.188-2.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "libext2fs2:amd64",
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "f83d2ecba1ea4d99957e81c50bebbd076a128194288a3ec22cc8ccdb77c43087",
+      "name": "libffi8:amd64",
+      "version": "3.4.4-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libgcc-s1:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "95db2f9da663f2bfe2aabe9c72fce9d6c9ae767b912f397d7823f50bd55a1a7d",
+      "name": "libgcrypt20:amd64",
+      "version": "1.10.1-3+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8bea8cf2f94cd8b37a0b8b3a2b974122b9194c1165e6ad508e366c74679e8817",
+      "name": "libgdbm6:amd64",
+      "version": "1.23-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "7d366aef5ba325150246de1d7820c4c9926cd27ca61a69948492b26cd3b61601",
+      "name": "libgmp10:amd64",
+      "version": "2:6.2.1+dfsg1-1.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "bb7e5c24b3e27bbba5671dd710d159a0066833bda4caa1d55d8027ffed539337",
+      "name": "libgnutls30:amd64",
+      "version": "3.7.9-2+deb12u7"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "8760fd36efa1d7186f8769d4e76a3e678045b94d54465bf6f2db5eb871c7c27f",
+      "name": "libgpg-error0:amd64",
+      "version": "1.46-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+      "name": "libgssapi-krb5-2:amd64",
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "ca2ca597320220c00ef6dc0fe5d0d82025548d6d4ba80e85615eb691f9021f93",
+      "name": "libhogweed6:amd64",
+      "version": "3.8.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "41702469f28e8ff406345e3d1dd0c741f11bdfca319264f67036efd6aaa79e4b",
+      "name": "libidn2-0:amd64",
+      "version": "2.3.3-1+b1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+      "name": "libk5crypto3:amd64",
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "c62fe37d22203046611112bc10a9e03a39a7f73bec1b061e7c615326166d9ff5",
+      "name": "libkeyutils1:amd64",
+      "version": "1.6.3-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+      "name": "libkrb5-3:amd64",
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "936728f4181718f42951b881c1e8f1386bf6b2723c4fbc533c374d6f42c71816",
+      "name": "libkrb5support0:amd64",
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "d3be0f43fe14da244f97c451bbae789c0acf868612598a69f5f22a289abeca40",
+      "name": "liblz4-1:amd64",
+      "version": "1.9.4-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a2dc8fac0f496e1c58aff67018cf0c6b88336316afa5642f9335b71642e28aa8",
+      "name": "liblzma5:amd64",
+      "version": "5.4.1-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "4365ef6255ad553fce69dd4bc0e093472c5d0e41b8ea493a545cc926ce171aa6",
+      "name": "libmd0:amd64",
+      "version": "1.0.4-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "62d24d881d6d292869b7627fec8e6403bcc83e2268d3e93ee4ad1d26c00cd3f8",
+      "name": "libmnl0:amd64",
+      "version": "1.0.4-3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "libmount1:amd64",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+      "name": "libncursesw6:amd64",
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "ca2ca597320220c00ef6dc0fe5d0d82025548d6d4ba80e85615eb691f9021f93",
+      "name": "libnettle8:amd64",
+      "version": "3.8.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "7d9c79b73fd956319a90cd210441498b225e00960352c4c6d447436481bb0eec",
+      "name": "libnsl2:amd64",
+      "version": "1.3.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "ed139379f7c874f0ee75f3ddcc2e01091dd828d84ee1a0bdff6a1c5673ee6e58",
+      "name": "libp11-kit0:amd64",
+      "version": "0.24.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+      "name": "libpam-modules:amd64",
+      "version": "1.5.2-6+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+      "name": "libpam-modules-bin",
+      "version": "1.5.2-6+deb12u2"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+      "name": "libpam-runtime",
+      "version": "1.5.2-6+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9596b9028339d66c285422237728d6170e1e29d0b0d9adf0e9f1bda82e2391ce",
+      "name": "libpam0g:amd64",
+      "version": "1.5.2-6+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "030511beb4d9d620ad09914c369c36ec0528dcf301d1923cc643c948ee7c6a38",
+      "name": "libpcre2-8-0:amd64",
+      "version": "10.42-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "3591a8e4de849d910c5ee9045388344ef151c23b10cf8c6b1950f89f1ba1569c",
+      "name": "libreadline8:amd64",
+      "version": "8.2-1.3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "6da0653a365b80ab31478dbfe9e7c358e80d58b6d2b52b4e16b4dbb42d7d9f5c",
+      "name": "libseccomp2:amd64",
+      "version": "2.5.4-1+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "641806738b0c6a3d03168c2649e6b94205198bb66cd557e6bae3a20b71c9bb0b",
+      "name": "libselinux1:amd64",
+      "version": "3.4-1+b6"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51",
+      "name": "libsemanage-common",
+      "version": "3.4-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "e00e6a86c598f9e24ced0180a70a5f2f2e45e133d93adf2b17ce8a06ce4b1b51",
+      "name": "libsemanage2:amd64",
+      "version": "3.4-1+b5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "78d2a34606a0302057ec499a3b3c07bcbc43ca334064ce4c80891a0f69c8f6c6",
+      "name": "libsepol2:amd64",
+      "version": "3.4-2.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "libsmartcols1:amd64",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "78e9df8f8153c91c762ec970b82d224ac4d30f05aa7773e7e17e268141e53873",
+      "name": "libsqlite3-0:amd64",
+      "version": "3.40.1-2+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "libss2:amd64",
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35",
+      "name": "libssl3:amd64",
+      "version": "3.0.22-1~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "name": "libstdc++6:amd64",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a7d06854714a1ca99f6dbd1a1641dde5bcf28635be149f6554449618f8f427f3",
+      "name": "libsystemd0:amd64",
+      "version": "252.39-1~deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "572ad60ad184d8f52c6dc66d83a61a68f137db560b3452ce00588c9ecf128a65",
+      "name": "libtasn1-6:amd64",
+      "version": "4.19.0-2+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+      "name": "libtinfo6:amd64",
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "401dcf98d8ef2b712ec6ab310dbf727fc2cdce290bfde5b6d0b609a927530217",
+      "name": "libtirpc-common",
+      "version": "1.3.3+ds-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "401dcf98d8ef2b712ec6ab310dbf727fc2cdce290bfde5b6d0b609a927530217",
+      "name": "libtirpc3:amd64",
+      "version": "1.3.3+ds-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a7d06854714a1ca99f6dbd1a1641dde5bcf28635be149f6554449618f8f427f3",
+      "name": "libudev1:amd64",
+      "version": "252.39-1~deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "0035f89e5317f3cec389383e8727788521b0fde3e75cea881fa0e92e1d48cb57",
+      "name": "libunistring2:amd64",
+      "version": "1.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "libuuid1:amd64",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "0ee8d65c982acb051d709d3128e8413bf1a15194fddbde3ece711d2f8f295a95",
+      "name": "libxtables12:amd64",
+      "version": "1.8.9-2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a123c93b07e781919ae996276ac02bb1c8b19dfde88176cd1240ab277c14a4ce",
+      "name": "libxxhash0:amd64",
+      "version": "0.8.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "35e85e8e9bbb71492c5f5dddf39ed65b68775a02ad8d710c25d097b497f06c49",
+      "name": "libzstd1:amd64",
+      "version": "1.5.4+dfsg2-5"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a4c3e5b19700dd3cc5961663d204bd7150f65f913314682aede5931548c436d5",
+      "name": "login",
+      "version": "1:4.13+dfsg1-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "1ca415a294c0e56958c4f795b3f1f69ea3479bca53d7811f5cdd020a258949db",
+      "name": "logsave",
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "167d04422f2fdf76ab565878c23be8ba0c2ebb2c57a5dac0a5a59ccd27e747a5",
+      "name": "mawk",
+      "version": "1.3.4.20200120-3.1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "mount",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+      "name": "ncurses-base",
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "f0974fb41778e23c94111ff90da0546de8971f8270c58877283d372e6bd7f17e",
+      "name": "ncurses-bin",
+      "version": "6.4-4"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "795b66147ea5ad692991caa7008ece551fb0fa88b9c53656223bd1518dc58ab2",
+      "name": "netbase",
+      "version": "6.4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35",
+      "name": "openssl",
+      "version": "3.0.22-1~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "a4c3e5b19700dd3cc5961663d204bd7150f65f913314682aede5931548c436d5",
+      "name": "passwd",
+      "version": "1:4.13+dfsg1-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "b52f3ca17b45473cb0da6ec46748949101fcf0dda1fd5d8b306e6c97fd41af4d",
+      "name": "perl-base",
+      "version": "5.36.0-7+deb12u4"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "3591a8e4de849d910c5ee9045388344ef151c23b10cf8c6b1950f89f1ba1569c",
+      "name": "readline-common",
+      "version": "8.2-1.3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "719320e425e8e6da53a55e0fcfa2f2ed9b1332cea16abd65321bd651b2a88568",
+      "name": "sed",
+      "version": "4.9-1+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "ad7cb339e58a88918a883d553ca236795191f027e158788a8b33f747ff502fb2",
+      "name": "sysvinit-utils",
+      "version": "3.06-4"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "bea61e0c172868e07845cf50423f97f093a9a46de167dbbe333a38be610c8e00",
+      "name": "tar",
+      "version": "1.34+dfsg-1.2+deb12u1"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "cb61132bc0fc7b26ef5a82ee18b2fb644a1362f4f286ed980ff22e408471f59a",
+      "name": "tzdata",
+      "version": "2026c-0+deb12u1"
+    },
+    {
+      "architecture": "all",
+      "copyright_sha256": "9836bfe2ef94505bbf29701e8c90799ab1a5fd966d26d60d019a822cdbf3d61a",
+      "name": "usr-is-merged",
+      "version": "37~deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "util-linux",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "30539a2df6a89d844f43c727505a3193a60515f8ec6cdede8cc515ed22941d1c",
+      "name": "util-linux-extra",
+      "version": "2.38.1-5+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "copyright_sha256": "9e5b96d63773a5d177ba264254390f792be07e41748ebd94730981c6cac31cc6",
+      "name": "zlib1g:amd64",
+      "version": "1:1.2.13.dfsg-1"
+    }
+  ],
+  "packages": [
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101",
+          "hashes": {
+            "sha256": "117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/3e/30/e900b21425a860e195f32e37657aa1f7c7f2b1bfb26f03ca209b90933c06/annotated_doc-0.0.5-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1086,
+          "path": "annotated_doc-0.0.5.dist-info/licenses/LICENSE",
+          "sha256": "fff170779a6acbf65abdb405c087f1cee1786691e4a96a4034517e4a504a0cdf"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "annotated-doc",
+      "version": "0.0.5"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101",
+          "hashes": {
+            "sha256": "6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/12/b8/4bd346e22b28902df4d651910f5242c28d84e4a5c2435ca5c3f797ed7e2e/anyio-4.15.1-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1081,
+          "path": "anyio-4.15.1.dist-info/licenses/LICENSE",
+          "sha256": "5361ac9dc58f2ef5fd2e9b09c68297c17f04950909bbc8023bdb82eacf22c2b0"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "anyio",
+      "version": "4.15.1"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360",
+          "hashes": {
+            "sha256": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/58/50/6c0d534c5f134586a8e1ba4e330569e32f057e33372ae556463212fb4cd3/click-8.5.0-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1475,
+          "path": "click-8.5.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "9a8ad106a394e853bfe21f42f4e72d592819a22805d991b5f3275029292b658d"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "click",
+      "version": "8.5.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=3f4a557945a7b0f95efeb1f432267affe5d45ac8ddde2aed1b97ebb62382c089",
+          "hashes": {
+            "sha256": "3f4a557945a7b0f95efeb1f432267affe5d45ac8ddde2aed1b97ebb62382c089"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/d7/8b/f837f52905395ba4510fe61f753c24833fb0a9c76e21267bb9f828b664a9/filelock-4.1.1-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1088,
+          "path": "filelock-4.1.1.dist-info/licenses/LICENSE",
+          "sha256": "608c89d5060ae9921adccf3236695bc654a9946e12323ef6c021dfa04e294d48"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "filelock",
+      "version": "4.1.1"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f",
+          "hashes": {
+            "sha256": "8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/6c/c0/a98505f18594f1bce828bb159cec0fcf9860562f1a2c85913409fc8f3d9e/fsspec-2026.9.0-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1513,
+          "path": "fsspec-2026.9.0.dist-info/licenses/LICENSE",
+          "sha256": "2dc35496ce53a7307915c008a844aad53e772b49b34cdd00445067691407ec94"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "fsspec",
+      "version": "2026.9.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=b44f0a0fc7bc6677d38cc80bca1a32814ce6c8f200fb8b3c1a61c9d77eaefbf3",
+          "hashes": {
+            "sha256": "b44f0a0fc7bc6677d38cc80bca1a32814ce6c8f200fb8b3c1a61c9d77eaefbf3"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/a0/bf/258cd7c0a7ed92745dc93c31666d462d05b702807a689744bd49fb833bde/grpcio-1.84.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "Apache-2.0",
+      "license_files": [
+        {
+          "bytes": 30191,
+          "path": "grpcio-1.84.0.dist-info/licenses/LICENSE",
+          "sha256": "58c86a3f2b5cca0ebdf9ed3e7f4e6dc38e3b38796d8c3dc92064c62a4e39d0dd"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "grpcio",
+      "version": "1.84.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+          "hashes": {
+            "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1124,
+          "path": "h11-0.16.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "37db5bb85926db28a427a25867f10b1232003aea1be69ccb851138adb8e6f361"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": true,
+      "name": "h11",
+      "version": "0.16.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=2814a6e999d13464c4d679b788cc5d784eb5a4edfc638a31f10e9a11ab531ef8",
+          "hashes": {
+            "sha256": "2814a6e999d13464c4d679b788cc5d784eb5a4edfc638a31f10e9a11ab531ef8"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/a3/4c/2bf3b66c215d409655f28de1622393dde04c9461280d48c7924bb3b2decd/hf_xet-1.7.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": "Apache-2.0",
+      "license_files": [
+        {
+          "bytes": 11357,
+          "path": "hf_xet-1.7.0.dist-info/licenses/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "hf-xet",
+      "version": "1.7.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=e1e05d4f25f7d7d496bfb96748f6f4b67657b03da069b3a68c36069f3db73d0a",
+          "hashes": {
+            "sha256": "e1e05d4f25f7d7d496bfb96748f6f4b67657b03da069b3a68c36069f3db73d0a"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/09/ba/a4568248771ce81957bfb7cc600264a40fbcda092391ee1c415c50be4bea/httpcore2-2.13.1-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1599,
+          "path": "httpcore2-2.13.1.dist-info/licenses/LICENSE.md",
+          "sha256": "c4df125c807b0613501e943a5c92496dd11d2c16604ce396097a8dde396304d9"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "httpcore2",
+      "version": "2.13.1"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=6dff50fabc270ee5fd25d845d0b078ed20564579744d6d962850975996d2f9a4",
+          "hashes": {
+            "sha256": "6dff50fabc270ee5fd25d845d0b078ed20564579744d6d962850975996d2f9a4"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/d8/9c/6fe8931fd9f381042a9e4c7d5a7b4cbf7016b252bec0c99a49fce42c3326/httpx2-2.13.1-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1589,
+          "path": "httpx2-2.13.1.dist-info/licenses/LICENSE.md",
+          "sha256": "7e7d6dbaf7fe160d39fd6e84fd02c33cab96bcbea34d36998d545bceb4a19c30"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "httpx2",
+      "version": "2.13.1"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=1667f145dc56dc210d60966069397df9ecfca9607a5d43db88b308c89dae56b3",
+          "hashes": {
+            "sha256": "1667f145dc56dc210d60966069397df9ecfca9607a5d43db88b308c89dae56b3"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/eb/b0/0f7b430fd100b3a3b037fdbb314878200241082e607b3383c63d91a13a72/huggingface_hub-2.2.0-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 11357,
+          "path": "huggingface_hub-2.2.0.dist-info/licenses/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ],
+      "license_metadata": "Apache-2.0",
+      "locked": true,
+      "name": "huggingface_hub",
+      "version": "2.2.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+          "hashes": {
+            "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1541,
+          "path": "idna-3.20.dist-info/licenses/LICENSE.md",
+          "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "idna",
+      "version": "3.20"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+          "hashes": {
+            "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1475,
+          "path": "jinja2-3.1.6.dist-info/licenses/LICENSE.txt",
+          "sha256": "3b49dcee4105eb37bac10faf1be260408fe85d252b8e9df2e0979fc1e094437b"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "Jinja2",
+      "version": "3.1.6"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a",
+          "hashes": {
+            "sha256": "9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/b3/81/4da04ced5a082363ecfa159c010d200ecbd959ae410c10c0264a38cac0f5/markdown_it_py-4.2.0-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1078,
+          "path": "markdown_it_py-4.2.0.dist-info/licenses/LICENSE",
+          "sha256": "4a2260d6e2cd0f5a151a1e86dbfe7d3ed552b1e2beabf9941c1ba5c49cbce484"
+        },
+        {
+          "bytes": 1073,
+          "path": "markdown_it_py-4.2.0.dist-info/licenses/LICENSE.markdown-it",
+          "sha256": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "markdown-it-py",
+      "version": "4.2.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581",
+          "hashes": {
+            "sha256": "8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/4f/a7/aeedb5140afa41fc74c225e9184ab96723a6e873b6ee1c9fede7283456d8/markupsafe-3.0.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1475,
+          "path": "markupsafe-3.0.4.dist-info/licenses/LICENSE.txt",
+          "sha256": "489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "MarkupSafe",
+      "version": "3.0.4"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8",
+          "hashes": {
+            "sha256": "84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 2338,
+          "path": "mdurl-0.1.2.dist-info/LICENSE",
+          "sha256": "7c605df6e28667a9603118e98274f64a49ce3eed0d26fccce9534a345e0ef955"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "mdurl",
+      "version": "0.1.2"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+          "hashes": {
+            "sha256": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1537,
+          "path": "mpmath-1.3.0.dist-info/LICENSE",
+          "sha256": "c26cae81da4508e5e249985777a33821f183223ebb74d7f8cfbf90fe7eef2fb7"
+        }
+      ],
+      "license_metadata": "BSD",
+      "locked": true,
+      "name": "mpmath",
+      "version": "1.3.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=e3fd2c13a7814cee3746340d8d7f8598a67f16a58bf47fb7f8793fab6efca1b0",
+          "hashes": {
+            "sha256": "e3fd2c13a7814cee3746340d8d7f8598a67f16a58bf47fb7f8793fab6efca1b0"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/7e/cd/fe58041e9011f307c490e3e17dd48cc516448f7c698a3f2d9d9d65d7e6a8/networkx-3.7-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause",
+      "license_files": [
+        {
+          "bytes": 1763,
+          "path": "networkx-3.7.dist-info/licenses/LICENSE.txt",
+          "sha256": "6025f323ea29dc2f0ee0abd9523bf910186f55b0e148e6ebf646c55566278e2e"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "networkx",
+      "version": "3.7"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a",
+          "hashes": {
+            "sha256": "fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/43/a3/c799c62e19c337e6d3770b08e475887fb30ce8477d3c09efca6b2f0228a6/numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "license_files": [
+        {
+          "bytes": 46794,
+          "path": "numpy-2.5.4.dist-info/licenses/LICENSE.txt",
+          "sha256": "4860083caa0de2ac3292ca98bd074bd8f45d8b32624e37b1e70a240bff61e488"
+        },
+        {
+          "bytes": 1018,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt",
+          "sha256": "fbc539f47d0cf83bc61378080fb873d5c14630126cacbfe754035c3926daa5ec"
+        },
+        {
+          "bytes": 690,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/_core/src/common/pythoncapi-compat/COPYING",
+          "sha256": "3f2c1ffa76383a55ae0aac01c9737cd70050dff63e1f026694fbe9d662573c98"
+        },
+        {
+          "bytes": 20785,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/_core/src/highway/LICENSE",
+          "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af"
+        },
+        {
+          "bytes": 1514,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/_core/src/npysort/x86-simd-sort/LICENSE.md",
+          "sha256": "211e7d737d6179a08f791ebb0a99897ce7cd2457410c542876d125576edfe910"
+        },
+        {
+          "bytes": 1543,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/_core/src/umath/svml/LICENSE",
+          "sha256": "c17011467b4fe6e20fbfbeda4df09e58c2bca5480a063e55735a4000a379aad9"
+        },
+        {
+          "bytes": 1498,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/fft/pocketfft/LICENSE.md",
+          "sha256": "a85ca13fdf90160b64a0698215868c13b74d835ad0a4e2ba44713b8c5058a056"
+        },
+        {
+          "bytes": 2266,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/linalg/lapack_lite/LICENSE.txt",
+          "sha256": "a14cc25e10d40a3aa705b7de2fb764a6535d8ee9b2db4e1724900585457dfd55"
+        },
+        {
+          "bytes": 1593,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/ma/LICENSE",
+          "sha256": "05f3b88351988ecfad10abe92c0c50e5875c6452d5009a0084cc291551ffcca6"
+        },
+        {
+          "bytes": 3511,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/random/LICENSE.md",
+          "sha256": "103166b62b80443afb9eb3488e052ea06be0cff566b908f199e561fde49af19f"
+        },
+        {
+          "bytes": 2745,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/random/src/distributions/LICENSE.md",
+          "sha256": "469778be8f33d54e1bcaab28c281cc472916d2d273f835e55bc487d30503face"
+        },
+        {
+          "bytes": 2926,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/random/src/mt19937/LICENSE.md",
+          "sha256": "0e111337b25494a773106695f0e799f642b8567aaacca4f116a74a8177179156"
+        },
+        {
+          "bytes": 1154,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/random/src/pcg64/LICENSE.md",
+          "sha256": "e7d4f4fb20358f314210a892ae17351e04993813646f697ec387385ca2a36918"
+        },
+        {
+          "bytes": 1509,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/random/src/philox/LICENSE.md",
+          "sha256": "6f5828a57223d4cc7f8ea505a2623e7b978b242752c1515e355f46ba2cec1800"
+        },
+        {
+          "bytes": 1226,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/random/src/sfc64/LICENSE.md",
+          "sha256": "9d4098846018319cd68e228ee6220361787f73bccbf00237a85e4fc9621b998f"
+        },
+        {
+          "bytes": 332,
+          "path": "numpy-2.5.4.dist-info/licenses/numpy/random/src/splitmix64/LICENSE.md",
+          "sha256": "268b0ca06759d31ea3ca68dd35f20e877916e927b1c2a835e4592a3c4354b1f9"
+        },
+        {
+          "bytes": 1018,
+          "path": "numpy/_core/include/numpy/random/LICENSE.txt",
+          "sha256": "fbc539f47d0cf83bc61378080fb873d5c14630126cacbfe754035c3926daa5ec"
+        },
+        {
+          "bytes": 1593,
+          "path": "numpy/ma/LICENSE",
+          "sha256": "05f3b88351988ecfad10abe92c0c50e5875c6452d5009a0084cc291551ffcca6"
+        },
+        {
+          "bytes": 3511,
+          "path": "numpy/random/LICENSE.md",
+          "sha256": "103166b62b80443afb9eb3488e052ea06be0cff566b908f199e561fde49af19f"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "numpy",
+      "version": "2.5.4"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+          "hashes": {
+            "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "Apache-2.0 OR BSD-2-Clause",
+      "license_files": [
+        {
+          "bytes": 197,
+          "path": "packaging-26.3.dist-info/licenses/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "bytes": 10174,
+          "path": "packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "bytes": 1344,
+          "path": "packaging-26.3.dist-info/licenses/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "packaging",
+      "version": "26.3"
+    },
+    {
+      "direct_url": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1093,
+          "path": "pip-25.0.1.dist-info/LICENSE.txt",
+          "sha256": "634300a669d49aeae65b12c6c48c924c51a4cdf3d1ff086dc3456dc8bcaa2104"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": false,
+      "name": "pip",
+      "version": "25.0.1"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=89f23aa53c24553a2416fd4fd1ec06f74fa42b14b546d8883128813f775bbfd2",
+          "hashes": {
+            "sha256": "89f23aa53c24553a2416fd4fd1ec06f74fa42b14b546d8883128813f775bbfd2"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/db/f3/3996583dd2906297a637af12114deddf7658af6e683fedb83be061983fb5/protobuf-7.36.2-cp310-abi3-manylinux2014_x86_64.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1732,
+          "path": "protobuf-7.36.2.dist-info/LICENSE",
+          "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
+        }
+      ],
+      "license_metadata": "3-Clause BSD License",
+      "locked": true,
+      "name": "protobuf",
+      "version": "7.36.2"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9",
+          "hashes": {
+            "sha256": "076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/b5/70/5d8df3b09e25bce090399cf48e452d25c935ab72dad19406c77f4e828045/psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1548,
+          "path": "psutil-7.2.2.dist-info/LICENSE",
+          "sha256": "b89c063b3786e28e0c0a38f1931db61fed35e69dd2a2966fbecffee0f46c8d10"
+        }
+      ],
+      "license_metadata": "BSD-3-Clause",
+      "locked": true,
+      "name": "psutil",
+      "version": "7.2.2"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+          "hashes": {
+            "sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "BSD-2-Clause",
+      "license_files": [
+        {
+          "bytes": 1331,
+          "path": "pygments-2.21.0.dist-info/licenses/LICENSE",
+          "sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "Pygments",
+      "version": "2.21.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc",
+          "hashes": {
+            "sha256": "ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/8b/9d/b3589d3877982d4f2329302ef98a8026e7f4443c765c46cfecc8858c6b4b/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1101,
+          "path": "pyyaml-6.0.3.dist-info/licenses/LICENSE",
+          "sha256": "8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": true,
+      "name": "PyYAML",
+      "version": "6.0.3"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=39ab5894d971f9ac68baa6eca5c50387db579cfcacf36ae8df3feceb1815e6d0",
+          "hashes": {
+            "sha256": "39ab5894d971f9ac68baa6eca5c50387db579cfcacf36ae8df3feceb1815e6d0"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/26/83/d2fbd2e4e3afb1167daa825187d196f313cbaa1a4768f311fb041bb0e3d2/regex-2026.9.29-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "Apache-2.0 AND CNRI-Python",
+      "license_files": [
+        {
+          "bytes": 11584,
+          "path": "regex-2026.9.29.dist-info/licenses/LICENSE.txt",
+          "sha256": "bff55ef4cdcc8c14ce259f8e8ab60e264418440d6335f4dc138273fbd506144d"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "regex",
+      "version": "2026.9.29"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb",
+          "hashes": {
+            "sha256": "33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: MIT License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1056,
+          "path": "rich-15.0.0.dist-info/licenses/LICENSE",
+          "sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15"
+        }
+      ],
+      "license_metadata": "MIT",
+      "locked": true,
+      "name": "rich",
+      "version": "15.0.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774",
+          "hashes": {
+            "sha256": "fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/28/50/f203ff3a3ddfe19308efc83c5a3a29ed02bf786732ec35e68bf9162f3365/safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 11357,
+          "path": "safetensors-0.8.0.dist-info/licenses/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "safetensors",
+      "version": "0.8.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=0cdfecef430d985f1c2bcbfff3defd1d95dae876fbd0173376012d2d7d24044b",
+          "hashes": {
+            "sha256": "0cdfecef430d985f1c2bcbfff3defd1d95dae876fbd0173376012d2d7d24044b"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/04/88/14f2f4a2b922d8b39be45bf63d79e6cd3a9b2f248b2fcb98a69b12af12f5/sentencepiece-0.2.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": null,
+      "locked": true,
+      "name": "sentencepiece",
+      "version": "0.2.1"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670",
+          "hashes": {
+            "sha256": "51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1023,
+          "path": "setuptools-84.0.0.dist-info/licenses/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 7634,
+          "path": "setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE",
+          "sha256": "ade78d04982d69972d444a8e14a94f87a2334dd3855cc80348ea8e240aa0df2d"
+        },
+        {
+          "bytes": 1023,
+          "path": "setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 10278,
+          "path": "setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE",
+          "sha256": "458502e12d97bbf64438606a20044aa85eb05fb0a8a807bb35dbec253fd1fc04"
+        },
+        {
+          "bytes": 1023,
+          "path": "setuptools/_vendor/jaraco.text-4.0.0.dist-info/LICENSE",
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "bytes": 1076,
+          "path": "setuptools/_vendor/jaraco_context-6.1.0.dist-info/licenses/LICENSE",
+          "sha256": "9755a18519666e5f0f4cae3daad3d7012bcae48a600b31237d75e9fe134e6683"
+        },
+        {
+          "bytes": 1076,
+          "path": "setuptools/_vendor/jaraco_functools-4.4.0.dist-info/licenses/LICENSE",
+          "sha256": "5a57cb4db85e2a2dd88c290628908add57e3451449e0a9a71fdfb38776fd759d"
+        },
+        {
+          "bytes": 1053,
+          "path": "setuptools/_vendor/more_itertools-10.8.0.dist-info/licenses/LICENSE",
+          "sha256": "09f1c8c9e941af3e584d59641ea9b87d83c0cb0fd007eb5ef391a7e2643c1a46"
+        },
+        {
+          "bytes": 197,
+          "path": "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "bytes": 10174,
+          "path": "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "bytes": 1344,
+          "path": "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        },
+        {
+          "bytes": 1089,
+          "path": "setuptools/_vendor/platformdirs-4.4.0.dist-info/licenses/LICENSE",
+          "sha256": "29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6"
+        },
+        {
+          "bytes": 1072,
+          "path": "setuptools/_vendor/tomli-2.4.0.dist-info/licenses/LICENSE",
+          "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe"
+        },
+        {
+          "bytes": 1107,
+          "path": "setuptools/_vendor/wheel-0.46.3.dist-info/licenses/LICENSE.txt",
+          "sha256": "30c23618679108f3e8ea1d2a658c7ca417bdfc891c98ef1a89fa4ff0c9828654"
+        },
+        {
+          "bytes": 1076,
+          "path": "setuptools/_vendor/zipp-3.23.0.dist-info/licenses/LICENSE",
+          "sha256": "5a57cb4db85e2a2dd88c290628908add57e3451449e0a9a71fdfb38776fd759d"
+        },
+        {
+          "bytes": 493,
+          "path": "setuptools/config/NOTICE",
+          "sha256": "2dddf08818297a3b89d43d95ff659d8da85741108c9136dfa3a4d856c0623bd8"
+        },
+        {
+          "bytes": 18737,
+          "path": "setuptools/config/_validate_pyproject/NOTICE",
+          "sha256": "09c9bcea95ca086f8bc5bed174e40bc835b297d40fb5f86bbbb570fe0a5581a7"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "setuptools",
+      "version": "84.0.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686",
+          "hashes": {
+            "sha256": "7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/e0/f9/0595336914c5619e5f28a1fb793285925a8cd4b432c9da0a987836c7f822/shellingham-1.5.4-py2.py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: ISC License (ISCL)"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 751,
+          "path": "shellingham-1.5.4.dist-info/LICENSE",
+          "sha256": "f388fd38cad13112c1dc0f669bbe80e7f84541edbafb72f3030d2ca7642c3c9d"
+        }
+      ],
+      "license_metadata": "ISC License",
+      "locked": true,
+      "name": "shellingham",
+      "version": "1.5.4"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+          "hashes": {
+            "sha256": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: BSD License"
+      ],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 7885,
+          "path": "sympy-1.14.0.dist-info/licenses/LICENSE",
+          "sha256": "07a5e9819f727b4986ad2829c7a29a6320d42575f720eb24d71b7fef573a0286"
+        },
+        {
+          "bytes": 1075,
+          "path": "sympy/parsing/latex/LICENSE.txt",
+          "sha256": "007bc30a58fa40a996e772047120de4eaf31f5110e4f9c3b5f93fcdfbe2eaca1"
+        }
+      ],
+      "license_metadata": "BSD",
+      "locked": true,
+      "name": "sympy",
+      "version": "1.14.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=376851d22bcf9d650a5c3090bb83e6cf9e895fbf0595369fa4cd43c1f69b5f87",
+          "hashes": {
+            "sha256": "376851d22bcf9d650a5c3090bb83e6cf9e895fbf0595369fa4cd43c1f69b5f87"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/3a/40/6706b82693715581457c6d5423eaa7faae576bb0526c5738a57085eb4449/tokenizers-0.23.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+      },
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "license_expression": null,
+      "license_files": [],
+      "license_metadata": null,
+      "locked": true,
+      "name": "tokenizers",
+      "version": "0.23.3"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=5a6363570c753812540a05eb82380e329469cbe668643e88111414c12627711f",
+          "hashes": {
+            "sha256": "5a6363570c753812540a05eb82380e329469cbe668643e88111414c12627711f"
+          }
+        },
+        "url": "https://download-r2.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT",
+      "license_files": [
+        {
+          "bytes": 3464,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/LICENSE",
+          "sha256": "bd018feef8825e88181c84eb7e3aa4eafb8f08a20d9fd6ef948569610c4a3e43"
+        },
+        {
+          "bytes": 1157,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/FP16/LICENSE",
+          "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf"
+        },
+        {
+          "bytes": 1117,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/FXdiv/LICENSE",
+          "sha256": "7cac00006125b1486a27e4801ed66357236e984c540bd323945ab7b66b078ec3"
+        },
+        {
+          "bytes": 1352,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/NNPACK/LICENSE",
+          "sha256": "ab09e33621f513ebdd1ef685b324f39c1f6bee9221d15600bafd958322df1231"
+        },
+        {
+          "bytes": 12483,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/NVTX/LICENSE.txt",
+          "sha256": "abdfd8a6738b27cd1504e091f77b682dbae928339f040b8a6f59a548245991a0"
+        },
+        {
+          "bytes": 12483,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/NVTX/docs/LICENSE.txt",
+          "sha256": "abdfd8a6738b27cd1504e091f77b682dbae928339f040b8a6f59a548245991a0"
+        },
+        {
+          "bytes": 12483,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/NVTX/python/LICENSE.txt",
+          "sha256": "abdfd8a6738b27cd1504e091f77b682dbae928339f040b8a6f59a548245991a0"
+        },
+        {
+          "bytes": 12449,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/NVTX/rust/LICENSE",
+          "sha256": "e165ed77854f47fb208850d23d935a9f0ab8bb4527381466beeb16025e2f6e9e"
+        },
+        {
+          "bytes": 1099,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/VulkanMemoryAllocator/LICENSE.txt",
+          "sha256": "8d70e4cf2a9941f6454da71cd60e38484dd3e34810c824760d550e982af6d97a"
+        },
+        {
+          "bytes": 1560,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/XNNPACK/LICENSE",
+          "sha256": "63f519e15726f4c4f830bd958f694c84fecb4e0a4cacc527d2696bb71ef95ada"
+        },
+        {
+          "bytes": 1726,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/aiter/3rdparty/composable_kernel/LICENSE",
+          "sha256": "20f3b83dfda01bd18d285e0edbb9d044be6dde04cdf76a1ec18d9fc7127936bf"
+        },
+        {
+          "bytes": 1100,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/aiter/LICENSE",
+          "sha256": "0baca809927cad448401b252ce3bae12687c2987597ad7088cf3423f872d5bcd"
+        },
+        {
+          "bytes": 11358,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/benchmark/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 1726,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/composable_kernel/LICENSE",
+          "sha256": "20f3b83dfda01bd18d285e0edbb9d044be6dde04cdf76a1ec18d9fc7127936bf"
+        },
+        {
+          "bytes": 1075,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/cpp-httplib/LICENSE",
+          "sha256": "4b45cbe16d7b71b89ae6127e26e0d90a029198ca5e958ad8e3d0b8bbed364d8b"
+        },
+        {
+          "bytes": 1424,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/cpuinfo/LICENSE",
+          "sha256": "8e7e60636c3aa0cb03571a1a841ce5697f9551ff92b3c426c2561613d15ade70"
+        },
+        {
+          "bytes": 1384,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/cpuinfo/deps/clog/LICENSE",
+          "sha256": "68a14c3e79add023eecd83d611e73f05b8bf1d16852efeb7eb4033a96736da9e"
+        },
+        {
+          "bytes": 1148,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/cudnn_frontend/LICENSE.txt",
+          "sha256": "3fc4b473a2c08768a8066bf7e4a58a1185060f3ad674f2ca9e2011bca4adf2ce"
+        },
+        {
+          "bytes": 1861,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/cutlass/LICENSE.txt",
+          "sha256": "ad1513ca983da737a6843364ad19e8424a56d860736c2da773b8c5be527e1475"
+        },
+        {
+          "bytes": 1547,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/cutlass/python/LICENSE.txt",
+          "sha256": "00bf1806f664ac1afe4221f5f04b384fb6f1ca6eb33efcb6dccf599eb06d08b9"
+        },
+        {
+          "bytes": 1535,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/LICENSE",
+          "sha256": "12c2370ec32e78115dcd71ba22cdcb1297320fdc4ade81f798136d42357c58b8"
+        },
+        {
+          "bytes": 1726,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/external/composable_kernel/LICENSE",
+          "sha256": "20f3b83dfda01bd18d285e0edbb9d044be6dde04cdf76a1ec18d9fc7127936bf"
+        },
+        {
+          "bytes": 1424,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/external/cpuinfo/LICENSE",
+          "sha256": "8e7e60636c3aa0cb03571a1a841ce5697f9551ff92b3c426c2561613d15ade70"
+        },
+        {
+          "bytes": 1384,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/external/cpuinfo/deps/clog/LICENSE",
+          "sha256": "68a14c3e79add023eecd83d611e73f05b8bf1d16852efeb7eb4033a96736da9e"
+        },
+        {
+          "bytes": 1854,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/external/cutlass/LICENSE.txt",
+          "sha256": "80a7a18b73d41f64dd9ca881af35938f8de88b18c728703251f4c94d1299884d"
+        },
+        {
+          "bytes": 1547,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/external/cutlass/python/LICENSE.txt",
+          "sha256": "42fec630f410aa308f70a51a89fadcd19586fa620f9831a32bee528a9a10000e"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/external/googletest/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 1112,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/external/hipify_torch/LICENSE.txt",
+          "sha256": "ecf819d55b17c2f091b3ba0934d044368aa0680d8a81374860306aa2b91aa1eb"
+        },
+        {
+          "bytes": 1558,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/fbgemm_gpu/experimental/hstu/LICENSE",
+          "sha256": "8c9ccb96c065e706135b6cbad279b721da6156e51f3a5f27c6b3329af9416d73"
+        },
+        {
+          "bytes": 1141,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/fbgemm_gpu/src/quantize_ops/mx/LICENSE",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        },
+        {
+          "bytes": 1141,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fbgemm/fbgemm_gpu/test/quantize/mx/LICENSE",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        },
+        {
+          "bytes": 1558,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flash-attention/LICENSE",
+          "sha256": "8c9ccb96c065e706135b6cbad279b721da6156e51f3a5f27c6b3329af9416d73"
+        },
+        {
+          "bytes": 1726,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flash-attention/csrc/composable_kernel/LICENSE",
+          "sha256": "20f3b83dfda01bd18d285e0edbb9d044be6dde04cdf76a1ec18d9fc7127936bf"
+        },
+        {
+          "bytes": 1854,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flash-attention/csrc/cutlass/LICENSE.txt",
+          "sha256": "80a7a18b73d41f64dd9ca881af35938f8de88b18c728703251f4c94d1299884d"
+        },
+        {
+          "bytes": 1547,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flash-attention/csrc/cutlass/python/LICENSE.txt",
+          "sha256": "42fec630f410aa308f70a51a89fadcd19586fa620f9831a32bee528a9a10000e"
+        },
+        {
+          "bytes": 1558,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flash-attention/flash_attn/cute/LICENSE",
+          "sha256": "8c9ccb96c065e706135b6cbad279b721da6156e51f3a5f27c6b3329af9416d73"
+        },
+        {
+          "bytes": 1726,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flash-attention/third_party/aiter/3rdparty/composable_kernel/LICENSE",
+          "sha256": "20f3b83dfda01bd18d285e0edbb9d044be6dde04cdf76a1ec18d9fc7127936bf"
+        },
+        {
+          "bytes": 1100,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flash-attention/third_party/aiter/LICENSE",
+          "sha256": "0baca809927cad448401b252ce3bae12687c2987597ad7088cf3423f872d5bcd"
+        },
+        {
+          "bytes": 11358,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flatbuffers/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 11341,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flatbuffers/dart/LICENSE",
+          "sha256": "edd9b3459bee4c79b549a5ef66d06d12bd144ddb8d08e0b448fb421267f43dd5"
+        },
+        {
+          "bytes": 11358,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/flatbuffers/swift/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 1094,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/fmt/LICENSE",
+          "sha256": "a65fcc5a1095fc33cc37e4fff69366e49d7e92f613558a2b95ed1b70e33758b4"
+        },
+        {
+          "bytes": 11358,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/gemmlowp/gemmlowp/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 1525,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/gloo/LICENSE",
+          "sha256": "2afbc572cf7f60888159bc2ca48ba58f8adec06682ae5de820d61449d1eeea81"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/googletest/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 1062,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/ideep/LICENSE",
+          "sha256": "a26add03107a53a605a89711b9b7dbd4f5dd668ae193a912e01a879366a23b0e"
+        },
+        {
+          "bytes": 11607,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/ideep/mkl-dnn/LICENSE",
+          "sha256": "e9fc874fc09801b9acf3411ba72394098473704d832d713404b6c4861a086318"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/ideep/mkl-dnn/third_party/gtest/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 11358,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/ideep/mkl-dnn/third_party/opencl/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 1609,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/kineto/LICENSE",
+          "sha256": "6f3d59b9103e72e5c977eecf61b261c2e1546a9be2995847e3ee2d31021fd39b"
+        },
+        {
+          "bytes": 1086,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/kineto/libkineto/third_party/dynolog_headers/LICENSE",
+          "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85"
+        },
+        {
+          "bytes": 1431,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/kineto/libkineto/third_party/fmt/LICENSE",
+          "sha256": "07580f2a3b35709ce703d523f447b242f6dfec7582a8c0df102c7fa2849375f8"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/kineto/libkineto/third_party/googletest/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 17003,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/llvm-openmp/LICENSE.txt",
+          "sha256": "68395143f21a9aa29b8232168c71892af5ec4f1ae2529571cd250a71c9e37a03"
+        },
+        {
+          "bytes": 1096,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/mimalloc/LICENSE",
+          "sha256": "82ade5d7d9b029044b5fbbc326207fc47c2d44ee4dd71e8a559c36d728217de9"
+        },
+        {
+          "bytes": 1184,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/miniz-3.0.2/LICENSE",
+          "sha256": "0115478d567121238cf6cc1c0c361926cf07a49d9e4c9e66da97fac6a01646b3"
+        },
+        {
+          "bytes": 1533,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/mslk/LICENSE",
+          "sha256": "44519cbe722d7bf092cd7e0fa26558b9e3905b88fca4c0c278e2733a9f6b4cf9"
+        },
+        {
+          "bytes": 1726,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/mslk/external/composable_kernel/LICENSE",
+          "sha256": "20f3b83dfda01bd18d285e0edbb9d044be6dde04cdf76a1ec18d9fc7127936bf"
+        },
+        {
+          "bytes": 1854,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/mslk/external/cutlass/LICENSE.txt",
+          "sha256": "80a7a18b73d41f64dd9ca881af35938f8de88b18c728703251f4c94d1299884d"
+        },
+        {
+          "bytes": 1547,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/mslk/external/cutlass/python/LICENSE.txt",
+          "sha256": "42fec630f410aa308f70a51a89fadcd19586fa620f9831a32bee528a9a10000e"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/mslk/external/googletest/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 1112,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/mslk/external/hipify_torch/LICENSE.txt",
+          "sha256": "ecf819d55b17c2f091b3ba0934d044368aa0680d8a81374860306aa2b91aa1eb"
+        },
+        {
+          "bytes": 1558,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/mslk/mslk/attention/flash_attn/LICENSE",
+          "sha256": "8c9ccb96c065e706135b6cbad279b721da6156e51f3a5f27c6b3329af9416d73"
+        },
+        {
+          "bytes": 11358,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/onnx/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 1684,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/onnx/third_party/pybind11/LICENSE",
+          "sha256": "83965b843b98f670d3a85bd041ed4b372c8ec50d7b4a5995a83ac697ba675dcb"
+        },
+        {
+          "bytes": 14990,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/perfetto/LICENSE",
+          "sha256": "9a682a56cffc9524dfa9b0b1c0dca9cb81a19e96d5bd0793aaf02c08a95ee7ca"
+        },
+        {
+          "bytes": 1732,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/protobuf/LICENSE",
+          "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
+        },
+        {
+          "bytes": 11358,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/protobuf/third_party/benchmark/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/protobuf/third_party/googletest/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/protobuf/third_party/googletest/googlemock/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 11386,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/protobuf/third_party/googletest/googlemock/scripts/generator/LICENSE",
+          "sha256": "5e0df8c845c742e76f2f64d2d9ce1b7e74a2422fddbc577ae6a56319083de0bf"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/protobuf/third_party/googletest/googletest/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 1065,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/protobuf/third_party/utf8_range/LICENSE",
+          "sha256": "5a629d2b868081d8af08bbce5d038116f3a0e2e0d4ce9adf4d53f14e76b6b2e0"
+        },
+        {
+          "bytes": 1162,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/psimd/LICENSE",
+          "sha256": "984ce1e0b8ee89d234e28b960381f240e03a07a8031f35012f9c3256f56964e2"
+        },
+        {
+          "bytes": 1378,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/pthreadpool/LICENSE",
+          "sha256": "57814a606b4d0fb087d9a534919084b6c11b58a4174cb5a4aef200187780dc3a"
+        },
+        {
+          "bytes": 1684,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/pybind11/LICENSE",
+          "sha256": "83965b843b98f670d3a85bd041ed4b372c8ec50d7b4a5995a83ac697ba675dcb"
+        },
+        {
+          "bytes": 1443,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/python-peachpy/LICENSE.rst",
+          "sha256": "e6d6fdbfc09c9cc1bfc55946ca9690dd9276deeaed2b72ac7fc5c79bde80ff32"
+        },
+        {
+          "bytes": 1338,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/sleef/LICENSE.txt",
+          "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+        },
+        {
+          "bytes": 1535,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/tensorpipe/LICENSE.txt",
+          "sha256": "f4dcef0d1f0520b414d5bfaeed8df02f188e4ec05c0a17bf1c18f25f6cc66245"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/tensorpipe/third_party/googletest/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/tensorpipe/third_party/googletest/googlemock/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 11386,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/tensorpipe/third_party/googletest/googlemock/scripts/generator/LICENSE",
+          "sha256": "5e0df8c845c742e76f2f64d2d9ce1b7e74a2422fddbc577ae6a56319083de0bf"
+        },
+        {
+          "bytes": 1475,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/tensorpipe/third_party/googletest/googletest/LICENSE",
+          "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+        },
+        {
+          "bytes": 577,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/tensorpipe/third_party/libnop/LICENSE",
+          "sha256": "876e8f7432440974ee5543a2aa1344370ef1f2f7949ad98a1f3899cf722d5631"
+        },
+        {
+          "bytes": 1079,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/tensorpipe/third_party/libuv/LICENSE",
+          "sha256": "16de0c32b265cb7d46a6d3bd614f259dd4d693a5e26b3407b04aae8d73041f0c"
+        },
+        {
+          "bytes": 1676,
+          "path": "torch-2.14.1+cpu.dist-info/licenses/third_party/tensorpipe/third_party/pybind11/LICENSE",
+          "sha256": "9a37ea54aa3cf12c7f3292799f20822ffd4b9b7142b36a7a9997b28c39264dc9"
+        },
+        {
+          "bytes": 197,
+          "path": "torch/_vendor/packaging/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "bytes": 10174,
+          "path": "torch/_vendor/packaging/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "bytes": 1344,
+          "path": "torch/_vendor/packaging/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        },
+        {
+          "bytes": 11357,
+          "path": "torch/_vendor/quack/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "torch",
+      "version": "2.14.1+cpu"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73",
+          "hashes": {
+            "sha256": "c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/a7/03/921a3d3c75785aca9ebfbfcabfbc3a1be12e2ab5265deb026d55a5a3f83e/tqdm-4.70.1-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 1985,
+          "path": "tqdm-4.70.1.dist-info/licenses/LICENCE",
+          "sha256": "fcff87c3a47ce8028a8512aa182d4fcf0ad1c90544ee75cf9b343684cac194de"
+        }
+      ],
+      "license_metadata": "MPL-2.0 AND MIT",
+      "locked": true,
+      "name": "tqdm",
+      "version": "4.70.1"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=afcd2dd5f603ed28c1e1fcb00a338ccbb4ef5f878ed289635df8b58187afb518",
+          "hashes": {
+            "sha256": "afcd2dd5f603ed28c1e1fcb00a338ccbb4ef5f878ed289635df8b58187afb518"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/b9/59/1e7f1212c215c73690ae6cab4678efe1555ff985953e145d88cc212859b0/transformers-5.19.0-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": null,
+      "license_files": [
+        {
+          "bytes": 11418,
+          "path": "transformers-5.19.0.dist-info/licenses/LICENSE",
+          "sha256": "77fd4710def9ec3c0f6225800e0235f15a425abd4a8b03559127fcd782612049"
+        }
+      ],
+      "license_metadata": "Apache 2.0 License",
+      "locked": true,
+      "name": "transformers",
+      "version": "5.19.0"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c",
+          "hashes": {
+            "sha256": "9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/51/e9/3a7820be2bb0fe53b6bc9c3be26d3d1158004e4c3ab953aa6840b955b1e9/truststore-0.10.5-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1086,
+          "path": "truststore-0.10.5.dist-info/licenses/LICENSE",
+          "sha256": "33be7b7e8fa4fd19b1760e1a8ed8a668bdab852c91b692dd41424bcb725a9fca"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "truststore",
+      "version": "0.10.5"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=e50022f28b82a86313e54501317a1db64bf8f8d036ff8cfe5ca7e47675454aff",
+          "hashes": {
+            "sha256": "e50022f28b82a86313e54501317a1db64bf8f8d036ff8cfe5ca7e47675454aff"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/07/ea/2e31b67051e91a133189e9c000c222502ddc6969856416de0d095de4c0b0/typer-0.27.3-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "MIT",
+      "license_files": [
+        {
+          "bytes": 1086,
+          "path": "typer-0.27.3.dist-info/licenses/LICENSE",
+          "sha256": "58992cebcf8dfb6e40c4e2112ed12126c243666dca3912a3d78b7ecac4859d49"
+        },
+        {
+          "bytes": 1475,
+          "path": "typer/_click/LICENSE.txt",
+          "sha256": "9a8ad106a394e853bfe21f42f4e72d592819a22805d991b5f3275029292b658d"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "typer",
+      "version": "0.27.3"
+    },
+    {
+      "direct_url": {
+        "archive_info": {
+          "hash": "sha256=481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+          "hashes": {
+            "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+          }
+        },
+        "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl"
+      },
+      "license_classifiers": [],
+      "license_expression": "PSF-2.0",
+      "license_files": [
+        {
+          "bytes": 13936,
+          "path": "typing_extensions-4.16.0.dist-info/licenses/LICENSE",
+          "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+        }
+      ],
+      "license_metadata": null,
+      "locked": true,
+      "name": "typing_extensions",
+      "version": "4.16.0"
+    }
+  ],
+  "schema_version": 1,
+  "stack": "owned",
+  "observed_on": "2026-10-17",
+  "image": "sha256:82b0ba0935bd706180c8578f65a21b96976bb8756ce1f51fdb0c1ea7672dccc6"
+}

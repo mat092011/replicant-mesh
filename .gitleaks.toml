@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Exact public checkpoint/tokenizer identities reviewed on 2026-10-17; not credentials"
+regexTarget = "secret"
+regexes = [
+  '''^298338802ab94432b917bcce11382aa151aee50f$''',
+  '''^ab1b681ec7fc02fed5edd3026687d7a692a918c4dd8e150ca2e3994a6229843b$''',
+  '''^be843e84b4b7d0b226b500a22dceabcbbf54b8e8b0dab85a252b0958e230ffbf$''',
+  '''^ff3b4a612c4e447acb02d40071bddd989fe0da87eb5b7fe0dbadfc4f74de7531$''',
+  '''^608ef1b5bb4bbfe6d3fdff0a5d3a4baaef0fd99fa678311a1e013bf5b37cd2a0$''',
+]

@@ -44,6 +44,19 @@ model. Device count, GPU types, available memory, and internet connections still
 need to be inventoried. CPU processes can establish correctness; hardware support
 beyond the initial cohort should follow measured results.
 
+**Release preparation, 2026-10-17:** the maintainer selected Apache-2.0 for project
+code/documentation; see [LICENSE](../LICENSE) and the
+[third-party review](THIRD_PARTY.md). The [README](../README.md),
+[contribution guidance](../CONTRIBUTING.md), [release readiness review](OPEN_SOURCE_RELEASE.md)
+and [development roadmap](ROADMAP.md) now distinguish the source-preview work from
+research completion. The [release validation](experiments/2026-10-17-release-readiness.md)
+records maintainer ownership confirmation, installed license/OS inventories,
+tokenizer provenance, pinned secret scanning, CI definitions and clean local-clone
+runtime reproduction. Hosted workflows have not run; GitHub private reporting is
+blocked while the repository remains private and the maintainer prefers no email.
+No publication occurred. The new correctness/smoke checks do not extend the
+performance envelope; all P0–P8 research statuses remain unchanged.
+
 ## Questions to answer
 
 1. Can partitioning preserve the model's computation and session state?

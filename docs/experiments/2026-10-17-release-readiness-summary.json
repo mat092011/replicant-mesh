@@ -1,0 +1,382 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-17",
+  "release_scope": "source-only preview; unpublished and uncommitted",
+  "head": "70c7de8b7028c58e3115c3dbc59a0ab974c565a8",
+  "ownership_attestation": "Maintainer confirmed authority to license original project code, including employer/collaborator rights",
+  "secret_scan": {
+    "scanner": "gitleaks",
+    "version": "8.30.1",
+    "archive_sha256": "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e",
+    "history_scope": "all local refs and reflogs; fetch intended remote refs before scanning",
+    "history_commits": 10,
+    "source_files": 135,
+    "history_findings": 0,
+    "source_findings": 0,
+    "rules": {},
+    "redacted": true,
+    "allowlist": "five exact public artifact identities",
+    "inline_allow_comments_disabled": true,
+    "positive_control_passed": true
+  },
+  "license_inventories": {
+    "owned_packages": 39,
+    "owned_locked_packages": 38,
+    "owned_notice_files": 165,
+    "owned_os_packages": 112,
+    "legacy_packages": 68,
+    "legacy_notice_files": 100,
+    "legacy_os_packages": 172
+  },
+  "linux_secret_scan": {
+    "version": "8.30.1",
+    "archive_sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+    "history_commits": 10,
+    "source_files": 135,
+    "history_findings": 0,
+    "source_findings": 0,
+    "positive_control_passed": true
+  },
+  "source_checks": {
+    "files": 135,
+    "markdown_files": 30,
+    "local_links": 189,
+    "errors": [],
+    "compose_configs_valid": 2,
+    "workflow_yaml_parsed": 2,
+    "mocked_network_reset_passed": true,
+    "reproduced_dependency_inventory_matches_historical_owned_image": true
+  },
+  "fast_checks": {
+    "environment": "Linux container; Python -S",
+    "tests": 82,
+    "skipped": 0,
+    "passed": true
+  },
+  "focused_transport_checks": {
+    "planned_runs": 3,
+    "tests_per_run": 9,
+    "exit_codes": [
+      0,
+      0,
+      0
+    ]
+  },
+  "reproduction_runs": [
+    {
+      "schema_version": 1,
+      "identity": "20261017T122600Z-6f83746b",
+      "source_kind": "fresh local clone of HEAD plus uncommitted candidate overlay",
+      "head": "70c7de8b7028c58e3115c3dbc59a0ab974c565a8",
+      "source_digest": "41db28ba9d03d7739c3fe61af3fa32dd24bdc2ea181a468d2666347bb0e94bdd",
+      "source_files": 125,
+      "build_cache_allowed": true,
+      "fresh_model_volumes": true,
+      "independent_device": false,
+      "project": "steamboat-release-20261017t122600z-6f83746b",
+      "steps": [
+        {
+          "name": "clone",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:26:00.809443+00:00",
+          "ended_at_utc": "2026-10-17T12:26:02.734478+00:00"
+        },
+        {
+          "name": "compose-config",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:26:03.676785+00:00",
+          "ended_at_utc": "2026-10-17T12:26:04.078817+00:00"
+        },
+        {
+          "name": "build",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:26:04.078817+00:00",
+          "ended_at_utc": "2026-10-17T12:27:25.820496+00:00"
+        },
+        {
+          "name": "prepare",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:27:26.069077+00:00",
+          "ended_at_utc": "2026-10-17T12:27:31.645019+00:00"
+        },
+        {
+          "name": "tests",
+          "exit_code": 1,
+          "started_at_utc": "2026-10-17T12:27:31.645019+00:00",
+          "ended_at_utc": "2026-10-17T12:28:45.279838+00:00"
+        },
+        {
+          "name": "cleanup",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:28:45.279838+00:00",
+          "ended_at_utc": "2026-10-17T12:28:45.909871+00:00"
+        }
+      ],
+      "image": "sha256:eb5b4f0cc660c40f5d9b159b9d56ad21ef9357882c8dc4ada1b1a3c4d3dcf585",
+      "success": false,
+      "error": "tests failed; evidence retained",
+      "evidence_scope": "same laptop; local clone plus uncommitted candidate overlay",
+      "tests": {
+        "count": 257,
+        "seconds": 71.539,
+        "passed": false,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "identity": "20261017T122855Z-ed30a07a",
+      "source_kind": "fresh local clone of HEAD plus uncommitted candidate overlay",
+      "head": "70c7de8b7028c58e3115c3dbc59a0ab974c565a8",
+      "source_digest": "8399b3a36f2c5980614213ea618e5c6c0be49565fad8d7cbf08d1079eb8c9b89",
+      "source_files": 129,
+      "build_cache_allowed": true,
+      "fresh_model_volumes": true,
+      "independent_device": false,
+      "project": "steamboat-release-20261017t122855z-ed30a07a",
+      "steps": [
+        {
+          "name": "clone",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:28:55.740200+00:00",
+          "ended_at_utc": "2026-10-17T12:28:56.239914+00:00"
+        },
+        {
+          "name": "compose-config",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:28:57.165177+00:00",
+          "ended_at_utc": "2026-10-17T12:28:57.556584+00:00"
+        },
+        {
+          "name": "build",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:28:57.556584+00:00",
+          "ended_at_utc": "2026-10-17T12:28:59.055382+00:00"
+        },
+        {
+          "name": "prepare",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:28:59.287512+00:00",
+          "ended_at_utc": "2026-10-17T12:29:04.156416+00:00"
+        },
+        {
+          "name": "tests",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:29:04.156416+00:00",
+          "ended_at_utc": "2026-10-17T12:30:16.372357+00:00"
+        },
+        {
+          "name": "start",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:30:16.372357+00:00",
+          "ended_at_utc": "2026-10-17T12:30:29.705374+00:00"
+        },
+        {
+          "name": "service-check",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:30:29.705374+00:00",
+          "ended_at_utc": "2026-10-17T12:30:44.332464+00:00"
+        },
+        {
+          "name": "smoke",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:30:44.332464+00:00",
+          "ended_at_utc": "2026-10-17T12:30:45.608567+00:00"
+        },
+        {
+          "name": "cleanup",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:30:45.608567+00:00",
+          "ended_at_utc": "2026-10-17T12:30:49.280298+00:00"
+        }
+      ],
+      "image": "sha256:afabbcf73a55d80544a950b8baa224ef4a7c63f49230cf1c4e7ebf2c62b7dd29",
+      "success": true,
+      "evidence_scope": "same laptop; local clone plus uncommitted candidate overlay",
+      "tests": {
+        "count": 263,
+        "seconds": 70.243,
+        "passed": true,
+        "skipped": 0
+      },
+      "service_gate": {
+        "status": "passed",
+        "comparisons": 144,
+        "atol": 0.001,
+        "rtol": 0
+      },
+      "smoke": {
+        "attempted": 6,
+        "completed": 6,
+        "failed": 0,
+        "accepted_output_tokens": 48
+      }
+    },
+    {
+      "schema_version": 1,
+      "identity": "20261017T123303Z-22d56832",
+      "source_kind": "fresh local clone of HEAD plus uncommitted candidate overlay",
+      "head": "70c7de8b7028c58e3115c3dbc59a0ab974c565a8",
+      "source_digest": "f2a7ffea7b6add83293ba9b2c65e3150d1de2588a1d7524baf05b15c9e7dbd78",
+      "source_files": 133,
+      "runtime_source_digest": "203de38740dc4b8d713839920bdab25af5e7eb4226ce0108c55fb0d4e442f1bd",
+      "build_cache_allowed": true,
+      "fresh_model_volumes": true,
+      "independent_device": false,
+      "project": "steamboat-release-20261017t123303z-22d56832",
+      "steps": [
+        {
+          "name": "clone",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:33:03.755850+00:00",
+          "ended_at_utc": "2026-10-17T12:33:04.268819+00:00"
+        },
+        {
+          "name": "compose-config",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:33:05.239765+00:00",
+          "ended_at_utc": "2026-10-17T12:33:05.594651+00:00"
+        },
+        {
+          "name": "build",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:33:05.594651+00:00",
+          "ended_at_utc": "2026-10-17T12:33:13.534307+00:00"
+        },
+        {
+          "name": "prepare",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:33:13.741273+00:00",
+          "ended_at_utc": "2026-10-17T12:33:19.434856+00:00"
+        },
+        {
+          "name": "tests",
+          "exit_code": 1,
+          "started_at_utc": "2026-10-17T12:33:19.434856+00:00",
+          "ended_at_utc": "2026-10-17T12:34:34.902147+00:00"
+        },
+        {
+          "name": "cleanup",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:34:34.902147+00:00",
+          "ended_at_utc": "2026-10-17T12:34:35.547365+00:00"
+        }
+      ],
+      "image": "sha256:00fcceaaa7f27ba357fe0097d5431525623d805b0bdceb4cd5a3897a00342823",
+      "success": false,
+      "error": "tests failed; evidence retained",
+      "evidence_scope": "same laptop; local clone plus uncommitted candidate overlay",
+      "tests": {
+        "count": 263,
+        "seconds": 73.522,
+        "passed": false,
+        "skipped": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "identity": "20261017T123541Z-961b89cb",
+      "source_kind": "fresh local clone of HEAD plus uncommitted candidate overlay",
+      "head": "70c7de8b7028c58e3115c3dbc59a0ab974c565a8",
+      "source_digest": "120f73fe45bc6fead9124054e93c20717ee39fbaca2899af721f960f3039058a",
+      "source_files": 133,
+      "runtime_source_digest": "203de38740dc4b8d713839920bdab25af5e7eb4226ce0108c55fb0d4e442f1bd",
+      "build_cache_allowed": true,
+      "fresh_model_volumes": true,
+      "independent_device": false,
+      "project": "steamboat-release-20261017t123541z-961b89cb",
+      "steps": [
+        {
+          "name": "clone",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:35:41.560708+00:00",
+          "ended_at_utc": "2026-10-17T12:35:43.083890+00:00"
+        },
+        {
+          "name": "compose-config",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:35:44.109101+00:00",
+          "ended_at_utc": "2026-10-17T12:35:44.460471+00:00"
+        },
+        {
+          "name": "build",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:35:44.460471+00:00",
+          "ended_at_utc": "2026-10-17T12:35:45.851024+00:00"
+        },
+        {
+          "name": "prepare",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:35:46.064948+00:00",
+          "ended_at_utc": "2026-10-17T12:35:51.065339+00:00"
+        },
+        {
+          "name": "tests",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:35:51.065339+00:00",
+          "ended_at_utc": "2026-10-17T12:37:02.866868+00:00"
+        },
+        {
+          "name": "start",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:37:02.866868+00:00",
+          "ended_at_utc": "2026-10-17T12:37:16.182410+00:00"
+        },
+        {
+          "name": "service-check",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:37:16.182410+00:00",
+          "ended_at_utc": "2026-10-17T12:37:29.982963+00:00"
+        },
+        {
+          "name": "smoke",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:37:29.982963+00:00",
+          "ended_at_utc": "2026-10-17T12:37:31.240539+00:00"
+        },
+        {
+          "name": "cleanup",
+          "exit_code": 0,
+          "started_at_utc": "2026-10-17T12:37:31.240539+00:00",
+          "ended_at_utc": "2026-10-17T12:37:34.790593+00:00"
+        }
+      ],
+      "image": "sha256:a37682fea095e99f37c6058f39e5aeb96fada1cc4411f77970962c20d4dd8175",
+      "success": true,
+      "evidence_scope": "same laptop; local clone plus uncommitted candidate overlay",
+      "tests": {
+        "count": 263,
+        "seconds": 69.828,
+        "passed": true,
+        "skipped": 0
+      },
+      "service_gate": {
+        "status": "passed",
+        "comparisons": 144,
+        "atol": 0.001,
+        "rtol": 0
+      },
+      "smoke": {
+        "attempted": 6,
+        "completed": 6,
+        "failed": 0,
+        "accepted_output_tokens": 48
+      }
+    }
+  ],
+  "final_runtime_inputs_match_working_tree": true,
+  "github": {
+    "visibility": "private",
+    "private_reporting_verified": false,
+    "private_reporting_status": "blocked_private_repository",
+    "email_required": false,
+    "hosted_workflows_executed": false,
+    "no_remote_writes": true
+  },
+  "limitations": [
+    "One existing gRPC deadline failure retained; focused runs and bounded full rerun passed without changing its timeout",
+    "Initial Windows TCP-probe test failure retained; Linux fast suite passed",
+    "Source-only license/provenance review is not a blanket binary/model redistribution clearance",
+    "No independent person/device, GPU or performance-envelope evidence added"
+  ]
+}
