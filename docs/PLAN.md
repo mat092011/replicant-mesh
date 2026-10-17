@@ -64,7 +64,11 @@ connector and network work: consumer/host/orchestrator roles, secure admission,
 participant resource controls, real-device GPU experiments, measured placement,
 recovery, reciprocal credits and eventual federation. Its C0–C9 work packages
 map to the existing research gates; they are proposed work, not implementation
-or new experimental evidence. All P0–P8 statuses remain unchanged.
+or new experimental evidence. The derived
+[multiphase execution plan](PARTICIPANT_NETWORK_PHASES.md) adds task checklists,
+local versus real-device sub-gates, dependencies, deliverables and evidence
+requirements for C0–C9; all connector phases remain planned. All P0–P8 statuses
+remain unchanged.
 
 ## Questions to answer
 

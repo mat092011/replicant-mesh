@@ -6,6 +6,11 @@ recovery system or credit system is implemented by this document.**
 [PYTORCH_PIPELINE_PLAN.md](PYTORCH_PIPELINE_PLAN.md) records implemented M0–M5.
 The work packages below extend those plans without declaring their gates passed.
 
+Use [PARTICIPANT_NETWORK_PHASES.md](PARTICIPANT_NETWORK_PHASES.md) to execute this
+design: it expands C0–C9 into task checklists, local and real-device sub-gates,
+dependencies, deliverables, completion evidence and the immediate implementation
+queue. This document remains the architectural rationale.
+
 ## 1. Objective and recommended direction
 
 Build an application that lets a person use shared inference, contribute a
@@ -564,6 +569,11 @@ require actual participating machines. Do not block every implementation task on
 the full historical sweep, but preserve its incomplete coverage and freeze new
 comparisons before collecting them.
 
+The [multiphase execution plan](PARTICIPANT_NETWORK_PHASES.md) owns detailed
+sequencing and task status. In particular, C1a local security work and C1b physical
+device evidence are separate sub-gates; local connector and GPU work need not
+wait for the entire secure-cohort phase to finish.
+
 | Package | Deliverable | Prerequisite | Acceptance evidence |
 | --- | --- | --- | --- |
 | C0: Freeze connector contracts | Role/policy schema, identities, threat model, platform choice and experiment manifest | Current baseline | Reviewed contracts; explicit unsupported features; unchanged legacy lab |
@@ -680,11 +690,13 @@ project's goal. Only pursue unrestricted admission after stating how wrong
 computation, identities, spam and collusion are handled and which guarantees are
 still absent.
 
-Before C1/C3 implementation, resolve: actual second-device access; initial supported
-GPU/backend; who operates enrollment and gateway infrastructure; resource/egress
-budget; and the fixed cohort's model/trust policy. Before C5, select the larger
-model and verify its distribution terms and measurable offload control. Before
-C8/C9, decide support ownership, abuse response, retention and operating costs.
+Before C1/C3 remote trials, resolve actual second-device access, the selected
+CPU/GPU configuration, enrollment/gateway ownership, resource/egress budgets and
+the cohort's model/trust policy. Local C1a security and C2a connector work can
+proceed after C0; local C3a GPU execution additionally requires actual supported
+hardware. Before C5, select the larger model and verify its distribution terms
+and measurable offload control. Before C8/C9, decide support ownership, abuse
+response, retention and operating costs.
 
 While only one laptop is available, useful authorized development includes
 schemas, local TLS/admission tests, connector lifecycle, fake-worker fault

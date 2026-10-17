@@ -170,6 +170,8 @@ configuration provenance and renewed correctness checks.
 - [Development roadmap](docs/ROADMAP.md): prioritized work and completion criteria.
 - [Participant network plan](docs/PARTICIPANT_NETWORK_PLAN.md): proposed connector,
   host/orchestrator roles and the path to a global shared-inference network.
+- [Participant execution phases](docs/PARTICIPANT_NETWORK_PHASES.md): C0–C9 tasks,
+  dependencies, deliverables and acceptance gates for implementing that design.
 - [Research plan](docs/PLAN.md): P0–P8 hypotheses and experimental gates.
 - [Release readiness](docs/OPEN_SOURCE_RELEASE.md): reviewed gaps and remaining release blockers.
 - [Third-party review](docs/THIRD_PARTY.md): dependency/model terms and outstanding provenance work.

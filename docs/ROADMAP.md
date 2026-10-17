@@ -10,7 +10,9 @@ For the detailed participant application and worldwide network design, see
 [PARTICIPANT_NETWORK_PLAN.md](PARTICIPANT_NETWORK_PLAN.md). It specifies consumer,
 shard-host and orchestrator roles, secure connectivity, resource policy, protocol
 changes, placement, recovery, credits and reviewable implementation packages.
-Those packages supplement this work order and do not advance research status.
+The [multiphase execution plan](PARTICIPANT_NETWORK_PHASES.md) expands C0–C9 into
+task checklists, dependencies, local/device sub-gates and completion evidence.
+Those phases supplement this work order and do not advance research status.
 
 ## Starting point and constraints
 
@@ -162,7 +164,7 @@ Spot checks and signed receipts are limited checks, not proof against collusion.
 | --- | --- | --- |
 | Now | Review the local release evidence and remaining distribution boundaries | Inventories, ownership attestation, secret scan and reproduction report |
 | Publication follow-up | Review hosted CI, private reporting and retained test intermittency | [Publication evidence](experiments/2026-10-17-publication.md) and verified repository setting |
-| Next | Specify connector identities, roles, resource policy and secure fixed-cohort transport | [Connector C0–C2 contracts](PARTICIPANT_NETWORK_PLAN.md) and local admission/lifecycle checks; device evidence remains a separate gate |
+| Next | Specify connector identities, roles, resource policy and secure fixed-cohort transport | [Connector C0–C2 phases](PARTICIPANT_NETWORK_PHASES.md) and local admission/lifecycle checks; device evidence remains a separate gate |
 | Next | Select a bounded remaining CPU experiment subset | Frozen plan, duration estimate, audit and report |
 | Next | Recruit/inventory a second device and choose an initial GPU cohort | Confirmed access and measured hardware/network inventory |
 | After access | Secure transport/admission and separate-device parity | Negative admission tests and numerical/lifecycle report |
