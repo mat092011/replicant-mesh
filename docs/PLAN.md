@@ -72,7 +72,9 @@ passed after reviewed identity/permission/resource/failure contracts, closed-typ
 configuration validation, rebuilt Docker checks and the unchanged CPU controls.
 C1–C9 remain planned; local C1a/C2a and CPU C4a work may proceed independently of
 missing external hardware. C0 implements declarations, not authentication or a
-connector. All P0–P8 statuses remain unchanged.
+connector. The [lock portability follow-up](experiments/2026-10-17-participant-c0-portability.md)
+records a corrected cross-platform identity and Git-source validation after
+hosted CI exposed a CRLF/LF mismatch. All P0–P8 statuses remain unchanged.
 
 ## Questions to answer
 

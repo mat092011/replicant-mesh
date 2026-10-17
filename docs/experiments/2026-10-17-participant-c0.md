@@ -6,6 +6,10 @@ rebuilt Docker validation and the existing CPU controls. This permits local
 C1a/C2a and CPU C4a work. It provides no deployed authentication, connector,
 remote-device, GPU, pooled-memory, performance or participant-benefit evidence.
 
+The later [lock portability correction](2026-10-17-participant-c0-portability.md)
+records the hosted CI finding and corrected Git-source validation. The identities
+below remain the actual original measured Windows-working-tree snapshot.
+
 ## Scope and review
 
 The [decision](../decisions/0001-participant-contracts.md) and

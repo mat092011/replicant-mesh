@@ -103,6 +103,12 @@ fit the selected contract. No limit in these files raises an M0–M5 ceiling.
 
 ## Selected security and wire declarations
 
+The runtime lock identity is the SHA-256 of the exact UTF-8/LF bytes checked into
+Git. `.gitattributes` enforces LF checkout bytes for `*.lock` on every platform.
+The existing CPU dependency lock's Git content is unchanged. Do not substitute
+the hash of a CRLF working copy: Linux source checkouts and participant images
+must agree on the same artifact identity.
+
 Typed IDs use `acct_/dev_/req_/ses_/route_/op_/asg_` plus 32 lowercase hex digits;
 boots are raw 32 lowercase hex digits. Stage assignments are distinct `asg_` IDs.
 Attempt is exactly 1: no mutation retries, replay or recovery. Personal coordinator

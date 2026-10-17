@@ -28,7 +28,7 @@
   "operation_id": "op_00000000000000000000000000000001",
   "attempt": 1,
   "component": "worker-1",
-  "compatibility_sha256": "f008f340c210e21e42c79119291871daaadce8fb6a0f8da03ffee3491afb1763",
+  "compatibility_sha256": "6b06d89a1e2c9e6b24a38353a25afbf8791e4e79a4939f307c25679179c1f41c",
   "lease_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "payload_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "sequence": 0,

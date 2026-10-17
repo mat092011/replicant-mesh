@@ -31,7 +31,7 @@
       "python": {"const": "3.12.15"}, "torch": {"const": "2.14.1+cpu"},
       "transformers": {"const": "5.19.0"}, "grpcio": {"const": "1.84.0"}, "protobuf": {"const": "7.36.2"},
       "runtime_lock": {"const": "docker/pytorch/requirements.lock"},
-      "runtime_lock_sha256": {"const": "ec074730911798d0d08bd56fcd24f00db53d14dbe13e2be4e031150a52b82be3"},
+      "runtime_lock_sha256": {"const": "0d893300099241375c9ef032268e162ff6ef46fe93cce1bbe6457bfd01545434"},
       "model_id": {"const": "Maykeye/TinyLLama-v0"}, "model_revision": "Revision", "tokenizer_revision": "Revision",
       "source_weights_sha256": {"const": "c302246d91e2854ff350e52a79938a818c203186c2f0671213ce372a0289cd91"},
       "tokenizer_model_sha256": {"const": "ab1b681ec7fc02fed5edd3026687d7a692a918c4dd8e150ca2e3994a6229843b"},
