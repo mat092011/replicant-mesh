@@ -208,6 +208,7 @@ class ProcessRoleBackend:
                             or assignment.document_sha256 != entry["assignment_sha256"]):
                         return False
                     assignments.append({
+                        "version": 1,
                         "component": launch["component"],
                         "worker_boot_id": launch["worker_boot_id"],
                         "assignment_deadline": launch["assignment_deadline"],
