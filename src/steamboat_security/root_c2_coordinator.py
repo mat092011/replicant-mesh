@@ -25,6 +25,7 @@ from .files import safe_read
 from .root_c2_runtime import (_selected, _same_spec, MAX_HEADER_BYTES,
                               MAX_RUNTIME_CONFIGURATION_BYTES, MAX_TEARDOWN_SUBSCRIBERS)
 from .root_c2_selected import make_c2_selected_validation_callback
+from .root_runtime import _require_current_role_grants
 from .root_transition_launch import RoleLaunchSpec, parse_role_launch_spec, role_launch_document
 from .root_transition_storage import RootGenerationStore
 from .snapshot import SnapshotStore
@@ -94,7 +95,8 @@ class C2CoordinatorRuntimeBinding:
         self._runtime_bytes, self._cert_pem, self._key_pem = runtime_bytes, cert_pem, key_pem
         self._spec, self._activation_hash, self._snapshot_store = spec, activation_hash, snapshot_store
         self._model_id = model_id
-        self._identity = None
+        self._identity = LocalIdentity(cert_pem, spec.boot_id, model_id, None,
+                                       spec.admission_epoch, spec.generation_sha256)
         self._tls = C2CoordinatorTLSMaterials(cert_pem, key_pem)
         self._lock = threading.RLock()
         self._invalid = False
@@ -181,18 +183,8 @@ class C2CoordinatorRuntimeBinding:
             certificate_hash=record.certificate_sha256, ekus=record.ekus,
             dns_sans=record.dns_sans, ip_sans=record.ip_sans)
         checked.assert_credential_live(view, record, sample)
-        grants = [g for g in view.active_grants(sample)
-                  if ((g.actor_serial == record.serial and g.actor_boot_id == self._spec.boot_id
-                       and g.actor_credential_epoch == record.credential_epoch)
-                      or (g.target_serial == record.serial and g.target_boot_id == self._spec.boot_id
-                          and g.target_role == "consumer" and g.assignment_id is None
-                          and g.target_credential_epoch == record.credential_epoch))]
-        if not grants:
-            raise CredentialError("selected C2 coordinator has no current route grant")
-        if any(grant.model_id != self._model_id for grant in grants):
-            raise CredentialError("selected C2 coordinator route grant escapes configured model scope")
-        self._identity = LocalIdentity(self._cert_pem, self._spec.boot_id, self._model_id,
-                                       None, self._spec.admission_epoch, self._spec.generation_sha256)
+        _require_current_role_grants(view, sample, record, self._spec,
+            {"model_id": self._model_id, "assignment_id": None})
         return checked, view, record
 
     def assert_live(self):
@@ -221,19 +213,14 @@ class C2CoordinatorRuntimeBinding:
                 if self._invalid:
                     raise CredentialError(self._reason or "binding invalidated during guard")
                 sample = self._clock.sample()
-                if sample.latest_wall >= view.expires_at or sample.monotonic >= view.deadline_monotonic:
+                if (sample.latest_wall >= view.expires_at or sample.monotonic >= view.deadline_monotonic
+                        or sample.latest_wall >= local_view.expires_at
+                        or sample.monotonic >= local_view.deadline_monotonic):
                     raise SnapshotError("selected C2 policy expired")
                 local_record = local_view.credential(self._spec.serial)
                 self._snapshot_store.assert_credential_live(local_view, local_record, sample)
-                grants = [g for g in local_view.active_grants(sample)
-                          if ((g.actor_serial == self._spec.serial and g.actor_boot_id == self._spec.boot_id
-                               and g.actor_credential_epoch == self._spec.credential_epoch)
-                              or (g.target_serial == self._spec.serial
-                                  and g.target_boot_id == self._spec.boot_id
-                                  and g.target_role == "consumer" and g.assignment_id is None
-                                  and g.target_credential_epoch == self._spec.credential_epoch))]
-                if not grants or any(g.model_id != self._model_id for g in grants):
-                    raise CredentialError("selected C2 coordinator route authorization changed")
+                _require_current_role_grants(local_view, sample, local_record, self._spec,
+                    {"model_id": self._model_id, "assignment_id": None})
                 return None
         except BaseException as exc:
             if isinstance(exc, _PolicyRefreshRequired):
@@ -247,7 +234,11 @@ class C2CoordinatorRuntimeBinding:
             raise CredentialError("C2 coordinator guard failed closed") from exc
 
     def install_policy(self, encoded):
-        self.assert_live()
+        try:
+            self.assert_refreshable()
+        except BaseException as exc:
+            self.invalidate(str(exc))
+            raise
         try:
             result = self._snapshot_store.install(encoded)
             self.assert_live()
@@ -261,12 +252,11 @@ class C2CoordinatorRuntimeBinding:
         with self._lock:
             if self._invalid:
                 raise CredentialError(self._reason or "C2 coordinator binding is invalid")
-        selected, cohort = _selected(self._root_store, self._clock)
-        specs = [item for item in cohort.new_specs if item.identity == self._spec.identity]
-        if len(specs) != 1 or not _same_spec(specs[0], self._spec):
-            self.invalidate("selected C2 coordinator launch changed")
-            raise CredentialError("selected C2 coordinator launch changed; cold restart required")
         try:
+            selected, cohort = _selected(self._root_store, self._clock)
+            specs = [item for item in cohort.new_specs if item.identity == self._spec.identity]
+            if len(specs) != 1 or not _same_spec(specs[0], self._spec):
+                raise CredentialError("selected C2 coordinator launch changed; cold restart required")
             view = self._snapshot_store.install(selected.active_policy_snapshot)
             if (view.revision != selected.selector.policy_revision
                     or view.policy_digest != selected.selector.policy_digest):
@@ -276,6 +266,14 @@ class C2CoordinatorRuntimeBinding:
         except BaseException as exc:
             self.invalidate(str(exc))
             raise
+
+    def assert_refreshable(self):
+        try:
+            self.assert_live()
+        except _PolicyRefreshRequired:
+            with self._lock:
+                if self._invalid:
+                    raise CredentialError(self._reason or "binding invalidated during refresh check")
 
 
 def load_c2_personal_coordinator_binding(*, root_store: RootGenerationStore, clock: Clock,
@@ -324,7 +322,6 @@ def load_c2_personal_coordinator_binding(*, root_store: RootGenerationStore, clo
         raise CredentialError("C2 coordinator keypair differs from selected launch pins")
     files = {path: header_bytes, paths["certificate"]: cert_pem,
              paths["key"]: key_pem, paths["runtime"]: runtime}
-    sample = clock.sample()
     expected_head = {"sha256": selected.selector_sha256}
     policy_lock = threading.RLock()
 
@@ -384,6 +381,7 @@ def load_c2_personal_coordinator_binding(*, root_store: RootGenerationStore, clo
         minimum_policy_digest=selected.selector.policy_digest,
         durable_commit=durable_policy_commit)
     store.install(selected.active_policy_snapshot)
+    sample = clock.sample()
     view = store.current(sample=sample)
     record = view.credential(spec.serial)
     if record is None or record.identity != spec.identity:
