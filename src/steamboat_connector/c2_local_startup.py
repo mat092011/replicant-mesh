@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import threading
 from dataclasses import dataclass
-from pathlib import Path
 
 from steamboat_connector.c2_child_config import build_c2_child_config
 from steamboat_connector.owner_consent import OwnerConsentSnapshot, OwnerConsentStore
@@ -58,9 +57,9 @@ def closed_role_config(reference: C2LocalLaunchReference, *, selected_root: str,
     if role not in _SELECTED_ROLE or spec.role != _SELECTED_ROLE[role]:
         raise CredentialError("C2 role config does not match the selected local role")
     return build_c2_child_config(role=role,
-        selected_root=str(Path(selected_root).resolve()),
-        protected_root=str(Path(reference.configuration_root).resolve()),
-        configuration_path=str(Path(reference.configuration_path).resolve()),
+        selected_root=selected_root,
+        protected_root=reference.configuration_root,
+        configuration_path=reference.configuration_path,
         launch_spec=spec,
         operator_verification_key_pem=reference.operator_verification_key_pem)
 

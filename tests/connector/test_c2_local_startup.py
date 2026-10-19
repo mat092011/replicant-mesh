@@ -18,7 +18,9 @@ from steamboat_connector.c2_local_startup import C2LocalStartup, C2LocalStartupE
 from steamboat_connector.owner_consent import OwnerConsentSnapshot
 from steamboat_connector.owner_consent import OwnerConsentStore, provision_owner_consent
 from steamboat_security.root_c2_local_claim import C2LocalClaimStore
-from steamboat_security.errors import BindingError, CredentialError, SnapshotError
+from steamboat_security.errors import (
+    BindingError, CredentialError, SnapshotError, StorageError,
+)
 from steamboat_connector.process_supervisor import ProcessRoleBackend
 from steamboat_connector.c2_local_startup import C2LocalLaunchReference, closed_role_config
 
@@ -78,6 +80,33 @@ class C2LocalStartupContractTests(unittest.TestCase):
             5, ("consumer", "host"))
         with self.assertRaises(C2LocalStartupError):
             C2LocalStartup._selected_owner_roles(consumer)
+
+    def test_closed_role_config_rejects_raw_noncanonical_posix_paths(self):
+        from cryptography.hazmat.primitives import serialization
+        from steamboat_security.certificates import generate_private_key_pem
+        from steamboat_security.root_transition_launch import RoleLaunchSpec
+
+        private = serialization.load_pem_private_key(
+            generate_private_key_pem(), password=None)
+        public_pem = private.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        spec = RoleLaunchSpec("a" * 64, "acct_" + "1" * 32,
+            "dev_" + "2" * 32, "host", "1a", "b" * 64, "c" * 64,
+            1, "d" * 32, 1, "e" * 64, "f" * 32)
+        for selected_root, protected_root, configuration_path in (
+            ("relative", "/protected", "/protected/header.json"),
+            ("/selected", "/protected/../escape", "/protected/header.json"),
+            ("/selected", "/protected", "/protected//header.json"),
+            ("/selected", "/protected", "/protected/../escape/header.json"),
+        ):
+            with self.subTest(selected_root=selected_root,
+                              protected_root=protected_root,
+                              configuration_path=configuration_path):
+                candidate = C2LocalLaunchReference(spec, configuration_path,
+                    protected_root, public_pem)
+                with self.assertRaises(CredentialError):
+                    closed_role_config(candidate, selected_root=selected_root,
+                                       role="host")
 
 
 _ARTIFACTS = Path(os.environ.get("STEAMBOAT_C2_STARTUP_ARTIFACTS", "/artifacts"))
@@ -274,8 +303,14 @@ class C2LocalStartupNativeTests(unittest.TestCase):
                     before_epoch = owner.snapshot().epoch
                     import steamboat_connector.process_supervisor as process_supervisor
                     with mock.patch.object(process_supervisor.subprocess, "Popen") as popen:
-                        with self.assertRaises((CredentialError, SnapshotError)):
-                            startup.start(("host",), cancel_event=threading.Event())
+                        if mutation == "wrong-key":
+                            with self.assertRaisesRegex(
+                                    CredentialError,
+                                    "C2 operator key differs from selected scope pin"):
+                                startup.start(("host",), cancel_event=threading.Event())
+                        else:
+                            with self.assertRaises(StorageError):
+                                startup.start(("host",), cancel_event=threading.Event())
                     popen.assert_not_called()
                     self.assertEqual(owner.snapshot().epoch, before_epoch)
                     claims_root = Path(os.readlink(f"/proc/self/fd/{claims._fd}"))
