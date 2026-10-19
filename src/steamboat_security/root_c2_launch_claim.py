@@ -238,6 +238,8 @@ class C2LaunchClaimStore:
 
     @contextmanager
     def _lock(self):
+        if self._fd < 0 or self._unknown:
+            raise StorageError("C2 claim store is closed or latched")
         import fcntl
         fd = os.open(_LOCK, os.O_RDWR | os.O_NOFOLLOW, dir_fd=self._fd)
         try:
@@ -259,9 +261,19 @@ class C2LaunchClaimStore:
                     raise
 
     def _scan(self):
-        names = set(os.listdir(self._fd))
+        names = []
+        try:
+            with os.scandir(self._fd) as entries:
+                for entry in entries:
+                    names.append(entry.name)
+                    if len(names) > MAX_CLAIMS + 1:
+                        raise StorageError("C2 claim store has too many directory entries")
+        except StorageError:
+            raise
+        except OSError as error:
+            raise StorageError("C2 claim directory cannot be scanned safely") from error
         if _LOCK not in names: raise StorageError("C2 claim lock missing")
-        files = names - {_LOCK}
+        files = [name for name in names if name != _LOCK]
         if len(files) > MAX_CLAIMS: raise StorageError("C2 claim history is full")
         results, total = {}, 0
         for name in files:

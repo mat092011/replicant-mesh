@@ -30,6 +30,14 @@ primitive descriptions and a receipt never authorize a process. The claim
 store itself does not spawn, approve, establish readiness, or prove that weights
 loaded.
 
+This global whole-cohort record is not a per-daemon startup API. A future
+integration must define a separate, opt-in local-plan projection and local
+claim interface so each daemon can bind only the principals it owns while
+proving that the projection came from the same complete selected cohort.
+Global rotation still requires whole-cohort validation before any local claims
+or launches. This module does not provide that projection, ownership routing,
+or process-launch wiring.
+
 The caller must hold the **same `RootGenerationStore` protected-head
 serialization** continuously from fresh selected validation through the full
 cohort claim and publication of ownership for every immediate `Popen`. Release

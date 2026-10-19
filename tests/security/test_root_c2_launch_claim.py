@@ -7,6 +7,7 @@ import os
 import multiprocessing
 import tempfile
 import unittest
+from dataclasses import replace
 from unittest import mock
 from pathlib import Path
 
@@ -33,6 +34,22 @@ def _claim_process(root, uid, record_args, expected_doc, gate, output):
         if not gate.wait(10):
             output.put("timeout"); return
         with C2LaunchClaimStore(root, expected_uid=uid) as store:
+            def trusted(record):
+                return None if c2_launch_claim_document(record) == expected_doc else False
+            store.claim(**record_args, fresh_selected_validator=trusted)
+        output.put("claimed")
+    except BindingError:
+        output.put("rejected")
+    except BaseException as error:
+        output.put("error:" + type(error).__name__)
+
+
+def _ready_then_claim_process(root, uid, record_args, expected_doc, ready, gate, output):
+    try:
+        with C2LaunchClaimStore(root, expected_uid=uid) as store:
+            ready.put("ready")
+            if not gate.wait(10):
+                output.put("timeout"); return
             def trusted(record):
                 return None if c2_launch_claim_document(record) == expected_doc else False
             store.claim(**record_args, fresh_selected_validator=trusted)
@@ -133,6 +150,45 @@ class C2ClaimFixture(unittest.TestCase):
         with self.assertRaises(StorageError): C2LaunchClaimStore(root, expected_uid=os.geteuid())
 
     @unittest.skipUnless(os.name == "posix", "native POSIX store")
+    def test_callback_async_and_non_none_do_not_create_a_claim(self):
+        root = Path(self.fx_case.temp.name) / "claims-callback-contract"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        args = dict(selector_sha256=self.cohort.selector_sha256,
+            activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+            generation_sha256=self.cohort.generation_sha256,
+            new_role_launch_specs=self.cohort.new_specs,
+            new_host_group_scopes=self.cohort.new_groups)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as store:
+            with self.assertRaises(TypeError):
+                store.claim(**args, fresh_selected_validator=lambda _record: True)
+            async def async_validator(_record): return None
+            with self.assertRaises(TypeError):
+                store.claim(**args, fresh_selected_validator=async_validator)
+            self.assertEqual(set(os.listdir(root)), {"claim.lock"})
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX store")
+    def test_malformed_public_specs_and_duplicate_principal_reject(self):
+        root = Path(self.fx_case.temp.name) / "claims-malformed"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        args = dict(selector_sha256=self.cohort.selector_sha256,
+            activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+            generation_sha256=self.cohort.generation_sha256,
+            new_host_group_scopes=self.cohort.new_groups)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as store:
+            invalid = replace(self.cohort.new_specs[0], credential_epoch=True)
+            bad_specs = tuple(sorted((invalid,) + self.cohort.new_specs[1:], key=lambda x: x.identity))
+            with self.assertRaises(BindingError):
+                store.claim(**args, new_role_launch_specs=bad_specs,
+                    fresh_selected_validator=self._trusted_validator)
+            dup = replace(self.cohort.new_specs[0], boot_id="f" * 32)
+            duplicate = tuple(sorted((self.cohort.new_specs[0], dup) + self.cohort.new_specs[1:],
+                                     key=lambda x: x.identity))
+            with self.assertRaises(BindingError):
+                store.claim(**args, new_role_launch_specs=duplicate,
+                    fresh_selected_validator=self._trusted_validator)
+            self.assertEqual(set(os.listdir(root)), {"claim.lock"})
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX store")
     def test_unknown_entries_and_symlinks_fail_closed(self):
         root = Path(self.fx_case.temp.name) / "claims-unsafe"
         root.mkdir(mode=0o700); os.chmod(root, 0o700)
@@ -158,11 +214,14 @@ class C2ClaimFixture(unittest.TestCase):
             self.cohort.generation_sha256, _sha(canonical_json(cohort_body)),
             self.cohort.new_specs, self.cohort.new_groups))
         context = multiprocessing.get_context("fork")
-        gate, output = context.Event(), context.Queue()
-        children = [context.Process(target=_claim_process,
-            args=(str(root), os.geteuid(), args, expected_doc, gate, output)) for _ in range(2)]
+        gate, ready, output = context.Event(), context.Queue(), context.Queue()
+        children = [context.Process(target=_ready_then_claim_process,
+            args=(str(root), os.geteuid(), args, expected_doc, ready, gate, output)) for _ in range(2)]
+        results = []
         try:
             for child in children: child.start()
+            # Both constructors must have completed before either claim proceeds.
+            self.assertEqual([ready.get(timeout=20) for _ in children], ["ready", "ready"])
             gate.set()
             results = [output.get(timeout=20) for _ in children]
             for child in children: child.join(timeout=10)
@@ -171,7 +230,7 @@ class C2ClaimFixture(unittest.TestCase):
             for child in children:
                 if child.is_alive(): child.terminate()
                 child.join(timeout=3)
-            output.close()
+            output.close(); ready.close()
         self.assertCountEqual(results, ["claimed", "rejected"])
         self.assertTrue(all(child.exitcode == 0 for child in children))
 
@@ -318,6 +377,67 @@ class C2ClaimFixture(unittest.TestCase):
             store.close()
             if armed["fd"] is not None: original_close(armed["fd"])
             original_close(replacement)
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX store")
+    def test_file_fsync_fault_is_sticky_and_preserves_consumed_boots(self):
+        root = Path(self.fx_case.temp.name) / "claims-file-fsync-fault"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        args = dict(selector_sha256=self.cohort.selector_sha256,
+            activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+            generation_sha256=self.cohort.generation_sha256,
+            new_role_launch_specs=self.cohort.new_specs,
+            new_host_group_scopes=self.cohort.new_groups)
+        def fail(label):
+            if label == "claim.file.fsync": raise OSError("injected file fsync failure")
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid(), _fault_hook=fail) as store:
+            with self.assertRaises(StorageError): store.claim(**args,
+                fresh_selected_validator=self._trusted_validator)
+            with self.assertRaises(StorageError): store.claim(**args,
+                fresh_selected_validator=self._trusted_validator)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as reopened:
+            with self.assertRaises(BindingError): reopened.claim(**args,
+                fresh_selected_validator=self._trusted_validator)
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX store")
+    def test_historical_child_boot_cannot_move_to_a_new_generation_or_parent(self):
+        root = Path(self.fx_case.temp.name) / "claims-child-history"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as store:
+            store.claim(selector_sha256=self.cohort.selector_sha256,
+                activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+                generation_sha256=self.cohort.generation_sha256,
+                new_role_launch_specs=self.cohort.new_specs,
+                new_host_group_scopes=self.cohort.new_groups,
+                fresh_selected_validator=self._trusted_validator)
+        new_generation = _sha(b"later generation")
+        new_specs = tuple(replace(spec, generation_sha256=new_generation,
+            credential_epoch=spec.credential_epoch + 1,
+            admission_epoch=spec.admission_epoch + 1,
+            boot_id=f"{int(spec.boot_id, 16) + 0x1000:032x}",
+            launch_nonce=f"{int(spec.launch_nonce, 16) + 1:032x}")
+            for spec in self.cohort.new_specs)
+        new_specs = tuple(sorted(new_specs, key=lambda x: x.identity))
+        host_spec = next(x for x in new_specs if x.role == "host")
+        old_group = self.cohort.new_groups[0]
+        components = tuple(replace(component,
+            worker_boot_id=(old_group.components[0].worker_boot_id if index == 0
+                else f"{0xD0000000000000000000000000000000 + index:032x}"))
+            for index, component in enumerate(old_group.components))
+        credential = replace(old_group.credential,
+            credential_epoch=host_spec.credential_epoch,
+            serial=host_spec.serial, certificate_sha256=host_spec.certificate_sha256,
+            public_key_sha256=host_spec.public_key_sha256)
+        new_group = replace(old_group, credential=credential,
+            generation_sha256=new_generation, admission_epoch=host_spec.admission_epoch,
+            parent_boot_id=host_spec.boot_id, components=components)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as store:
+            with self.assertRaises(BindingError):
+                store.claim(selector_sha256="a" * 64,
+                    activation_manifest_sha256="b" * 64,
+                    generation_sha256=new_generation,
+                    new_role_launch_specs=new_specs,
+                    new_host_group_scopes=(new_group,),
+                    fresh_selected_validator=lambda _record: None)
 
 
 if __name__ == "__main__": unittest.main()
