@@ -323,6 +323,13 @@ from component 34; actual role/process/consumer integration and the real C2
 route remain pending. See the component record for retained failures and pins.
 C2.1–C2.6 and the phase exit gate remain open.
 
+Component 35 subsequently passed 978 bounded combined tests with zero skips,
+and a separate supervised Clock handoff passed 91 native tests. A broader
+coordinator compatibility diagnostic exposed a reproducible cancellation
+regression after an 18-case focused pass; the fix remains in progress. These
+results do not establish fixed-role readiness or the real C2 route. The
+component record retains failures and controls. All C2 gates remain open.
+
 ## C3 — Validate one GPU execution path
 
 **Outcome:** one explicitly supported GPU/backend/precision combination preserves

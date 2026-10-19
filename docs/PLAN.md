@@ -1058,3 +1058,15 @@ retains exact snapshots, logs and the earlier Clock teardown failure.
 These are library and data-validation results; supervised process handoff,
 fixed-role readiness and the real C2 route remain pending. They are separate
 from component 34. C2.1–C2.6 remain open; C3 and research statuses are unchanged.
+
+
+**C2 component 35 and integration follow-up, 2026-10-19:** the bounded combined
+gate passed 978 tests with zero skips in 61.412 seconds on 485 verified source
+files. A separate supervised Clock handoff passed 91 native tests with zero
+skips; its real child-process checks use cgroup lifecycle stand-ins and do not
+prove physical resource enforcement. The coordinator guard's 18 focused fake
+cases passed, but a broader compatibility run found a reproducible default C1
+cancellation regression. The [component record](experiments/2026-10-19-participant-c2-components.md)
+retains the failure, paired baseline and exact provenance. A fix is in progress;
+these results do not accept C2. C2.1–C2.6, actual fixed-role integration and the
+real C2 route remain open; C3 and research statuses are unchanged.

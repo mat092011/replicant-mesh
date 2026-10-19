@@ -1080,3 +1080,93 @@ separate focused results, not part of component 34's 925-test count. Process
 handoff integration, actual fixed-role startup, live consumer ownership,
 shared physical resource enforcement and the real C2 route remain unverified.
 All C2 tasks and the C2 exit gate remain open; C3 has not advanced.
+
+
+## Component 35 and supervised Clock handoff
+
+Component 35 rebuilt the candidate at head
+73797e12e6538ade9e9291a3913b88e78fb02519 and passed 978 unique tests with
+zero skips, failures or errors in 61.412 seconds. All 485 frozen source files
+matched digest
+06d96ea17cb4582f8c8f909035f3c0d17b20838b983754d60d0d93421572b5bc.
+The image was
+sha256:9e2eae42555c2ee1f996fbb9ad5a9baae56411054c1d9e03336065d9fb39083c;
+source-proof log SHA-256 was
+9f8bfc5c86b913262bce478d21caecfbfedcfe6a688ee029441b913b57d5f5a4,
+test log SHA-256
+87b39ec0dc38d8cbecf05b53f222c41916aafa6ba79268055049655986593f66,
+and gate SHA-256
+f355cc9f973b74e19782b77ce204d067a95c65a0fe60d0bd66849a16810f3d77.
+The run retained the original component caps and offline artifacts, covered
+all connector tests plus the same 27 selected security and two runtime modules,
+and exited zero without OOM; the container was removed. It includes the Clock
+library, persistent channel-policy owner and initial settings parsers. It
+predates process handoff, coordinator runtime guards and fixed-role integration;
+it is not a full C1, repository or C2 phase gate.
+
+The independently reviewed supervised Clock handoff subsequently passed
+91 focused native tests with zero skips, failures or errors in 7.944 seconds.
+Frozen head was c5047b816aa7665a1c144f9491719a374ca85ad3, digest
+593817a04ca332eee0c42e14a16bb051ffb4d5ccc2357eff92f1bd60e6bcd4fa
+(481 files), log SHA-256
+e94fac368442ddb6b0d3b9c3243935e392d5213ddcef241daa5102f3de6761e9.
+The inventory comprises six handoff, 26 Clock, 48 supervisor and 11 C2 startup
+tests. Actual child processes sample the exact inherited authority Clock;
+filesystem cgroup stand-ins establish lifecycle behavior, not resource limits.
+Tests cover bounded Stop with a blocked Clock provider or bridge owner lock,
+late publication, exact Clock identity and retention until reaping and bridge
+quiescence. An ambiguous process-creation outcome remains owned even when its
+cgroup is empty. This does not establish a loaded model role or READY.
+
+The earlier 91-test run had 90 passes and one failure, with zero skips in
+7.934 seconds (log SHA-256
+161f05e6c486e1fab9f1826532125379eb637fdcefa389f8ac3a3e97cfe833fe).
+Its test expected immediate nonblocking reap confirmation despite transient
+server-thread lock contention. The reviewed correction retries for at most
+one second; the held-lock prompt-refusal assertion and production API are
+unchanged. The failed run remains retained.
+
+## Coordinator guard focused pass and compatibility regression
+
+The optional coordinator runtime guard passed 18 focused bounded-fake tests
+with zero skips in 0.395 seconds at
+18d3f1cad7b256ebdf346858abf4e492a2e1d0d7, source digest
+05b626811e47aa926e1650ef594e0f48553e0be6c371c1bc589a2b9e51243493
+(487 files), log SHA-256
+494819dfd84efebcd19cdbaa408dc69f2dbd402eadb1291d0389dcc28fcf7293.
+An earlier 18-test attempt had 17 constructor errors because its fake service
+supported two streams while the fixture requested the default 40; the
+test-only fix explicitly requests two. Its log SHA-256 is
+1d679f18c7556996554b65612e8a3df2408d1dfc565c41e5e28c8d5cf0480750.
+Production limits were unchanged.
+
+A broader 90-test coordinator compatibility diagnostic then failed:
+87 passes, one error and two skips in 27.668 seconds (source digest
+c70c0cdf8e3e24816ab93e9f82bd7c42144073143dbcaab075cc0d33cc683572,
+489 files; log SHA-256
+e80e0db280569bb34fcaa9715123db5d27b508410d127f6ac1b24e7ad1fe4b61).
+The existing body-cancellation test received SecureTaskPending instead of
+CancelledError. The default no-guard path added watcher owners whose bounded
+retirement changed this behavior. The two skipped real-model cases reflect
+missing diagnostic environment/reference mounts and are not passes.
+
+A paired focused control retained the same image, caps and existing test:
+pre-guard head c026547faed33ac22dfe79b1a7b8e817f5b5b243 passed in 0.219
+seconds (log SHA-256
+e66de5ae574e02828c5aad9ba094a7a96ef9855891ccbc065d82adb6b1b9a3a1),
+while the changed candidate failed in 0.249 seconds (log SHA-256
+b29add23a5e9ff4b64a302ea96a7cdeb0ce62e83430930c53b9a1b9d65d30b21).
+The logs establish this compatibility regression, not which pending task
+caused the timeout. A fix is in progress; the focused 18-test pass is
+insufficient to accept the coordinator integration.
+
+The expanded coordinator settings parser separately passed ten native tests,
+with zero skips, for ordered worker certificate pins and a fixed private or
+loopback numeric listener. Frozen head was
+efe87a32484e45c123a5f157ceca33318ac1b6b9, source digest
+18a7e7e2950ec63558876313af4d5ef91139fd32393d641d7d37350f1e678c82
+(487 files), log SHA-256
+c18e6b5261cbde8ff6516c88644119a0c7e8487d82a00e4e14d31484d7dd53b2.
+These remain inert declarations requiring actual protected-material and signed
+route checks. All C2 tasks remain open; fixed-role startup, consumer ownership,
+shared physical resources and real C2 CT-11/CT-13 remain pending. C3 is unchanged.
