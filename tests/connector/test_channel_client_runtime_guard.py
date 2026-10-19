@@ -1,5 +1,6 @@
 """Runtime-owner fencing on the genuine coordinator channel client."""
 import asyncio
+import threading
 import unittest
 from unittest import mock
 
@@ -43,6 +44,8 @@ class CoordinatorChannelRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
                        worker_boot_id=self.fx.fx.worker_boot_id, timeout_ms=5000)
 
     async def asyncTearDown(self):
+        for release in self.fx._release_events:
+            release.set()
         for task in self.calls:
             if not task.done():
                 task.cancel()
@@ -75,10 +78,12 @@ class CoordinatorChannelRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client._data_count, 0)
         self.assertTrue(self.client._unavailable)
 
+
+    async def test_async_guard_rejected_on_fresh_genuine_stream(self):
         async def async_guard():
             return None
 
-        with self.assertRaises(TypeError):
+        with self.assertRaisesRegex(TypeError, "synchronous callback"):
             self._client(async_guard)
 
     async def test_guard_returning_awaitable_is_closed_and_fences(self):
@@ -92,6 +97,18 @@ class CoordinatorChannelRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
             await self.client.execute(
                 "Describe", self._request(), trusted_request_context=context)
         self.assertTrue(self.client._runtime_invalidated.is_set())
+
+    async def test_guard_non_none_return_fences_before_authorization(self):
+        self.client = self._client(lambda: True)
+        context = self.fx.fx.base.adapter.create_bootstrap_context()
+        with mock.patch.object(self.client.authorizer,
+                               "authorize_gateway_outbound") as authorize:
+            with self.assertRaises(ProtocolError):
+                await self.client.execute(
+                    "Describe", self._request(), trusted_request_context=context)
+        authorize.assert_not_called()
+        self.assertTrue(self.client._runtime_invalidated.is_set())
+        self.assertEqual(self.client._owners, {})
 
     async def test_guard_rechecks_after_callback_self_invalidation(self):
         holder = {}
@@ -117,7 +134,7 @@ class CoordinatorChannelRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         checks = []
 
         def allow():
-            checks.append(True)
+            checks.append(not self.client._lock.locked())
             return None
 
         self.client = self._client(allow)
@@ -145,29 +162,62 @@ class CoordinatorChannelRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(call, timeout=2)
         self.assertEqual(result.code, "OK")
         self.assertGreaterEqual(len(checks), 5)
+        self.assertTrue(all(checks), "runtime guard ran while the admission lock was held")
         self.assertEqual(self.client._owners, {})
 
     async def test_off_thread_invalidation_fences_queued_reply_before_delivery(self):
-        checks = []
-
-        def allow():
-            checks.append(True)
-            return None
-
-        self.client = self._client(allow)
+        self.client = self._client(lambda: None)
         context = self.fx.fx.base.adapter.create_bootstrap_context()
         call = self._track(self.client.execute(
             "Describe", self._request(), trusted_request_context=context))
         incoming = await self._receive_request(call)
-        await asyncio.to_thread(
-            self.client.request_runtime_invalidation, "selected binding retired")
+        response = Response(protocol_version=1,
+                            manifest_fingerprint=self.fx.fx.model_id,
+                            worker_boot_id=self.fx.fx.worker_boot_id,
+                            code="OK")
+        self.fx.fx.coordinator_server_stream.enqueue(
+            kind=wire.RESPONSE, message_id=incoming.message_id,
+            payload=wire.encode_bundle(
+                "Describe", wire.BUNDLE_RESPONSE, fragment_kind=wire.RESPONSE,
+                protobuf=serialize_message(response)))
+        from steamboat_connector.channel_stream import ChannelStream
+        original_pop = ChannelStream.pop_message
+
+        def pop_then_invalidate(stream):
+            message = original_pop(stream)
+            if (stream is self.client.stream and message is not None
+                    and message.message_id == incoming.message_id
+                    and message.kind == wire.RESPONSE):
+                completed = threading.Event()
+                def invalidate():
+                    try:
+                        self.client.request_runtime_invalidation("selected binding retired")
+                    except BaseException as error:
+                        errors.append(error)
+                    finally:
+                        completed.set()
+                errors = []
+                thread = threading.Thread(target=invalidate)
+                thread.start()
+                self.assertTrue(completed.wait(1), "off-thread invalidation did not return promptly")
+                thread.join(1)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(errors, [])
+            return message
+
+        with mock.patch.object(ChannelStream, "pop_message", pop_then_invalidate):
+            for _ in range(500):
+                self.fx.fx.coordinator_server_stream.pump()
+                if call.done():
+                    break
+                await asyncio.sleep(0.001)
         with self.assertRaises(ProtocolError):
             await asyncio.wait_for(call, timeout=2)
         self.assertTrue(self.client._runtime_invalidated.is_set())
         self.assertTrue(self.client._unavailable)
         self.assertTrue(self.client.stream.closed)
         self.assertEqual(self.client._data_count, 0)
-        self.assertNotEqual(incoming.message_id, b"")
+        self.assertEqual(self.client._pending, {})
 
     async def test_guard_is_rechecked_after_response_parse_before_publication(self):
         self.client = self._client(lambda: None)
@@ -187,17 +237,116 @@ class CoordinatorChannelRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         original_parse = __import__(
             "steamboat_connector.channel_client", fromlist=["parse_message"]).parse_message
 
-        def invalidate_while_parsing(*args, **kwargs):
-            parsed = original_parse(*args, **kwargs)
-            self.client.request_runtime_invalidation("binding retired before delivery")
-            return parsed
-
+        parsed = asyncio.Event()
+        def parse_and_signal(*args, **kwargs):
+            result = original_parse(*args, **kwargs)
+            if len(args) > 1 and args[1] is Response:
+                self.client.request_runtime_invalidation(
+                    "binding retired before delivery")
+                parsed.set()
+            return result
         with mock.patch("steamboat_connector.channel_client.parse_message",
-                        side_effect=invalidate_while_parsing):
+                        side_effect=parse_and_signal):
+            for _ in range(500):
+                self.fx.fx.coordinator_server_stream.pump()
+                if parsed.is_set():
+                    break
+                await asyncio.sleep(0.001)
+            self.assertTrue(parsed.is_set(), "genuine queued response was not parsed")
             with self.assertRaises(ProtocolError):
                 await asyncio.wait_for(call, timeout=2)
         self.assertTrue(self.client._runtime_invalidated.is_set())
         self.assertTrue(self.client._unavailable)
+        self.assertEqual(self.client._owners, {})
+        self.assertEqual(self.client._data_count, 0)
+
+    async def test_invalidation_after_authorization_return_retires_exact_owner(self):
+        self.client = self._client(lambda: None)
+        context = self.fx.fx.base.adapter.create_bootstrap_context()
+        original = self.client.authorizer.authorize_gateway_outbound
+        captured = {}
+        close_started = asyncio.Event()
+        release_close = asyncio.Event()
+        self.fx._release_events.append(release_close)
+
+        def authorize_then_revoke(**kwargs):
+            auth = original(**kwargs)
+            captured["auth"] = auth
+            close = auth.close
+            calls = []
+            async def counted_close():
+                calls.append(True)
+                close_started.set()
+                await release_close.wait()
+                return close()
+            auth.close = counted_close
+            captured["close_calls"] = calls
+            self.client.request_runtime_invalidation("owner retired after authorize")
+            return auth
+
+        with mock.patch.object(self.client.authorizer,
+                               "authorize_gateway_outbound",
+                               side_effect=authorize_then_revoke):
+            call = self._track(self.client.execute(
+                "Describe", self._request(), trusted_request_context=context))
+            await asyncio.wait_for(close_started.wait(), timeout=2)
+            self.assertEqual(self.client._data_count, 1)
+            owner = next(iter(self.client._owners.values()))
+            self.assertIs(owner["auth"], captured["auth"])
+            release_close.set()
+            with self.assertRaises(ProtocolError):
+                await asyncio.wait_for(call, timeout=2)
+        self.assertEqual(len(captured["close_calls"]), 1)
+        self.assertTrue(captured["auth"]._closed)
+        self.assertEqual(self.client._owners, {})
+        self.assertEqual(self.client._data_count, 0)
+
+    async def test_invalidation_during_success_cleanup_blocks_result_delivery(self):
+        self.client = self._client(lambda: None)
+        context = self.fx.fx.base.adapter.create_bootstrap_context()
+        captured = {}
+        original = self.client.authorizer.authorize_gateway_outbound
+        close_started = asyncio.Event()
+        release_close = asyncio.Event()
+        self.fx._release_events.append(release_close)
+
+        def capture(**kwargs):
+            auth = original(**kwargs)
+            captured["auth"] = auth
+            original_close = auth.close
+            async def delayed_close():
+                close_started.set()
+                await release_close.wait()
+                original_close()
+            auth.close = delayed_close
+            return auth
+
+        with mock.patch.object(self.client.authorizer,
+                               "authorize_gateway_outbound", side_effect=capture):
+            call = self._track(self.client.execute(
+                "Describe", self._request(), trusted_request_context=context))
+            incoming = await self._receive_request(call)
+            response = Response(protocol_version=1,
+                                manifest_fingerprint=self.fx.fx.model_id,
+                                worker_boot_id=self.fx.fx.worker_boot_id,
+                                code="OK")
+            self.fx.fx.coordinator_server_stream.enqueue(
+                kind=wire.RESPONSE, message_id=incoming.message_id,
+                payload=wire.encode_bundle(
+                    "Describe", wire.BUNDLE_RESPONSE,
+                    fragment_kind=wire.RESPONSE,
+                    protobuf=serialize_message(response)))
+            for _ in range(500):
+                self.fx.fx.coordinator_server_stream.pump()
+                if close_started.is_set():
+                    break
+                await asyncio.sleep(0.001)
+            self.assertTrue(close_started.is_set(), "request did not reach owner cleanup")
+            self.client.request_runtime_invalidation("retired during authorization cleanup")
+            release_close.set()
+            with self.assertRaises(ProtocolError):
+                await asyncio.wait_for(call, timeout=2)
+        self.assertTrue(captured["auth"]._closed)
         self.assertEqual(self.client._owners, {})
         self.assertEqual(self.client._data_count, 0)
 

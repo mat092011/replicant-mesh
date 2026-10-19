@@ -11,7 +11,8 @@ stream I/O, while publishing replies, and before returning a result. A target
 client minted by `bind_target` delegates through the same guarded client, so it
 does not create an independent route or bypass owner invalidation. If a guard
 fails after authorization is created, that exact authorization and route are
-already attached to the request cleanup owner.
+already attached to the request cleanup owner. Successful results pass a final
+guard check after authorization retirement completes.
 
 An owner may call `request_runtime_invalidation(reason)` from another thread.
 This sets a sticky `threading.Event` immediately and schedules a coalesced wake

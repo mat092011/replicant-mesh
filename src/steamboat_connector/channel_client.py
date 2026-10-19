@@ -171,7 +171,10 @@ class CoordinatorChannelClient:
             self._fence("C2 coordinator runtime binding was invalidated")
 
     def _check_runtime_guard(self):
-        self._check_runtime_event()
+        if self._runtime_invalidated.is_set():
+            if not self._unavailable:
+                self._fence("C2 coordinator runtime binding was invalidated")
+            raise ProtocolError("EXECUTION_FAILED", "coordinator runtime binding is unavailable")
         guard = self._runtime_guard
         if guard is None:
             return
@@ -252,8 +255,12 @@ class CoordinatorChannelClient:
         request_deadline = time.monotonic() + request.timeout_ms / 1000
         try:
             self._check_runtime_guard()
+            self._assert_live()
+            self._check_runtime_guard()
             async with self._lock:
-                self._assert_live()
+                self._check_runtime_event()
+                if self._closed or self._unavailable or self.stream.closed:
+                    raise ProtocolError("EXECUTION_FAILED", "coordinator gateway channel is unavailable")
                 if self._next_message_id >= (1 << 128):
                     self._fence("generation message ID space is exhausted")
                     raise ProtocolError("EXECUTION_FAILED", "gateway generation message ID space exhausted")
@@ -282,14 +289,15 @@ class CoordinatorChannelClient:
             owner["auth"], owner["route"], owner["state"] = auth, route, "active"
             self._check_runtime_guard()
             async with self._lock:
-                self._assert_live()
+                self._check_runtime_event()
+                if self._closed or self._unavailable or self.stream.closed:
+                    raise ProtocolError("EXECUTION_FAILED", "coordinator gateway channel is unavailable")
                 wire_request = Request()
                 wire_request.CopyFrom(source_request)
                 owner["wire_request"] = wire_request
-                self._check_runtime_guard()
                 remaining = min(await _maybe_await(auth.remaining_seconds()),
                                 request_deadline - time.monotonic())
-                self._check_runtime_guard()
+                self._check_runtime_event()
                 wire_request.timeout_ms = min(request.timeout_ms, int(remaining * 1000))
                 if wire_request.timeout_ms < 1:
                     raise TimeoutError("authorization expires before dispatch")
@@ -297,36 +305,42 @@ class CoordinatorChannelClient:
                 owner["raw_request"] = raw
                 # Apply a fresh authorization/deadline clip after serialization,
                 # immediately before the one-way mutation can enter the stream.
-                self._check_runtime_guard()
                 await _maybe_await(auth.assert_live())
-                self._check_runtime_guard()
+                self._check_runtime_event()
                 remaining = min(await _maybe_await(auth.remaining_seconds()),
                                 request_deadline - time.monotonic())
-                self._check_runtime_guard()
+                self._check_runtime_event()
                 wire_request.timeout_ms = min(wire_request.timeout_ms, int(remaining * 1000))
                 if wire_request.timeout_ms < 1:
                     raise TimeoutError("authorization expires before dispatch")
                 raw = serialize_message(wire_request, MAX_MESSAGE_BYTES)
                 owner["raw_request"] = raw
-                self.egress.assert_transport_live()
-                route.assert_live()
-                self._check_runtime_guard()
-                bundle = wire.encode_bundle(
-                    method, wire.REQUEST, fragment_kind=lane,
-                    binding=auth.binding_bytes, protobuf=raw)
-                owner["bundle"] = bundle
-                future = asyncio.get_running_loop().create_future()
-                self._pending[message_id] = {
-                    "future": future, "auth": auth, "method": method,
-                    "request": wire_request, "binding": auth.binding_bytes,
-                    "route": route, "control": is_control,
-                    "capture": capture, "response_lane": response_lane,
-                }
-                self.stream.enqueue(kind=lane, message_id=message_id, payload=bundle)
-                dispatched = True
-                owner["dispatched"] = True
-                if self._pump_task is None:
-                    self._pump_task = asyncio.create_task(self._pump())
+            self._check_runtime_guard()
+            self.egress.assert_transport_live()
+            route.assert_live()
+            self._check_runtime_guard()
+            bundle = wire.encode_bundle(
+                method, wire.REQUEST, fragment_kind=lane,
+                binding=auth.binding_bytes, protobuf=raw)
+            owner["bundle"] = bundle
+            future = asyncio.get_running_loop().create_future()
+            # Everything through enqueue is loop-confined and contains no
+            # await, keeping owner callbacks outside the admission lock.
+            self._check_runtime_event()
+            if self._closed or self._unavailable or self.stream.closed:
+                raise ProtocolError("EXECUTION_FAILED", "coordinator gateway channel is unavailable")
+            self._pending[message_id] = {
+                "future": future, "auth": auth, "method": method,
+                "request": wire_request, "binding": auth.binding_bytes,
+                "route": route, "control": is_control,
+                "capture": capture, "response_lane": response_lane,
+            }
+            self._check_runtime_event()
+            self.stream.enqueue(kind=lane, message_id=message_id, payload=bundle)
+            dispatched = True
+            owner["dispatched"] = True
+            if self._pump_task is None:
+                self._pump_task = asyncio.create_task(self._pump())
             try:
                 self._check_runtime_guard()
                 response, _correlation = await _run_guarded(
@@ -389,6 +403,10 @@ class CoordinatorChannelClient:
                     await self._retire_owner(
                         owner, failed=failed,
                         cache_may_exist=dispatched and method != "Describe")
+                    if completed:
+                        # A result is not delivered until exact C1 retirement
+                        # and the final C2 owner check both complete.
+                        self._check_runtime_guard()
             finally:
                 self._active.discard(current_task)
 
@@ -488,9 +506,9 @@ class CoordinatorChannelClient:
         preflight_worker_protobuf(decoded.protobuf, response=True,
                                   max_bytes=MAX_MESSAGE_BYTES)
         response = parse_message(decoded.protobuf, Response, MAX_MESSAGE_BYTES)
+        entry["response_received"] = True
         if not entry["future"].done():
             self._check_runtime_guard()
-            entry["response_received"] = True
             entry["future"].set_result((response, (message.message_id,
                 self._generation, entry["binding"])))
 
