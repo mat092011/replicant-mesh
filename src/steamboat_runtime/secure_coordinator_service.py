@@ -9,6 +9,7 @@ import asyncio
 import inspect
 import math
 import re
+import threading
 import time
 import uuid
 
@@ -61,35 +62,47 @@ def _known_pre_admission_capacity_error(coordinator, error):
 class _AuthorizedStreamContext:
     """Pass gRPC operations through while checking authorization on every write."""
 
-    def __init__(self, context, authorization):
+    def __init__(self, context, authorization, runtime_check=None):
         self._context, self._authorization = context, authorization
+        self._runtime_check = runtime_check
+
+    async def _check(self):
+        await _assert_live(self._authorization)
+        if self._runtime_check is not None:
+            self._runtime_check()
 
     def time_remaining(self):
         return self._context.time_remaining()
 
     async def write(self, payload):
         try:
-            await _assert_live(self._authorization)
-            return await self._context.write(payload)
+            await self._check()
+            result = await self._context.write(payload)
+            await self._check()
+            return result
         finally:
             payload = None
 
     async def send_initial_metadata(self, metadata):
-        await _assert_live(self._authorization)
-        return await self._context.send_initial_metadata(metadata)
+        await self._check()
+        result = await self._context.send_initial_metadata(metadata)
+        await self._check()
+        return result
 
     async def set_trailing_metadata(self, metadata):
-        await _assert_live(self._authorization)
+        await self._check()
         setter = getattr(self._context, "set_trailing_metadata", None)
         if not callable(setter):
             raise SecureTransportError(
                 "gRPC context cannot attach an authenticated capacity rejection marker")
         await _maybe_await(setter(metadata))
-        await _assert_live(self._authorization)
+        await self._check()
 
     async def abort(self, code, details):
-        await _assert_live(self._authorization)
-        return await self._context.abort(code, details)
+        await self._check()
+        result = await self._context.abort(code, details)
+        await self._check()
+        return result
 
     def __getattr__(self, name):
         return getattr(self._context, name)
@@ -100,7 +113,8 @@ class SecureCoordinatorService:
 
     def __init__(self, service, *, authorizer, authorization_watcher,
                  request_context_factory, capture_budget=None,
-                 max_generate_streams=COORDINATOR_MAX_GENERATE_STREAMS):
+                 max_generate_streams=COORDINATOR_MAX_GENERATE_STREAMS,
+                 runtime_guard=None):
         self.service = service
         self.authorizer = authorizer
         self.authorization_watcher = authorization_watcher
@@ -114,6 +128,17 @@ class SecureCoordinatorService:
             raise ValueError("secure coordinator service requires an expiry/revocation watcher")
         if not callable(request_context_factory):
             raise ValueError("Generate requires a trusted consumer request-context factory")
+        if runtime_guard is not None:
+            if (not callable(runtime_guard)
+                    or inspect.iscoroutinefunction(runtime_guard)
+                    or inspect.isasyncgenfunction(runtime_guard)
+                    or inspect.iscoroutinefunction(getattr(runtime_guard, "__call__", None))
+                    or inspect.isasyncgenfunction(getattr(runtime_guard, "__call__", None))):
+                raise ValueError("runtime guard must be a synchronous callable")
+        self.runtime_guard = runtime_guard
+        self._runtime_invalidated = threading.Event()
+        self._runtime_async_event = None
+        self._owner_loop = None
         if (type(max_generate_streams) is not int or not 1 <= max_generate_streams
                 <= COORDINATOR_MAX_GENERATE_STREAMS):
             raise ValueError("Generate stream limit must be within the C0 ceiling of 40")
@@ -132,10 +157,80 @@ class SecureCoordinatorService:
         self._unreclaimed_generate_slots = []
         self.runtime_owner = _SecureRuntimeOwner()
 
+    def _bind_owner_loop(self):
+        loop = asyncio.get_running_loop()
+        if self._owner_loop is None:
+            self._owner_loop = loop
+            self._runtime_async_event = asyncio.Event()
+        elif self._owner_loop is not loop:
+            raise SecureTransportError("secure coordinator is bound to another event loop")
+
+    def request_runtime_invalidation(self, reason="runtime invalidated"):
+        """Synchronously fence work; listener pausing is scheduled on its owner loop."""
+        self._runtime_invalidated.set()
+        self.unavailable = True
+        self.runtime_owner.unavailable = True
+        loop = self._owner_loop
+        if loop is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(self._apply_runtime_invalidation, reason)
+            except RuntimeError:
+                pass
+        return True
+
+    def _apply_runtime_invalidation(self, reason):
+        if self._runtime_async_event is not None:
+            self._runtime_async_event.set()
+        if self.acceptor is not None:
+            try:
+                self.acceptor.pause()
+            except BaseException:
+                self.unavailable = True
+                self.runtime_owner.unavailable = True
+
+    def _check_runtime_guard(self):
+        self._bind_owner_loop()
+        if self._runtime_invalidated.is_set():
+            raise AuthorizationRevoked("coordinator runtime was invalidated")
+        if self.runtime_guard is None:
+            return
+        try:
+            result = self.runtime_guard()
+            if inspect.isawaitable(result):
+                if inspect.iscoroutine(result):
+                    result.close()
+                raise SecureTransportError("runtime guard must return synchronously")
+            if result is not None:
+                raise SecureTransportError("runtime guard must return exactly None")
+        except BaseException as error:
+            self.request_runtime_invalidation("runtime guard refused")
+            raise AuthorizationRevoked("coordinator runtime is no longer live") from error
+
+    def _stream_context(self, context, authorization):
+        return _AuthorizedStreamContext(context, authorization, self._check_runtime_guard)
+
+    def _runtime_authorization_watcher(self, authorization):
+        async def watch(_authorization):
+            self._bind_owner_loop()
+            original = asyncio.create_task(_maybe_await(
+                self.authorization_watcher(authorization)))
+            invalidated = asyncio.create_task(self._runtime_async_event.wait())
+            try:
+                done, _ = await asyncio.wait((original, invalidated),
+                    return_when=asyncio.FIRST_COMPLETED)
+                if invalidated in done:
+                    raise AuthorizationRevoked("coordinator runtime was invalidated")
+                await original
+                raise AuthorizationRevoked("authorization watcher completed")
+            finally:
+                await _cancel_tasks_bounded((original, invalidated),
+                    message="coordinator runtime watcher did not stop")
+        return watch
+
     async def _set_capacity_rejection_marker(
             self, context, authorization, *, send_binding):
         wrapped = (context if isinstance(context, _AuthorizedStreamContext)
-                   else _AuthorizedStreamContext(context, authorization))
+                   else self._stream_context(context, authorization))
         await _assert_live(authorization)
         if send_binding:
             await wrapped.send_initial_metadata(((BINDING_METADATA_KEY,
@@ -769,6 +864,7 @@ class SecureCoordinatorService:
 
     async def _authorize(self, method, data, payload, context):
         authorization = None
+        self._check_runtime_guard()
         if self.unavailable:
             import grpc
             await _abort(context, grpc.StatusCode.UNAVAILABLE,
@@ -779,6 +875,7 @@ class SecureCoordinatorService:
             metadata, binding, _ = validate_metadata(context.invocation_metadata())
             authorization = await _call_authorize(self.authorizer, COORDINATOR_SERVICE,
                 method, payload, metadata, peer_certificate)
+            self._check_runtime_guard()
             if authorization.binding_bytes != binding:
                 raise AuthorizationRejected("identity adapter binding differs from the request")
             await _assert_live(authorization)
@@ -786,6 +883,7 @@ class SecureCoordinatorService:
                     or not await self.acceptor.mark_authenticated_peer(context.peer())):
                 raise AuthorizationRejected(
                     "TLS connection is not tracked by the bounded acceptor")
+            self._check_runtime_guard()
             return authorization
         except asyncio.CancelledError:
             await _close_failed_authorization(authorization, cache_may_exist=False)
@@ -807,11 +905,13 @@ class SecureCoordinatorService:
         authorization = await self._authorize(method, data, payload, context)
         authorization_transferred = False
         try:
-            return await _run_guarded(self._produce_unary(method, data, context, authorization),
-                                      authorization, self.authorization_watcher,
+            response = await _run_guarded(self._produce_unary(method, data, context, authorization),
+                                      authorization, self._runtime_authorization_watcher(authorization),
                                       timeout=context.time_remaining(),
                                       on_pending=self._mark_unavailable,
                                       failure_cache_may_exist=False)
+            self._check_runtime_guard()
+            return response
         except SecureTaskPending as error:
             authorization_transferred = error.authorization_transferred
             self._mark_unavailable(error.tasks)
@@ -831,15 +931,20 @@ class SecureCoordinatorService:
                 await _maybe_await(authorization.close())
 
     async def _produce_unary(self, method, data, context, authorization):
+        self._check_runtime_guard()
         await _assert_live(authorization)
-        await context.send_initial_metadata(((BINDING_METADATA_KEY,
+        await self._stream_context(context, authorization).send_initial_metadata(((BINDING_METADATA_KEY,
                                                authorization.binding_bytes),))
+        self._check_runtime_guard()
         await _assert_live(authorization)
         response = await self._delegate_unary(
-            method, data, _AuthorizedStreamContext(context, authorization))
+            method, data, self._stream_context(context, authorization))
+        self._check_runtime_guard()
         await _assert_live(authorization)
         await _maybe_await(authorization.complete(response))
+        self._check_runtime_guard()
         await _assert_live(authorization)
+        self._check_runtime_guard()
         return response
 
     async def _delegate_unary(self, method, data, context):
@@ -947,7 +1052,7 @@ class SecureCoordinatorService:
             try:
                 await _run_guarded(
                     reject_capacity(), authorization,
-                    self.authorization_watcher,
+                    self._runtime_authorization_watcher(authorization),
                     timeout=max(0.0, request_deadline - time.monotonic()),
                     absolute_deadline=request_deadline,
                     cancel_grace_seconds=(
@@ -1027,7 +1132,7 @@ class SecureCoordinatorService:
             await _run_guarded(
                 self._produce_generate(payload, context, request_deadline,
                                        authorization, slot),
-                authorization, self.authorization_watcher,
+                authorization, self._runtime_authorization_watcher(authorization),
                 timeout=remaining, absolute_deadline=request_deadline,
                 cancel_grace_seconds=_secure_transport.MAX_CANCELLATION_GRACE_SECONDS,
                 on_pending=retain_pending, failure_cache_may_exist=True,
@@ -1103,12 +1208,14 @@ class SecureCoordinatorService:
             slot.setdefault("producer_wrapper_tasks", set()).add(current_task)
         create_with_deadline = getattr(
             self.request_context_factory, "create_with_deadline", None)
+        self._check_runtime_guard()
         if callable(create_with_deadline):
             trusted_context = await _maybe_await(create_with_deadline(
                 authorization, payload, absolute_deadline=request_deadline))
         else:
             trusted_context = await _maybe_await(self.request_context_factory(
                 authorization, payload))
+        self._check_runtime_guard()
         slot["trusted_context"] = trusted_context
         slot["resource_cleanup_required"] = True
         slot["resource_cleanup_confirmed"] = False
@@ -1118,7 +1225,7 @@ class SecureCoordinatorService:
                 trusted_context, authorization, request_deadline)
             await _assert_live(authorization)
             trusted_context.assert_data_live()
-            wrapped = _AuthorizedStreamContext(context, authorization)
+            wrapped = self._stream_context(context, authorization)
 
             async def emit_initial_metadata():
                 await _assert_live(authorization)
@@ -1225,15 +1332,18 @@ class SecureCoordinatorService:
             invalidation = asyncio.create_task(
                 _maybe_await(self.authorization_watcher(authorization)))
             expiry = asyncio.create_task(asyncio.sleep(remaining))
+            runtime = asyncio.create_task(self._runtime_async_event.wait())
             try:
-                done, _ = await asyncio.wait((invalidation, expiry),
+                done, _ = await asyncio.wait((invalidation, expiry, runtime),
                     return_when=asyncio.FIRST_COMPLETED)
+                if runtime in done:
+                    raise AuthorizationRevoked("coordinator runtime was invalidated")
                 if expiry in done:
                     raise AuthorizationRevoked("trusted request context expired")
                 await invalidation
                 raise AuthorizationRevoked("consumer authorization was revoked")
             finally:
-                await _cancel_tasks_bounded((invalidation, expiry),
+                await _cancel_tasks_bounded((invalidation, expiry, runtime),
                     message="consumer authorization watcher did not stop")
         return watch
 
@@ -1252,6 +1362,7 @@ class SecureCoordinatorService:
         event = message = logits_tensor = logits_values = input_tensor = None
         result = metrics = terminal = None
         try:
+            self._check_runtime_guard()
             trusted_request_context.assert_data_live()
             deadline = min(request_deadline,
                            time.monotonic() + context_lifetime,
@@ -1259,6 +1370,7 @@ class SecureCoordinatorService:
             if deadline <= time.monotonic():
                 raise ServiceRequestError("TIMEOUT", "Request deadline expired before admission")
             trusted_request_context.assert_data_live()
+            self._check_runtime_guard()
             input_tensor = torch.tensor(
                 [request["input_ids"]], dtype=torch.long)
             slot["capture_submission_attempted"] = True
@@ -1275,9 +1387,11 @@ class SecureCoordinatorService:
                 raise
             finally:
                 input_tensor = None
+            self._check_runtime_guard()
             slot["handle"] = handle
             try:
                 async for event in handle:
+                    self._check_runtime_guard()
                     message = {"type": "token", "session_id": event.session_id,
                                "index": event.index, "token_id": event.token_id,
                                "position": event.position, "sequence": event.sequence}
@@ -1304,6 +1418,7 @@ class SecureCoordinatorService:
                 # The terminal result carries the scheduler's sanitized failure.
                 pass
             result = await handle.result()
+            self._check_runtime_guard()
             metrics = service.metrics[handle.session_id].result(result)
             metrics["service_elapsed_ms"] = 1000 * (time.monotonic() -
                 (request_deadline - request["timeout_seconds"]))
@@ -1311,10 +1426,13 @@ class SecureCoordinatorService:
                         "status": result.status, "token_ids": list(result.token_ids),
                         "cleanup_complete": result.cleanup_complete, "error": result.error,
                         "error_code": result.error_code, "metrics": metrics}
+            self._check_runtime_guard()
             await service._write(context, terminal, deadline)
+            self._check_runtime_guard()
             await _assert_live(authorization)
             if terminal["status"] == "completed":
                 await _maybe_await(authorization.complete(terminal))
+                self._check_runtime_guard()
             else:
                 await _fail_authorization(authorization, cache_may_exist=True)
             finished = True
@@ -1396,7 +1514,8 @@ async def create_secure_coordinator_server(service, *, listen_endpoint,
                                            connection_controller, listener_id,
                                            listener_slots, acceptor_directory,
                                            capture_budget=None,
-                                           max_generate_streams=COORDINATOR_MAX_GENERATE_STREAMS):
+                                           max_generate_streams=COORDINATOR_MAX_GENERATE_STREAMS,
+                                           runtime_guard=None):
     """Start the explicit mTLS coordinator service (no public or insecure bind)."""
     import grpc
     from .protocol.secure_transport import (
@@ -1422,7 +1541,8 @@ async def create_secure_coordinator_server(service, *, listen_endpoint,
         authorization_watcher=authorization_watcher,
         request_context_factory=request_context_factory,
         capture_budget=capture_budget,
-        max_generate_streams=max_generate_streams)
+        max_generate_streams=max_generate_streams, runtime_guard=runtime_guard)
+    secure_service._bind_owner_loop()
     reservation = await _maybe_await(connection_controller.reserve_listener(
         listener_id, connection_slots=listener_slots, pending_slots=listener_slots))
     if reservation is None or not callable(getattr(reservation, "release", None)):
