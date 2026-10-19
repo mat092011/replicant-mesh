@@ -307,7 +307,8 @@ class OwnedWorkerTLS:
     def _drive_handshake_locked(self):
         self._require_live_locked()
         sample = self.clock.sample()
-        if sample.monotonic >= self._started + MAX_HANDSHAKE_SECONDS:
+        if (not self._handshake_done
+                and sample.monotonic >= self._started + MAX_HANDSHAKE_SECONDS):
             self._fail_locked()
             raise OwnedWorkerTLSError("TLS handshake deadline exceeded")
         if self._handshake_done:

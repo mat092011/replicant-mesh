@@ -118,6 +118,9 @@ class GatewayIngressTests(unittest.TestCase):
             else:
                 owner.do_handshake()
             if owner.handshake_complete:
+                owner._test_server = server
+                owner._test_server_incoming = si
+                owner._test_server_outgoing = so
                 return owner
         raise AssertionError("MemoryBIO TLS handshake did not complete")
 
@@ -239,6 +242,24 @@ class GatewayIngressTests(unittest.TestCase):
             owner.feed_encrypted(b"x" * (MAX_CHUNK_BYTES + 1))
         with self.assertRaises(OwnedWorkerTLSError):
             owner.do_handshake()
+
+    def test_completed_tls_stream_remains_live_after_handshake_deadline(self):
+        owner = self.tls_owner
+        server = owner._test_server
+        incoming = owner._test_server_incoming
+        outgoing = owner._test_server_outgoing
+        self.fixture.mono += 10.001
+        self.fixture.wall += 10.001
+        owner.write_plaintext(b"request")
+        encrypted = owner.take_encrypted()
+        incoming.write(encrypted)
+        self.assertEqual(server.read(32), b"request")
+        server.write(b"response")
+        response = outgoing.read()
+        self.assertTrue(response)
+        owner.feed_encrypted(response)
+        self.assertEqual(owner.read_plaintext(), b"response")
+        self.assertGreaterEqual(sum(owner.byte_counts), len(encrypted) + len(response))
         self.assertLessEqual(MAX_HANDSHAKE_BYTES, 128 * 1024)
         owner = OwnedWorkerTLS.connect(
             worker_certificate_pem=self.worker_channel,
