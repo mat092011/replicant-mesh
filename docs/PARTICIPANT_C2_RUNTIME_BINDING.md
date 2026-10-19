@@ -25,6 +25,14 @@ sweeps. Policy updates go through `install_policy()`, which persists the signed
 head through the same `RootGenerationStore` while rechecking immutable group
 material. Bounded synchronous subscribers receive a one-time invalidation
 notification; they do not prove that component owners actually stopped.
+
+The binding retains the tightest observed monotonic deadlines for each signed
+snapshot expiry, each pinned role credential, and each exact grant identity.
+Lower clock uncertainty or a later observation cannot extend those same
+authorizations. A new signed snapshot expiry or grant identity can establish a
+new deadline; a pinned credential's prior deadline remains until its identity
+changes. History is bounded and exhaustion fails closed, requiring a cold
+restart.
 Transport adapters that enforce these calls and tear down every component owner
 are future integration work. This module does not activate a
 process, expose readiness, consume claims, prove catalog contents, or authorize

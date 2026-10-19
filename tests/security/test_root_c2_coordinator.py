@@ -168,6 +168,31 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
                 binding.assert_live()
         self.assertEqual(len(events), 1)
 
+    def test_final_uncertainty_deadline_is_retained_across_clock_drift(self):
+        self.fx.wall += 30
+        self.fx.mono += 30
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        payload = json.loads(self.fx.active)["payload"]
+        payload["revision"] += 1
+        payload["issued_at"] = int(self.fx.wall)
+        payload["expires_at"] = int(self.fx.wall) + 40
+        short_head = sign_snapshot(payload, self.fx.fx.new_snapshot_key)
+        binding.install_policy(short_head)
+        events = []
+        binding.subscribe_teardown(events.append)
+
+        uncertainty = [0.0]
+        self.fx.clock._uncertainty = lambda: uncertainty[0]
+        uncertainty[0] = 20.0
+        binding.assert_live()
+        uncertainty[0] = 0.0
+        self.fx.wall += 1
+        self.fx.mono += 21
+        with self.assertRaisesRegex(SnapshotError, "expired"):
+            binding.assert_live()
+        self.assertEqual(len(events), 1)
+
     def test_expiry_during_final_protected_io_invalidates(self):
         store, binding = self._load()
         self.addCleanup(store.close)

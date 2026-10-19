@@ -143,9 +143,12 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         self.root.mkdir(mode=0o700); os.chmod(self.root, 0o700)
         self.protected.mkdir(mode=0o700); os.chmod(self.protected, 0o700)
         self.wall, self.mono = self.fx.clock_source.wall, 500.0
+        self.uncertainty = 0.0
         self.clock = Clock(wall=lambda: self.wall, monotonic=lambda: self.mono,
-                           uncertainty_seconds=lambda: 0.0)
-        group_ttl = 300 if self._testMethodName == "test_channel_wall_expiry_rejects_clock_drift_even_before_monotonic_deadline" else 60
+                           uncertainty_seconds=lambda: self.uncertainty)
+        group_ttl = 300 if self._testMethodName in {
+            "test_channel_wall_expiry_rejects_clock_drift_even_before_monotonic_deadline",
+            "test_final_uncertainty_deadline_is_retained_across_clock_drift"} else 60
         self._build(group_ttl=group_ttl)
 
     def tearDown(self):
@@ -482,6 +485,33 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         with patch.object(binding, "_assert_selected_policy", side_effect=invalidate_after_policy):
             with self.assertRaisesRegex(CredentialError, "concurrent invalidation"):
                 binding.assert_live()
+        self.assertEqual(len(calls), 1)
+
+    def test_final_uncertainty_deadline_is_retained_across_clock_drift(self):
+        # Start thirty seconds after issue; then install a short explicit signed
+        # snapshot expiry while leaving the selected role credential unchanged.
+        self.wall += 30
+        self.mono += 30
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        payload = json.loads(self.active)["payload"]
+        payload["revision"] += 1
+        payload["issued_at"] = int(self.wall)
+        payload["expires_at"] = int(self.wall) + 40
+        short_head = sign_snapshot(payload, self.fx.new_snapshot_key)
+        binding.install_policy(short_head)
+        calls = []
+        binding.subscribe_teardown(calls.append)
+
+        self.uncertainty = 20.0
+        binding.assert_live()
+        # Restore clock uncertainty and advance monotonic time past the retained
+        # floor while wall time remains 20 seconds behind that advancement.
+        self.uncertainty = 0.0
+        self.wall += 1
+        self.mono += 21
+        with self.assertRaisesRegex(SnapshotError, "expired"):
+            binding.assert_live()
         self.assertEqual(len(calls), 1)
 
     def test_teardown_notification_must_be_synchronous(self):

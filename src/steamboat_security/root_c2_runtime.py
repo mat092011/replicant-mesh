@@ -28,6 +28,7 @@ from .ids import validate_boot, validate_id
 from .root_c2_group_scope import (MAX_SIGNED_POLICY_BYTES,
     verify_c2_host_group_policy)
 from .root_c2_selected import C2SelectedCohort, make_c2_selected_validation_callback
+from .root_c2_deadlines import DeadlineFloors
 from .channel_policy import _verification_key
 from .root_transition_launch import RoleLaunchSpec, parse_role_launch_spec, role_launch_document
 from .root_transition_storage import RootGenerationStore
@@ -194,6 +195,7 @@ class C2HostRuntimeBinding:
         self._reason = None
         self._subscribers = []
         self._notification_faulted = False
+        self._deadline_floors = DeadlineFloors()
 
     @property
     def components(self):
@@ -307,7 +309,7 @@ class C2HostRuntimeBinding:
             dns_sans=record.dns_sans, ip_sans=record.ip_sans)
         checked.assert_credential_live(view, record, current_sample)
         _check_group_grants(view, current_sample, self._spec, self._scope)
-        return view, current_sample
+        return checked, view
 
     def _check_deadlines(self, sample):
         if sample.monotonic >= self._policy_deadline or sample.latest_wall >= self._policy_expires:
@@ -337,7 +339,7 @@ class C2HostRuntimeBinding:
             self._check_deadlines(sample)
             self._check_protected_files()
             self._check_selected_identity(selected, cohort)
-            self._assert_selected_policy(selected, sample)
+            selected_policy_store, selected_policy_view = self._assert_selected_policy(selected, sample)
             # A local current() may wait on its store lock or durable commit. Do
             # all such work before the final selected read, protected reads, and
             # clock sample; the returned view is the one checked below.
@@ -360,6 +362,15 @@ class C2HostRuntimeBinding:
                 # above and the actual return decision.
                 final_sample = self._clock.sample()
                 self._check_deadlines(final_sample)
+                retained_view = self._deadline_floors.retain(selected_policy_view, final_sample)
+                if (final_sample.latest_wall >= retained_view.expires_at
+                        or final_sample.monotonic >= retained_view.deadline_monotonic):
+                    raise SnapshotError("selected C2 policy expired")
+                selected_record = retained_view.credential(self._spec.serial)
+                if selected_record is None:
+                    raise CredentialError("C2 host is missing from freshly selected policy")
+                selected_policy_store.assert_credential_live(retained_view, selected_record, final_sample)
+                _check_group_grants(retained_view, final_sample, self._spec, self._scope)
                 if require_local_head:
                     if (final_sample.latest_wall >= local_view.expires_at
                             or final_sample.monotonic >= local_view.deadline_monotonic):

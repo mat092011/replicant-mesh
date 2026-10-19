@@ -25,6 +25,7 @@ from .files import safe_read
 from .root_c2_runtime import (_selected, _same_spec, MAX_HEADER_BYTES,
                               MAX_RUNTIME_CONFIGURATION_BYTES, MAX_TEARDOWN_SUBSCRIBERS)
 from .root_c2_selected import make_c2_selected_validation_callback
+from .root_c2_deadlines import DeadlineFloors
 from .root_runtime import _require_current_role_grants
 from .root_transition_launch import RoleLaunchSpec, parse_role_launch_spec, role_launch_document
 from .root_transition_storage import RootGenerationStore
@@ -103,6 +104,7 @@ class C2CoordinatorRuntimeBinding:
         self._reason = None
         self._subscribers = []
         self._notification_faulted = False
+        self._deadline_floors = DeadlineFloors()
 
     @property
     def local_identity(self):
@@ -187,7 +189,7 @@ class C2CoordinatorRuntimeBinding:
             {"model_id": self._model_id, "assignment_id": None})
         return checked, view, record
 
-    def assert_live(self):
+    def _assert_guard(self, *, require_local_head):
         try:
             with self._lock:
                 if self._invalid:
@@ -199,28 +201,38 @@ class C2CoordinatorRuntimeBinding:
                 raise CredentialError("selected C2 coordinator changed; cold restart required")
             self._files_unchanged()
             store, view, record = self._selected_policy(selected)
-            local_view = self._snapshot_store.current()
+            local_view = self._snapshot_store.current() if require_local_head else None
             final_selected, final_cohort = _selected(self._root_store, self._clock)
             final_specs = [item for item in final_cohort.new_specs if item.identity == self._spec.identity]
             if (len(final_specs) != 1 or not _same_spec(final_specs[0], self._spec)
                     or final_cohort.activation_manifest_sha256 != self._activation_hash):
                 raise CredentialError("selected C2 coordinator changed during guard")
             self._files_unchanged()
-            if (local_view.revision != final_selected.selector.policy_revision
+            if require_local_head and (local_view.revision != final_selected.selector.policy_revision
                     or local_view.policy_digest != final_selected.selector.policy_digest):
                 raise _PolicyRefreshRequired("selected C2 policy advanced; reconcile before admission")
             with self._lock:
                 if self._invalid:
                     raise CredentialError(self._reason or "binding invalidated during guard")
                 sample = self._clock.sample()
-                if (sample.latest_wall >= view.expires_at or sample.monotonic >= view.deadline_monotonic
-                        or sample.latest_wall >= local_view.expires_at
-                        or sample.monotonic >= local_view.deadline_monotonic):
+                retained_view = self._deadline_floors.retain(view, sample)
+                if (sample.latest_wall >= retained_view.expires_at
+                        or sample.monotonic >= retained_view.deadline_monotonic):
                     raise SnapshotError("selected C2 policy expired")
-                local_record = local_view.credential(self._spec.serial)
-                self._snapshot_store.assert_credential_live(local_view, local_record, sample)
-                _require_current_role_grants(local_view, sample, local_record, self._spec,
+                selected_record = retained_view.credential(self._spec.serial)
+                if selected_record is None:
+                    raise CredentialError("selected C2 coordinator is missing from policy")
+                store.assert_credential_live(retained_view, selected_record, sample)
+                _require_current_role_grants(retained_view, sample, selected_record, self._spec,
                     {"model_id": self._model_id, "assignment_id": None})
+                if require_local_head:
+                    if (sample.latest_wall >= local_view.expires_at
+                            or sample.monotonic >= local_view.deadline_monotonic):
+                        raise SnapshotError("local C2 coordinator policy expired")
+                    local_record = local_view.credential(self._spec.serial)
+                    self._snapshot_store.assert_credential_live(local_view, local_record, sample)
+                    _require_current_role_grants(local_view, sample, local_record, self._spec,
+                        {"model_id": self._model_id, "assignment_id": None})
                 return None
         except BaseException as exc:
             if isinstance(exc, _PolicyRefreshRequired):
@@ -232,6 +244,9 @@ class C2CoordinatorRuntimeBinding:
             if isinstance(exc, (CredentialError, SnapshotError, StorageError)):
                 raise
             raise CredentialError("C2 coordinator guard failed closed") from exc
+
+    def assert_live(self):
+        return self._assert_guard(require_local_head=True)
 
     def install_policy(self, encoded):
         try:
@@ -268,12 +283,7 @@ class C2CoordinatorRuntimeBinding:
             raise
 
     def assert_refreshable(self):
-        try:
-            self.assert_live()
-        except _PolicyRefreshRequired:
-            with self._lock:
-                if self._invalid:
-                    raise CredentialError(self._reason or "binding invalidated during refresh check")
+        return self._assert_guard(require_local_head=False)
 
 
 def load_c2_personal_coordinator_binding(*, root_store: RootGenerationStore, clock: Clock,

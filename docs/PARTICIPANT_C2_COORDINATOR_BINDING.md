@@ -29,6 +29,13 @@ invalidate the binding once and send bounded synchronous notifications after
 releasing its lock. Notifications do not prove that a process or resource was
 actually cleaned up.
 
+The binding retains monotonic deadline floors for signed snapshot expiries,
+pinned credential identities, and exact grant identities. A change in clock
+uncertainty or re-signing the same policy cannot extend an observed authorization
+window. A new signed snapshot expiry or grant identity can establish a new
+window, while the same pinned credential retains its earlier deadline. Floor
+history has fixed bounds and exhaustion requires a cold restart.
+
 This is an inert binding prerequisite. It does not start or supervise a
 coordinator, consume a launch claim, publish READY, create a channel, validate
 loaded weights, or prove cleanup. The parent `LocalIdentity` is not a proof of
