@@ -228,15 +228,22 @@ integration and the outbound split-host route remain incomplete; every C2
 checkbox remains open and C3 has not advanced.
 The [connector design](PARTICIPANT_CONNECTOR_DESIGN.md) freezes the required gates.
 
-**Latest evidence, 2026-10-19:** component 29's full frozen-image inventory
-passed 705 tests with no skips/failures/errors (38.605 s; 432-file snapshot,
+**Latest evidence, 2026-10-19:** component 29's bounded connector plus 21
+selected security modules suite passed 705 tests with no skips/failures/errors
+(38.605 s; 432-file snapshot,
 head `1b221ff`). The follow-on native probes passed local claim (12), global
-claim (15), coordinator (9), route (14), and startup seam (57) tests; the
+claim (15), coordinator (9), route (14), and startup seam (58) tests; the
 root-runtime final-lock causal test passed after its old-version control failed.
 These results remain private component evidence, not C2 acceptance. Claims are
 inert, binding is not readiness, routing has not integrated shared physical
-resources, and the seam uses fake cgroup limits. The record retains earlier
-component-28 fixture failures and invalid/failed native harness attempts.
+resources, and the seam uses fake cgroup limits. Its first 57-pass run had a
+reviewed final-poll handle-consumption issue; the subsequent 58-pass run tests
+the correction. Main review also found a separate coordinator/host deadline
+retention defect not covered by the latest native probe; its fix remains
+unintegrated. Component 29 predates the claim-lifetime and seam integration
+commits, so no combined rebuild has validated that integrated head. The record
+retains earlier component-28 fixture failures and invalid/failed native
+harness attempts.
 Every C2 checkbox remains open; C3 has not advanced. Local startup, actual
 enrollment/roles/gateway, shared CPU/RAM/disk/traffic enforcement and the CT-11/
 CT-13 laptop-to-ZimaBlade routed lifecycle gate remain outstanding.

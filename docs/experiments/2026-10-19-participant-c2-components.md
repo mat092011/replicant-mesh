@@ -568,8 +568,10 @@ additional-hardware blocker is established.
 
 ## Component 29 and latest native controls
 
-Component 29 rebuilt the complete Docker inventory from a frozen 432-file
-source snapshot at head `1b221ffb38eb076eed5ee6bcfc525a28370aa7e7`
+Component 29 rebuilt the bounded Docker inventory for connector tests and 21
+selected security modules (not the full repository or full C1 regression) from
+a frozen 432-file source snapshot at head
+`1b221ffb38eb076eed5ee6bcfc525a28370aa7e7`
 (`b35138503cd218d43f37ae024b8c05e82910e64da10ecb6cc06ee74c4503b685`). The
 pinned image was
 `sha256:44301c3d0a5f06a5ef41e3518bc273486a9c18a47c0b118fc211ef3219722f7b`.
@@ -579,7 +581,7 @@ read-only, limited to 2 CPUs, 6 GiB RAM and 256 PIDs, and had a 15-second stop
 timeout; it exited 0, reported no OOM, and was removed. The source proof also
 ran network-isolated with 1 CPU, 256 MiB and 64 PIDs. The component-29 source
 proof, test log and gate evidence are privately retained under hashes
-`232ca697d94fce0b49e94491383755ad69c38fd983ebb5dcf77d3d1907c6bca8`,
+`232ca697d94fce0b49e94491383755ad69c38fd983ebb5dcf77d3d190c7b6ca8`,
 `716987a417e93dfc9ead74191e733eece29126fbfdbad7547a2e1bc279bacd72`, and
 `c36cd1761575ec462fa039589d566b35348d01964855322a2e0c39d916266fc1`.
 
@@ -594,8 +596,8 @@ The latest bounded native probes also passed: local launch claims, 12 tests
 launch claims, 15 tests (head `8d09794bc93164d303158d5ef11ee4aa96badf8c`,
 432 files); coordinator, 9 tests (head `6994e1451ae5f89c4925223381fc2da4bf4fe3a4`,
 432 files); routed-pool rules, 14 tests (head `1f0fd15abdca3b96b6525985c9e697e6b83f9fc5`,
-420 files); and startup seam, 57 tests (head
-`eab7e01ecc0e91b0cb1b7b770a21864f078cd9df`, 434 files). The root-runtime
+420 files); and startup seam, 58 tests in the latest native run (head
+`6c1fe368a1e55a41b8500f0efbc6dd35e2c2aaa9`, 434 files). The root-runtime
 final-lock causal control failed once against the old implementation and
 passed once against the new implementation. The startup seam still substitutes
 fake cgroup limits. These fresh runs do not turn claims into Popen authority,
@@ -603,23 +605,45 @@ host/coordinator binding into READY, or the shared route ledger into actual
 resource integration. They also do not establish acceptance of the complete
 selected-root startup path.
 
+The prior 57-pass seam run (head `eab7e01ecc0e91b0cb1b7b770a21864f078cd9df`,
+log `844be488214021ec82d984a235d305a21d525ea44f4f5a72fa1fb1bc5d2b1bd3`) is
+retained as historical evidence; review found
+that its final polling path could leave a handle live after a final-poll error.
+The corrected seam run uses source head `6c1fe368a1e55a41b8500f0efbc6dd35e2c2aaa9`
+and digest `a4eca0d5cb463c024621e8aacd2633b4f0366b75f27d139dc14e7149749fb6dc`
+(434 files). It passed 58 tests in 3.520 seconds with zero skips; its command
+exited 0 and its log hash is
+`38cbc8501e073942bb83304830a2611ee5e75fbc1c5fcd299ad6e91e4d0abd7c`.
+
 The latest local-claim and global-claim test logs are
 `6a4f6e64c7834dbeaaa49fc8ceaaa6a0abdd1ba4fb623114a39afe068c1511bd` and
 `fc87688f78cc3821577af3a278aee2495c52d22a0b7fede3163081f70002918d`;
 coordinator and startup-seam logs are
 `a26491bd41f4ba997fb79bfe9b317eab799b4703a1d26f4dcb2277725619b960` and
-`844be488214021ec82d984a235d305a21d525ea44f4f5a72fa1fb1bc5d2b1bd3`.
+`38cbc8501e073942bb83304830a2611ee5e75fbc1c5fcd299ad6e91e4d0abd7c`.
 The local and global claim source snapshots contain 432 files each, with
 digests `8f7e9fb3ba07968dccf63647e2f2adb1e55e9bacd00d089c374bc3e1151a3647`
 and `e1f13572e259b41c069780dde66c53015920bbb3d70bcb8d69485764543c8136`.
 
+Main review found a coordinator/host deadline-retention defect in the
+coordinator (`6994e145`) and host-binding (`7e` series): uncertainty widening
+checks do not retain the tightest monotonic deadline. The latest native
+coordinator probe does not exercise this path. A bounded deadline-floor
+correction is active in the isolated `c2-deadline-retention` work but is not
+integrated; the previous native pass is not evidence for that fix.
+Claim-lifetime changes and the seam fix have source-reviewed integration
+commits (current integration head `8c80a13`), but no combined inventory has
+been rebuilt from that head.
+
 Failures and invalid harness runs are retained rather than counted as passes:
-the earlier local-claim fsync fixture run had one failure (a complete durable
-record was incorrectly expected to be rejected on reopen); the next local and
-global FD-reuse runs each had one failure because `/dev/null` was assumed to
+the earlier local-claim fsync fixture run had one failure (the canonical record
+bytes were fully written, but fsync failed, so durability was unconfirmed; the
+test incorrectly expected reopening to reject valid consumed history); the
+next local and global FD-reuse runs each had one failure because `/dev/null` was assumed to
 allocate a particular descriptor. Corrected native runs use exact `dup2`
 reuse and synchronization barriers. Coordinator attempts included an empty
-parent probe with zero tests (exit 0, not a pass), two setup errors, an expiry
+parent probe with zero tests (exit 0, not a pass), two attempts with four setup
+errors each (eight errors total), an expiry
 assertion mismatch (7 passes/1 error), and an inventory mismatch that aborted
 before tests. The latest coordinator run passed its nine tests. These tests are
 bounded software checks; independent acceptance review is still pending.

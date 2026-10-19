@@ -891,8 +891,9 @@ gate. C2 is unpublished;
 C3 and research gate statuses are unchanged. Work uses the laptop and ZimaBlade;
 no additional hardware requirement has been established.
 
-**C2 component update, 2026-10-19:** component 29 rebuilt the bounded full
-Docker inventory after the foreign-owner fixture-only correction: 705 unique
+**C2 component update, 2026-10-19:** component 29 rebuilt the bounded Docker
+inventory covering connector tests and 21 selected security modules (not the
+full repository or full C1 regression): 705 unique
 tests passed, with zero skips, failures or errors, in 38.605 seconds. The frozen
 source snapshot is 432 files (`b35138503cd218d43f37ae024b8c05e82910e64da10ecb6cc06ee74c4503b685`,
 head `1b221ff`); the pinned image is
@@ -900,11 +901,18 @@ head `1b221ff`); the pinned image is
 The record retains component 28's two missing-fixture failures and the
 fixture-only resolution. Fresh bounded native runs then passed local launch
 claim (12), global launch claim (15), coordinator (9), route (14), and startup
-seam (57) tests. These are component controls: claim receipts remain inert,
+seam (58) tests. These are component controls: claim receipts remain inert,
 host/coordinator binding does not establish READY, the route ledger is not
 physical resource integration, and the startup seam uses fake cgroup limits.
 The root-runtime final-lock control also changed from one failure in the old
-implementation to one pass in the new implementation. All artifacts remain
+implementation to one pass in the new implementation. The later seam run fixes
+a final-poll handle-consumption error observed in the earlier 57-pass run. Main
+review found a separate deadline-retention issue: coordinator/host uncertainty
+checks can widen, rather than retain, the tightest monotonic deadline. The
+latest native coordinator run does not cover that defect; a bounded floor fix
+is active but not integrated. Global/local claim lifetime fixes and the seam
+fix have source-reviewed integration commits, but component 29 has not been
+rebuilt from that integrated head. All artifacts remain
 private and unpublished. The full details, source snapshots, limitations, and
 retained invalid/failed attempts are in the [component record](experiments/2026-10-19-participant-c2-components.md).
 
