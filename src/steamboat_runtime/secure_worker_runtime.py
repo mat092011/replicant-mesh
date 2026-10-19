@@ -403,6 +403,13 @@ class SecureWorkerRuntimeBridge:
                 raise RuntimeBridgeUnavailable(
                     "worker session reclamation is unconfirmed")
             self._process_notices()
+            # Notice processing can itself fence the bridge (for example, a
+            # bounded notice queue fault). Never treat the pre-processing
+            # health sample as proof that cleanup remains trustworthy.
+            if (self._closed or self.unavailable or self._unconfirmed_cleanup
+                    or self._handler.requires_restart):
+                raise RuntimeBridgeUnavailable(
+                    "worker session reclamation is unconfirmed")
             with self._lock:
                 if (self._operations.get(id(operation.request)) is not operation
                         or operation.authorization_closed):
@@ -413,6 +420,10 @@ class SecureWorkerRuntimeBridge:
                     "worker invalidated owner identity changed during reclamation")
             if not self._handler_owns_session(owner):
                 self._reconcile()
+                if (self._closed or self.unavailable or self._unconfirmed_cleanup
+                        or self._handler.requires_restart):
+                    raise RuntimeBridgeUnavailable(
+                        "worker session reclamation was not confirmed")
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -421,6 +432,39 @@ class SecureWorkerRuntimeBridge:
                 raise RuntimeBridgeUnavailable(
                     "worker session reclamation deadline expired")
             await asyncio.sleep(min(_OWNER_RECLAIM_POLL_SECONDS, remaining))
+
+    def confirm_authorization_retirement(self, authorization):
+        """Confirm one already-closed authorization left no uncertain owner state.
+
+        This is an observation only: it never retries ``close``. A swallowed
+        ledger-retirement error leaves the owner present or fences the bridge,
+        so callers must retain their capture on any failure.
+        """
+        if (type(authorization) is not _BoundAuthorization
+                or authorization._bridge is not self):
+            raise RuntimeBindingError(
+                "retirement confirmation requires this bridge's exact authorization")
+        operation = authorization._operation
+        with self._lock:
+            if (operation.authorization is not authorization
+                    or operation.core_authorization is not authorization._core
+                    or not operation.authorization_closed):
+                raise RuntimeBindingError(
+                    "retirement confirmation requires the exact closed authorization")
+        self._assert_loop()
+        self._process_notices()
+        self._reconcile()
+        if (self._closed or self.unavailable or self._unconfirmed_cleanup
+                or self._handler.requires_restart):
+            raise RuntimeBridgeUnavailable(
+                "authorization retirement remains unconfirmed")
+        owner = operation.owner
+        if owner is not None and owner.invalidated:
+            if (self._owners.get(owner.key) is owner
+                    or self._handler_owns_session(owner)):
+                raise RuntimeBridgeUnavailable(
+                    "invalidated session retirement remains unconfirmed")
+        return True
 
     def begin_drain(self, timeout_seconds=30):
         """Stop new session admission and set one immutable owner deadline."""

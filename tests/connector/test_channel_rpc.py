@@ -23,6 +23,7 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         from tests.runtime.test_manifest import sample_manifest
 
         self.manifest = sample_manifest()
+        self._expected_transport_loss = False
         import tests.security.test_identity_core as identity_core
         self._model_patch = mock.patch.object(
             identity_core, "MODEL", self.manifest["fingerprint"])
@@ -118,6 +119,79 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
                                             fragment_kind=returned.kind).protobuf,
                          serialize_message(response_proto))
         self.assertEqual(relay._pending, {})
+
+    async def test_bridge_reclamation_checks_notice_fault_and_core_confirmation(self):
+        from steamboat_runtime.secure_worker_runtime import (
+            RuntimeBridgeUnavailable, SecureWorkerRuntimeBridge,
+            _BoundAuthorization, _Operation, _SessionOwner,
+        )
+        from steamboat_runtime.worker_state import WorkerHandler
+        from steamboat_runtime.protocol.worker_pb2 import Request
+        from steamboat_security.authorization import Authorizer, LocalIdentity
+
+        authorizer = Authorizer(
+            local_identity=LocalIdentity(
+                self.fx.host["certificate"], self.fx.worker_boot_id,
+                self.manifest["fingerprint"], self.fx.assignment_id),
+            snapshot_store=self.fx.base.snapshot_store, clock=self.fx.base.clock,
+            session_bindings=self.fx.worker_sessions, worker_request_type=Request)
+        handler = WorkerHandler(self.manifest, "worker-1", object(),
+                                boot_id=self.fx.worker_boot_id)
+        bridge = SecureWorkerRuntimeBridge(authorizer, handler)
+        self.bridge = bridge
+        await bridge.start()
+
+        def stage_owner(session_id):
+            owner = _SessionOwner(
+                self.fx.device_id, self.fx.worker_boot_id, self.fx.assignment_id,
+                session_id, ("captured-core-owner",), ("captured-core-identity",),
+                invalidated=True)
+            request = object()
+            operation = _Operation(request, "Step", object(), owner, ())
+            operation.dispatch_done = True
+            authorization = _BoundAuthorization(bridge, operation)
+            bridge._owners[owner.key] = owner
+            bridge._operations[id(request)] = operation
+            return owner, operation, authorization
+
+        owner, operation, authorization = stage_owner(new_id("ses"))
+        with mock.patch.object(bridge, "_process_notices",
+                               side_effect=lambda: bridge._fence(
+                                   "injected notice processing fault")):
+            with self.assertRaises(RuntimeBridgeUnavailable):
+                await bridge.wait_for_authorized_reclamation(authorization)
+        self.assertTrue(bridge.unavailable)
+        bridge._owners.pop(owner.key, None)
+        bridge._operations.pop(id(operation.request), None)
+        bridge._unconfirmed_cleanup = False
+        bridge._unavailable = False
+        handler.requires_restart = False
+
+        for clock_fault in (False, True):
+            with self.subTest(clock_fault=clock_fault):
+                owner, operation, authorization = stage_owner(new_id("ses"))
+                operation.authorization_closed = True
+                # Mirror the operation-table removal performed by the real
+                # authorization close path before reconciliation.
+                bridge._operations.pop(id(operation.request), None)
+                if clock_fault:
+                    with mock.patch.object(
+                            bridge.session_bindings.clock, "sample",
+                            side_effect=RuntimeError("injected core clock failure")):
+                        with self.assertRaises(RuntimeBridgeUnavailable):
+                            bridge.confirm_authorization_retirement(authorization)
+                else:
+                    with self.assertRaises(RuntimeBridgeUnavailable):
+                        bridge.confirm_authorization_retirement(authorization)
+                self.assertTrue(bridge.unavailable)
+                self.assertTrue(bridge._unconfirmed_cleanup)
+                # Remove only the deliberately fabricated owner before normal
+                # fixture shutdown; production cleanup remains fenced above.
+                bridge._owners.pop(owner.key, None)
+                bridge._operations.pop(id(operation.request), None)
+                bridge._unconfirmed_cleanup = False
+                bridge._unavailable = False
+                handler.requires_restart = False
 
     def test_worker_dispatcher_rejects_non_client_hello_and_bad_logical_sequence(self):
         from steamboat_connector.channel_rpc import WorkerChannelRpc
@@ -477,6 +551,9 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             sequence=0, start_position=0, token_count=1,
             tensor=encode_tensor(torch.zeros((1, 1, 64))))))
         self.assertTrue(await asyncio.to_thread(executor.started.wait, 1))
+        # Cleanup may observe a stream-retirement error only after this explicit
+        # transport-loss boundary, never for earlier fixture/service faults.
+        self._expected_transport_loss = True
         self.fx.worker_client_stream.close()
         self.assertGreater(self.bridge.status()["active_authorizations"], 0)
         self.assertEqual(executor.last_cache.position, 1)
@@ -498,9 +575,19 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             if not task.done():
                 task.cancel()
         results = await asyncio.gather(service_task, relay_task, return_exceptions=True)
+        from steamboat_connector.channel_stream import ChannelStreamError
+        expected_retirement = (
+            self._expected_transport_loss
+            and self.fx.worker_client_stream.closed
+            and self.fx.worker_server_stream.closed
+            and self.bridge is not None
+            and self.bridge.status()["active_authorizations"] == 0
+            and not self.bridge._handler.sessions)
         for name, result in zip(("worker service", "gateway relay"), results):
             if isinstance(result, BaseException) and not isinstance(
                     result, asyncio.CancelledError):
+                if expected_retirement and isinstance(result, ChannelStreamError):
+                    continue
                 self.fail(f"{name} task failed during fixture cleanup: {result!r}")
 
     async def _cancel_task(self, task):
@@ -536,8 +623,20 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         from steamboat_connector.channel_rpc import WorkerChannelRpc
         from steamboat_runtime.protocol.secure_transport import SecureTaskPending
 
-        bridge = SimpleNamespace(authorizer_core=SimpleNamespace(
-            local_identity=SimpleNamespace(boot_id=self.fx.worker_boot_id)))
+        class TestBridge:
+            def __init__(self):
+                self.authorizer_core = SimpleNamespace(
+                    local_identity=SimpleNamespace(boot_id=self.fx.worker_boot_id))
+                self.confirm_error = None
+            async def wait_for_authorized_reclamation(self, authorization):
+                order.append("wait")
+            def confirm_authorization_retirement(self, authorization):
+                order.append("confirm")
+                if self.confirm_error is not None:
+                    raise self.confirm_error
+
+        order = []
+        bridge = TestBridge()
         service = WorkerChannelRpc(
             stream=self.fx.worker_client_stream, bridge=bridge,
             data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
@@ -558,6 +657,7 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self): self.close_called = False
             def close(self):
                 self.close_called = True
+                order.append("close")
                 raise RuntimeError("injected uncertain authorization retirement")
 
         authorization = FaultingAuthorization()
@@ -574,9 +674,36 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "uncertain authorization retirement"):
             await retirement
         self.assertTrue(authorization.close_called)
+        self.assertEqual(order, ["wait", "close"])
         self.assertEqual(service._data_count, 1)
         self.assertEqual(service._data_bytes, _DATA_CAPTURE_BYTES)
         self.assertIn(capture, service._stuck_captures)
+
+        # A successful close call does not prove that core session retirement
+        # was reconciled. A failed post-close observer must retain the same
+        # count and byte reservation, with no second close attempt.
+        order.clear()
+        bridge.confirm_error = RuntimeError("injected unconfirmed core retirement")
+
+        class ClosedAuthorization:
+            def __init__(self): self.close_count = 0
+            def close(self):
+                self.close_count += 1
+                order.append("close")
+
+        closed_authorization = ClosedAuthorization()
+        second_capture = _RpcCaptureOwner(None, None, None, closed_authorization,
+                                          False, _DATA_CAPTURE_BYTES)
+        service._stuck_captures.clear()
+        retirement = asyncio.create_task(
+            service._release_after((), second_capture))
+        with self.assertRaisesRegex(RuntimeError, "unconfirmed core retirement"):
+            await retirement
+        self.assertEqual(order, ["wait", "close", "confirm"])
+        self.assertEqual(closed_authorization.close_count, 1)
+        self.assertEqual(service._data_count, 1)
+        self.assertEqual(service._data_bytes, _DATA_CAPTURE_BYTES)
+        self.assertIn(second_capture, service._stuck_captures)
 
 
 if __name__ == "__main__":

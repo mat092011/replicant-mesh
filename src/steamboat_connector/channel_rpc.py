@@ -369,6 +369,7 @@ class WorkerChannelRpc:
                     result = authorization.close()
                     if inspect.isawaitable(result):
                         await result
+                    self.bridge.confirm_authorization_retirement(authorization)
                 except BaseException:
                     # Ownership is uncertain; keep the slot and byte charge
                     # permanently rather than admitting replacement work.
@@ -387,6 +388,8 @@ class WorkerChannelRpc:
             result = capture_owner.authorization.close()
             if inspect.isawaitable(result):
                 await result
+            self.bridge.confirm_authorization_retirement(
+                capture_owner.authorization)
         except BaseException:
             self._stuck_captures.add(capture_owner)
             raise
