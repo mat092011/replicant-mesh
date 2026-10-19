@@ -1,0 +1,214 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
+from steamboat_connector.channel_policy_store import (
+    HEAD_NAME,
+    LOCK_NAME,
+    PersistentChannelPolicyStore,
+)
+from steamboat_security.channel_policy import canonical_json, sign_channel_policy
+from steamboat_security.clock import Clock
+from steamboat_security.errors import SnapshotError, StorageError
+
+
+def _private_pem(key):
+    return key.private_bytes(serialization.Encoding.PEM,
+                             serialization.PrivateFormat.PKCS8,
+                             serialization.NoEncryption())
+
+
+def _public_pem(key):
+    return key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+
+
+@unittest.skipUnless(os.name == "posix" and __import__("sys").platform.startswith("linux"),
+                     "persistent channel policy owner is Linux-only")
+class PersistentChannelPolicyStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name) / "policy"
+        self.root.mkdir(mode=0o700)
+        os.chmod(self.root, 0o700)
+        self.wall, self.mono = 1000.0, 50.0
+        self.clock = Clock(wall=lambda: self.wall, monotonic=lambda: self.mono,
+                           uncertainty_seconds=lambda: 0.0)
+        self.key = ec.generate_private_key(ec.SECP256R1())
+        self.private_pem = _private_pem(self.key)
+        self.public_pem = _public_pem(self.key)
+        self.payload = {
+            "version": 2, "revision": 1, "issued_at": 1000, "expires_at": 1100,
+            "gateways": [{
+                "gateway_id": "gw-east", "serial": "ab12",
+                "certificate_sha256": "1" * 64, "public_key_sha256": "2" * 64,
+                "not_before": 900, "not_after": 1500,
+                "endpoint_host": "gateway.example.net", "endpoint_port": 443,
+                "coordinator_endpoint_host": "coordinator.example.net",
+                "coordinator_endpoint_port": 444,
+            }],
+            "workers": [{
+                "account_id": "acct_" + "1" * 32,
+                "device_id": "dev_" + "2" * 32, "host_serial": "ab13",
+                "host_credential_epoch": 2, "host_certificate_sha256": "3" * 64,
+                "worker_boot_id": "4" * 32, "assignment_id": "asg_" + "5" * 32,
+                "model_id": "6" * 64, "channel_serial": "ab14",
+                "channel_certificate_sha256": "7" * 64,
+                "channel_public_key_sha256": "8" * 64,
+                "not_before": 900, "not_after": 1500, "gateway_id": "gw-east",
+            }],
+            "routes": [{
+                "gateway_id": "gw-east", "account_id": "acct_" + "1" * 32,
+                "device_id": "dev_" + "9" * 32, "actor_serial": "ab15",
+                "actor_credential_epoch": 3, "actor_certificate_sha256": "a" * 64,
+                "coordinator_boot_id": "b" * 32,
+                "tenant_account_id": "acct_" + "1" * 32,
+                "target_device_id": "dev_" + "2" * 32,
+                "worker_boot_id": "4" * 32, "assignment_id": "asg_" + "5" * 32,
+                "model_id": "6" * 64, "methods": ["Describe", "Step"],
+            }],
+        }
+        self.digest = hashlib.sha256(canonical_json(self.payload)).hexdigest()
+        self.config = dict(expected_uid=os.geteuid(), verification_key_pem=self.public_pem,
+                           clock=self.clock, minimum_revision=1,
+                           minimum_policy_digest=self.digest)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def sign(self, payload=None, key=None):
+        return sign_channel_policy(self.payload if payload is None else payload,
+                                   _private_pem(self.key if key is None else key))
+
+    def provision(self, *, fault_hook=None):
+        owner = PersistentChannelPolicyStore.provision(
+            self.root, **self.config, _fault_hook=fault_hook)
+        owner.install(self.sign())
+        return owner
+
+    def open_existing(self, root=None, **kwargs):
+        options = dict(self.config)
+        options.update(kwargs)
+        return PersistentChannelPolicyStore.open_existing(
+            self.root if root is None else root, **options)
+
+    def test_provision_reopen_and_exact_payload_replay_are_durable(self):
+        owner = self.provision()
+        view = owner.current()
+        self.assertEqual(view.revision, 1)
+        with self.assertRaises(StorageError):
+            self.open_existing()
+        owner.close()
+
+        # ECDSA may encode a different signature for the same canonical payload.
+        replay = self.sign()
+        self.assertEqual(owner.faulted, False)
+        reopened = self.open_existing()
+        self.assertEqual(reopened.current().policy_digest, view.policy_digest)
+        self.assertEqual(reopened.install(replay), reopened.current())
+        reopened.close()
+        head = json.loads((self.root / HEAD_NAME).read_bytes())
+        self.assertEqual(head["revision"], 1)
+        self.assertEqual((self.root / LOCK_NAME).stat().st_mode & 0o777, 0o600)
+
+    def test_revision_advance_and_reopen_obey_explicit_minimum_anchor(self):
+        owner = self.provision()
+        second_payload = {**self.payload, "revision": 2, "issued_at": 1001,
+                          "expires_at": 1101}
+        second = self.sign(second_payload)
+        view = owner.install(second)
+        self.assertEqual(view.revision, 2)
+        owner.close()
+        reopened = self.open_existing()
+        self.assertEqual(reopened.current().revision, 2)
+        reopened.close()
+
+        with self.assertRaises(StorageError):
+            self.open_existing(minimum_revision=2)
+        wrong_key = ec.generate_private_key(ec.SECP256R1())
+        with self.assertRaises(StorageError):
+            self.open_existing(verification_key_pem=_public_pem(wrong_key))
+
+    def test_rollback_is_rejected_without_changing_current_head(self):
+        owner = self.provision()
+        changed = {**self.payload, "revision": 2, "issued_at": 1001,
+                   "expires_at": 1101,
+                   "routes": [{**self.payload["routes"][0], "methods": ["Describe"]}]}
+        owner.install(self.sign(changed))
+        with self.assertRaises(SnapshotError):
+            owner.install(self.sign())
+        self.assertEqual(owner.current().revision, 2)
+        self.assertFalse(owner.faulted)
+        owner.close()
+
+    def test_same_revision_equivocation_is_rejected_without_changing_head(self):
+        owner = self.provision()
+        first = {**self.payload, "revision": 2, "issued_at": 1001,
+                 "expires_at": 1101,
+                 "routes": [{**self.payload["routes"][0], "methods": ["Describe"]}]}
+        owner.install(self.sign(first))
+        second = {**first, "routes": [{**first["routes"][0], "methods": ["Step"]}]}
+        with self.assertRaises(SnapshotError):
+            owner.install(self.sign(second))
+        self.assertEqual(owner.current().policy_digest,
+                         hashlib.sha256(canonical_json(first)).hexdigest())
+        self.assertFalse(owner.faulted)
+        owner.close()
+
+    def test_durable_write_fault_does_not_publish_initial_policy(self):
+        def fail(point):
+            if point == "head.file.fsync":
+                raise OSError("injected durable write failure")
+
+        owner = PersistentChannelPolicyStore.provision(
+            self.root, **self.config, _fault_hook=fail)
+        with self.assertRaises(StorageError):
+            owner.install(self.sign())
+        self.assertTrue(owner.faulted)
+        self.assertIsNone(owner._store._view)
+        self.assertTrue((self.root / LOCK_NAME).exists())
+
+    def test_open_rejects_corrupt_truncated_symlink_and_fifo_heads(self):
+        owner = self.provision()
+        owner.close()
+        head_path = self.root / HEAD_NAME
+        original = head_path.read_bytes()
+        for corrupt in (b"{", original[:-1]):
+            head_path.write_bytes(corrupt)
+            with self.assertRaises(StorageError):
+                self.open_existing()
+        head_path.unlink()
+        head_path.symlink_to(self.root / LOCK_NAME)
+        with self.assertRaises(StorageError):
+            self.open_existing()
+        head_path.unlink()
+        if hasattr(os, "mkfifo"):
+            os.mkfifo(head_path, 0o600)
+            with self.assertRaises(StorageError):
+                self.open_existing()
+
+    def test_out_of_band_head_change_fences_cas_and_prevents_publication(self):
+        owner = self.provision()
+        before = owner.current()
+        data = (self.root / HEAD_NAME).read_bytes()
+        (self.root / HEAD_NAME).write_bytes(data + b" ")
+        advanced = {**self.payload, "revision": 2, "issued_at": 1001,
+                    "expires_at": 1101}
+        with self.assertRaises(StorageError):
+            owner.install(self.sign(advanced))
+        self.assertTrue(owner.faulted)
+        self.assertEqual(owner._store._view, before)
+
+
+if __name__ == "__main__":
+    unittest.main()
