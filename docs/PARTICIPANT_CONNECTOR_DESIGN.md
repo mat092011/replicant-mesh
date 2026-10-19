@@ -52,12 +52,18 @@ substitute for channel leaves or vice versa.
 
 The worker-side TLS owner loads its private key and certificate into a private
 TLS 1.2/1.3 client context, verifies the configured gateway CA and fixed endpoint,
-and keeps the SSLObject private. It accepts bounded MemoryBIO input and output
-chunks (16 KiB), bounds each pending BIO to 64 KiB, and limits handshake traffic
+and keeps the SSLObject private. It proves only that the configured credential
+was loaded into its client context; the client cannot prove that the server
+requested or verified it. The gateway server must separately require client
+certificates and validate the worker profile and policy before accepting a
+channel. It accepts bounded MemoryBIO input and output chunks (16 KiB), bounds
+each pending BIO to 64 KiB, and limits handshake traffic
 to 128 KiB and ten monotonic seconds. Credential files are created in a 0700
-temporary directory with 0600 files and removed after OpenSSL loads them. The
-completed owner exposes the actual peer certificate and the exact worker leaf
-selected by its own context; gateway ingress accepts this owner rather than a
+temporary directory with 0600 files and removed after OpenSSL loads them. Failed
+cleanup leaves a faulted owner with an explicit uncertain status and retained
+directory path; it never reports those credentials as removed. The completed
+owner exposes the actual peer certificate and the configured worker leaf loaded
+into its own context. Gateway ingress accepts this owner and does not accept a
 caller-supplied SSLObject plus a claimed local certificate. This transport
 primitive does not provide sockets, wire framing, aggregate traffic quotas, or
 channel readiness. POSIX file mode checks remain platform-specific.

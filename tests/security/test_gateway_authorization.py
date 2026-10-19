@@ -17,6 +17,7 @@ from steamboat_security.codec import (COORDINATOR_SERVICE, WORKER_METHODS,
 from steamboat_security.errors import (BindingError, CredentialError, ScopeError,
     SessionError, SnapshotError)
 from steamboat_security.gateway_ingress import GatewayIngressError
+from steamboat_security.channel_tls import OwnedWorkerTLSError
 from steamboat_security.operator import _record_from_leaf
 from steamboat_security.snapshot import SnapshotStore
 
@@ -284,6 +285,32 @@ class GatewayAuthorizationTests(unittest.TestCase):
             opened.assert_live()
         self.assertTrue(notices)
         self.assertEqual(notices[0].reason, "gateway-stream-lost")
+
+    def test_closed_owned_tls_retires_existing_session(self):
+        notices = []
+        self.ingress_fixture.sessions.subscribe(notices.append)
+        opened = self._open_complete()
+        self.ingress_fixture.tls_owner.close()
+        with self.assertRaises(GatewayIngressError):
+            opened.assert_live()
+        self.assertTrue(notices)
+        self.assertEqual(notices[0].reason, "gateway-clock-fault")
+
+    def test_faulted_owned_tls_invalidates_existing_session_after_revalidation(self):
+        notices = []
+        self.ingress_fixture.sessions.subscribe(notices.append)
+        opened = self._open_complete()
+        owner = self.ingress_fixture.tls_owner
+        self.fixture.clock._uncertainty = lambda: (_ for _ in ()).throw(
+            RuntimeError("clock source unavailable"))
+        with self.assertRaises(OwnedWorkerTLSError):
+            owner.feed_encrypted(b"x")
+        self.fixture.clock._uncertainty = lambda: 0.0
+        self.fixture.clock.revalidate_after_resume(trusted_clock=True)
+        with self.assertRaises(GatewayIngressError):
+            opened.assert_live()
+        self.assertTrue(notices)
+        self.assertEqual(notices[0].reason, "gateway-clock-fault")
 
     def test_new_policy_and_tls_generation_cannot_adopt_old_gateway_session(self):
         self._open_complete()

@@ -2,10 +2,11 @@
 
 This is a connection-bound authorization primitive, not a request framer,
 readiness signal, or C1 grant/revocation check. It accepts only a completed
-OwnedWorkerTLS connection, which created its own private context and selected
-the verified worker certificate for its mTLS client handshake. A stream is
-permanently closed on uncertainty or identity change; replacing it requires a
-new owned TLS connection and generation.
+OwnedWorkerTLS connection, which creates its private client context and loads
+the pinned worker credential. A TLS client cannot prove that the remote server
+requested or verified that credential; actual gateway-server client-auth
+enforcement remains an integration requirement. A stream is permanently closed
+on uncertainty or identity change; replacing it requires a new owner/generation.
 """
 
 from __future__ import annotations
@@ -131,7 +132,7 @@ class GatewayWorkerIngress:
                     or gateway["endpoint_host"] != verifier.endpoint_host
                     or gateway["endpoint_port"] != verifier.endpoint_port):
                 raise GatewayIngressError("TLS gateway certificate is not current-policy pinned")
-            local_worker_channel_certificate_pem = tls_owner.selected_local_certificate_pem
+            local_worker_channel_certificate_pem = tls_owner.configured_local_certificate_pem
             worker_cert = verify_channel_certificate(
                 local_worker_channel_certificate_pem, verifier.gateway_ca_pem,
                 kind="worker_stream", expected_identity={
@@ -192,6 +193,9 @@ class GatewayWorkerIngress:
     def _policy_and_worker(self):
         if self._state.closed or self._state.faulted:
             raise GatewayIngressError("gateway TLS generation is closed")
+        if (not is_owned_worker_tls(self._tls_owner)
+                or not self._tls_owner.is_live):
+            raise GatewayIngressError("owned worker TLS connection is closed or faulted")
         local = self.verifier.local_identity
         captured = self._local_identity
         if (type(local) is not LocalIdentity
@@ -242,7 +246,9 @@ class GatewayWorkerIngress:
         The caller must keep the block to bounded local C1 snapshot checks and
         SessionBindings operations. Network I/O and model execution do not
         belong under the ingress lock. C1 exceptions propagate unchanged;
-        normal exit performs a final ingress liveness check before unlocking.
+        both normal and exceptional exits check ingress liveness before
+        unlocking. Ordinary C1 denials propagate unchanged if the ingress is
+        still live; observed ingress faults are latched even during an error.
         """
         with self._state.lock:
             try:
@@ -251,7 +257,15 @@ class GatewayWorkerIngress:
             except Exception as error:
                 self._close_locked(self._liveness_close_reason(error))
                 raise GatewayIngressError("gateway ingress is unavailable for admission") from error
-            yield
+            try:
+                yield
+            except BaseException:
+                try:
+                    _view, _worker, _gateway, sample = self._policy_and_worker()
+                    self._check_ingress_sample_locked(sample)
+                except Exception as error:
+                    self._close_locked(self._liveness_close_reason(error))
+                raise
             try:
                 _view, _worker, _gateway, sample = self._policy_and_worker()
                 self._check_ingress_sample_locked(sample)

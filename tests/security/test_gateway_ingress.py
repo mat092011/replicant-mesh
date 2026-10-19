@@ -17,6 +17,8 @@ from steamboat_security.channel_certificates import (issue_channel_certificate,
 from steamboat_security.channel_tls import (MAX_CHUNK_BYTES,
     MAX_HANDSHAKE_BYTES, OwnedWorkerTLS, OwnedWorkerTLSError,
     _valid_endpoint_host)
+from steamboat_security.errors import ClockError
+from steamboat_security.errors import ClockError
 from steamboat_security.channel_policy import sign_channel_policy
 from steamboat_security.gateway_ingress import (GatewayIngressError,
     GatewayWorkerIngress)
@@ -86,17 +88,20 @@ class GatewayIngressTests(unittest.TestCase):
         self._temp_paths.append(file.name)
         return file.name
 
-    def _make_tls_client(self, hostname="gateway.example.net"):
+    def _make_tls_client(self, hostname="gateway.example.net",
+                         require_client_certificate=True):
         f = self.fixture
         self.gateway_cert_file = self._write(f.gateway_pem)
         self.worker_cert_file = self._write(self.worker_channel)
         self.worker_key_file = self._write(self.worker_channel_key)
         self.ca_file = self._write(f.gateway_ca)
         server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        server_context.verify_mode = ssl.CERT_REQUIRED
+        server_context.verify_mode = (ssl.CERT_REQUIRED if require_client_certificate
+                                      else ssl.CERT_NONE)
         server_context.load_cert_chain(self.gateway_cert_file,
                                        self._write(f.gateway_key))
-        server_context.load_verify_locations(cafile=self.ca_file)
+        if require_client_certificate:
+            server_context.load_verify_locations(cafile=self.ca_file)
         ci, co, si, so = ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO()
         server = server_context.wrap_bio(si, so, server_side=True)
         owner = OwnedWorkerTLS.connect(
@@ -104,12 +109,14 @@ class GatewayIngressTests(unittest.TestCase):
             worker_private_key_pem=self.worker_channel_key,
             gateway_ca_pem=self.fixture.gateway_ca,
             endpoint_host=hostname, endpoint_port=443, clock=self.fixture.clock)
+        server_done = False
         for _ in range(30):
             outgoing = owner.take_encrypted()
             if outgoing:
                 si.write(outgoing)
             try:
                 server.do_handshake()
+                server_done = True
             except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
                 pass
             response = so.read() if so.pending else b""
@@ -118,7 +125,19 @@ class GatewayIngressTests(unittest.TestCase):
             else:
                 owner.do_handshake()
             if owner.handshake_complete:
+                for _ in range(3):
+                    if server_done:
+                        break
+                    final_client = owner.take_encrypted()
+                    if final_client:
+                        si.write(final_client)
+                    try:
+                        server.do_handshake()
+                        server_done = True
+                    except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                        pass
                 owner._test_server = server
+                owner._test_server_handshake_done = server_done
                 owner._test_server_incoming = si
                 owner._test_server_outgoing = so
                 return owner
@@ -137,6 +156,14 @@ class GatewayIngressTests(unittest.TestCase):
         self.assertTrue(_valid_endpoint_host("2001:db8::1"))
         self.assertFalse(_valid_endpoint_host("https://gateway.example.net"))
         self.assertFalse(_valid_endpoint_host("*.example.net"))
+
+    def test_client_handshake_does_not_prove_server_verified_worker_certificate(self):
+        owner = self._make_tls_client(require_client_certificate=False)
+        self.assertTrue(owner.handshake_complete)
+        self.assertTrue(owner._test_server_handshake_done)
+        self.assertIsNone(owner._test_server.getpeercert(binary_form=True))
+        self.assertTrue(owner.configured_local_certificate_pem)
+        owner.close()
         self.assertTrue(_valid_endpoint_host("2001:db8::1"))
         self.assertFalse(_valid_endpoint_host("https://gateway.example.net"))
         self.assertFalse(_valid_endpoint_host("*.example.net"))
@@ -260,6 +287,32 @@ class GatewayIngressTests(unittest.TestCase):
         owner.feed_encrypted(response)
         self.assertEqual(owner.read_plaintext(), b"response")
         self.assertGreaterEqual(sum(owner.byte_counts), len(encrypted) + len(response))
+
+    def test_clock_provider_failure_sticks_after_clock_revalidation(self):
+        owner = self.tls_owner
+        self.fixture.clock._uncertainty = lambda: (_ for _ in ()).throw(
+            RuntimeError("clock source unavailable"))
+        with self.assertRaises(OwnedWorkerTLSError):
+            owner.feed_encrypted(b"x")
+        self.assertFalse(owner.is_live)
+        self.fixture.clock._uncertainty = lambda: 0.0
+        self.fixture.clock.revalidate_after_resume(trusted_clock=True)
+        with self.assertRaises(OwnedWorkerTLSError):
+            owner.do_handshake()
+        self.assertTrue(self.ingress.poll_unavailable())
+        self.assertTrue(self.ingress._state.closed)
+
+    def test_owner_clock_fault_cannot_resume_after_clock_revalidation(self):
+        self.fixture.clock._uncertainty = lambda: (_ for _ in ()).throw(
+            RuntimeError("clock source unavailable"))
+        with self.assertRaises(OwnedWorkerTLSError):
+            self.tls_owner.feed_encrypted(b"x")
+        self.fixture.clock._uncertainty = lambda: 0.0
+        self.fixture.clock.revalidate_after_resume(trusted_clock=True)
+        self.assertFalse(self.tls_owner.is_live)
+        with self.assertRaises(OwnedWorkerTLSError):
+            self.tls_owner.do_handshake()
+        self.assertTrue(self.ingress.poll_unavailable())
         self.assertLessEqual(MAX_HANDSHAKE_BYTES, 128 * 1024)
         owner = OwnedWorkerTLS.connect(
             worker_certificate_pem=self.worker_channel,
@@ -302,6 +355,73 @@ class GatewayIngressTests(unittest.TestCase):
         self.assertEqual(observed[0][0], 0o700)
         self.assertEqual(set(observed[0][1].values()), {0o600})
         owner.close()
+
+    @unittest.skipUnless(__import__("os").name == "posix", "POSIX descriptor semantics")
+    def test_fsync_failure_does_not_double_close_reused_descriptor(self):
+        import os
+        from unittest.mock import patch
+        from steamboat_security import channel_tls
+        original_fdopen = os.fdopen
+        sentinel_fd = []
+
+        class ClosingProxy:
+            def __init__(self, stream):
+                self.stream = stream
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                self.stream.close()
+                sentinel_fd.append(os.open(os.devnull, os.O_RDONLY))
+            def write(self, value):
+                return self.stream.write(value)
+            def flush(self):
+                return self.stream.flush()
+            def fileno(self):
+                return self.stream.fileno()
+
+        def wrapped_fdopen(fd, *args, **kwargs):
+            return ClosingProxy(original_fdopen(fd, *args, **kwargs))
+
+        with patch.object(channel_tls.os, "fdopen", side_effect=wrapped_fdopen), \
+                patch.object(channel_tls.os, "fsync", side_effect=OSError("injected fsync failure")):
+            with self.assertRaises(OSError):
+                OwnedWorkerTLS.connect(
+                    worker_certificate_pem=self.worker_channel,
+                    worker_private_key_pem=self.worker_channel_key,
+                    gateway_ca_pem=self.fixture.gateway_ca,
+                    endpoint_host="gateway.example.net", endpoint_port=443,
+                    clock=self.fixture.clock)
+        self.assertEqual(len(sentinel_fd), 1)
+        os.fstat(sentinel_fd[0])
+        os.close(sentinel_fd[0])
+
+    def test_cleanup_failure_returns_unusable_owner_with_uncertain_path(self):
+        import os
+        from unittest.mock import patch
+        from steamboat_security import channel_tls
+        original_remove = channel_tls.shutil.rmtree
+        failures = []
+
+        def fail_once(path, *args, **kwargs):
+            failures.append(path)
+            raise OSError("injected cleanup failure")
+
+        with patch.object(channel_tls.shutil, "rmtree", side_effect=fail_once):
+            owner = OwnedWorkerTLS.connect(
+                worker_certificate_pem=self.worker_channel,
+                worker_private_key_pem=self.worker_channel_key,
+                gateway_ca_pem=self.fixture.gateway_ca,
+                endpoint_host="gateway.example.net", endpoint_port=443,
+                clock=self.fixture.clock)
+            self.assertTrue(owner.cleanup_uncertain)
+            self.assertEqual(owner.cleanup_status, "uncertain")
+            path = owner._private_directory
+            self.assertTrue(path and os.path.isdir(path))
+            self.assertFalse(owner.handshake_complete)
+            owner.close()
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(owner._private_directory, path)
+        original_remove(path, ignore_errors=False)
 
     def test_global_sequence_replay_permanently_closes_generation(self):
         with self.assertRaises(GatewayIngressError):
@@ -368,7 +488,7 @@ class GatewayIngressTests(unittest.TestCase):
         self.assertTrue(entered.wait(2))
         self.fixture.clock._uncertainty = lambda: (_ for _ in ()).throw(
             RuntimeError("clock source unavailable"))
-        with self.assertRaises(Exception):
+        with self.assertRaises(ClockError):
             self.fixture.clock.sample()
         self.fixture.clock._uncertainty = lambda: 0.0
         self.fixture.clock.revalidate_after_resume(trusted_clock=True)
@@ -417,6 +537,23 @@ class GatewayIngressTests(unittest.TestCase):
                 self.fixture.policy_store.install(sign_channel_policy(
                     replacement, delegation_tests.private_pem(self.fixture.operator_key)))
         self.assertTrue(self.ingress._state.closed)
+
+    def test_admission_exception_preserves_c1_error_but_latches_clock_fault(self):
+        with self.assertRaises(ValueError):
+            with self.ingress.admission_transaction():
+                raise ValueError("ordinary local C1 denial")
+        self.assertFalse(self.ingress._state.closed)
+
+        def broken_clock():
+            raise RuntimeError("clock source unavailable")
+        with self.assertRaises(ClockError):
+            with self.ingress.admission_transaction():
+                self.fixture.clock._uncertainty = broken_clock
+                self.fixture.clock.sample()
+        self.fixture.clock._uncertainty = lambda: 0.0
+        self.fixture.clock.revalidate_after_resume(trusted_clock=True)
+        self.assertTrue(self.ingress._state.closed)
+        self.assertTrue(self.ingress.poll_unavailable())
 
     def test_operation_guard_is_owned_and_tracks_ingress_liveness(self):
         envelope = self.fixture.make_delegation(changes={

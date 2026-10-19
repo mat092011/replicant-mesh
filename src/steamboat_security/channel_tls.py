@@ -33,6 +33,11 @@ MAX_HANDSHAKE_SECONDS = 10.0
 class OwnedWorkerTLSError(SecurityError):
     """The owned worker TLS channel is malformed, stale, or faulted."""
 
+    def __init__(self, message, *, cleanup_status=None, credential_directory=None):
+        super().__init__(message)
+        self.cleanup_status = cleanup_status
+        self.credential_directory = credential_directory
+
 
 _OWNER_TOKEN = object()
 _MINT_LOCK = threading.Lock()
@@ -87,6 +92,8 @@ class OwnedWorkerTLS:
         self._sent_bytes = 0
         self._received_bytes = 0
         self._token = _OWNER_TOKEN
+        self._private_directory = None
+        self._cleanup_status = "not_created"
 
     @classmethod
     def connect(cls, *, worker_certificate_pem: bytes,
@@ -135,16 +142,15 @@ class OwnedWorkerTLS:
                 flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
                 fd = os.open(path, flags, 0o600)
                 try:
-                    with os.fdopen(fd, "wb") as stream:
+                    stream = os.fdopen(fd, "wb", closefd=True)
+                    fd = None  # fdopen owns it from this point, even on write errors.
+                    with stream:
                         stream.write(data)
                         stream.flush()
                         os.fsync(stream.fileno())
-                except BaseException:
-                    try:
+                finally:
+                    if fd is not None:
                         os.close(fd)
-                    except OSError:
-                        pass
-                    raise
             if os.name == "posix" and any(
                     os.stat(path).st_mode & 0o777 != 0o600
                     for path in (cert_path, key_path, ca_path)):
@@ -164,10 +170,6 @@ class OwnedWorkerTLS:
             incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
             ssl_object = context.wrap_bio(incoming, outgoing, server_side=False,
                                           server_hostname=endpoint_host)
-            # OpenSSL has loaded the private key into the context; remove all
-            # temporary credential files before returning a usable owner.
-            shutil.rmtree(temporary)
-            temporary = None
             clock_sample = clock.sample()
             owner = cls(_OWNER_TOKEN, context=context, incoming=incoming,
                         outgoing=outgoing, ssl_object=ssl_object,
@@ -175,7 +177,15 @@ class OwnedWorkerTLS:
                         clock=clock, started=clock_sample.monotonic)
             owner._endpoint_host = endpoint_host
             owner._endpoint_port = endpoint_port
-            owner._private_directory = None
+            owner._private_directory = temporary
+            owner._cleanup_status = "pending"
+            temporary = None
+            # OpenSSL has loaded the key. A cleanup failure leaves a visible,
+            # unusable owner with an explicit uncertain path status.
+            if not owner._remove_credentials_locked():
+                owner._faulted = True
+                owner._cleanup_failed_locked()
+                return owner
             owner._drive_handshake_locked()
             with _MINT_LOCK:
                 _MINTED_OWNERS.add(owner)
@@ -183,10 +193,21 @@ class OwnedWorkerTLS:
         except BaseException:
             if owner is not None:
                 owner.close()
+                if owner.cleanup_uncertain:
+                    raise OwnedWorkerTLSError(
+                        "TLS credential cleanup is uncertain",
+                        cleanup_status="uncertain",
+                        credential_directory=owner._private_directory)
             if context is not None:
                 context = None
             if temporary is not None:
-                shutil.rmtree(temporary, ignore_errors=True)
+                try:
+                    shutil.rmtree(temporary)
+                except OSError as cleanup_error:
+                    raise OwnedWorkerTLSError(
+                        "TLS credential cleanup is uncertain",
+                        cleanup_status="uncertain",
+                        credential_directory=temporary) from cleanup_error
             raise
 
     @property
@@ -215,7 +236,7 @@ class OwnedWorkerTLS:
                 raise OwnedWorkerTLSError("TLS peer certificate is unavailable") from error
 
     @property
-    def selected_local_certificate_pem(self):
+    def configured_local_certificate_pem(self):
         with self._lock:
             self._require_live_locked()
             if not self._handshake_done:
@@ -227,13 +248,34 @@ class OwnedWorkerTLS:
         with self._lock:
             return self._sent_bytes, self._received_bytes
 
+    @property
+    def cleanup_status(self):
+        with self._lock:
+            return self._cleanup_status
+
+    @property
+    def cleanup_uncertain(self):
+        with self._lock:
+            return self._cleanup_status == "uncertain"
+
+    @property
+    def credential_directory(self):
+        """Retained path when cleanup is uncertain; None only after confirmed removal."""
+        with self._lock:
+            return self._private_directory
+
+    @property
+    def is_live(self):
+        with self._lock:
+            return self._handshake_done and not self._closed and not self._faulted
+
     def take_encrypted(self, maximum=MAX_CHUNK_BYTES):
         with self._lock:
             self._require_live_locked()
             if type(maximum) is not int or not 1 <= maximum <= MAX_CHUNK_BYTES:
                 raise ValueError("encrypted output chunk exceeds the bound")
             if not self._handshake_done:
-                sample = self.clock.sample()
+                sample = self._sample_clock_locked()
                 if sample.monotonic >= self._started + MAX_HANDSHAKE_SECONDS:
                     self._fail_locked()
                     raise OwnedWorkerTLSError("TLS handshake deadline exceeded")
@@ -306,7 +348,7 @@ class OwnedWorkerTLS:
 
     def _drive_handshake_locked(self):
         self._require_live_locked()
-        sample = self.clock.sample()
+        sample = self._sample_clock_locked()
         if (not self._handshake_done
                 and sample.monotonic >= self._started + MAX_HANDSHAKE_SECONDS):
             self._fail_locked()
@@ -331,6 +373,14 @@ class OwnedWorkerTLS:
         if self._closed or self._faulted:
             raise OwnedWorkerTLSError("owned TLS connection is closed or faulted")
 
+    def _sample_clock_locked(self):
+        try:
+            return self.clock.sample()
+        except Exception as error:
+            self._faulted = True
+            self._cleanup_locked()
+            raise OwnedWorkerTLSError("TLS clock is unavailable") from error
+
     def _fail_locked(self):
         self._faulted = True
         self._cleanup_locked()
@@ -342,10 +392,29 @@ class OwnedWorkerTLS:
             self.__context = None
             self.__incoming = None
             self.__outgoing = None
-            path = getattr(self, "_private_directory", None)
-            self._private_directory = None
-            if path:
-                shutil.rmtree(path, ignore_errors=True)
+            self._remove_credentials_locked()
+
+    def _remove_credentials_locked(self):
+        path = self._private_directory
+        if path is None:
+            if self._cleanup_status == "not_created":
+                self._cleanup_status = "removed"
+            return self._cleanup_status == "removed"
+        try:
+            shutil.rmtree(path)
+        except Exception:
+            self._cleanup_status = "uncertain"
+            return False
+        self._private_directory = None
+        self._cleanup_status = "removed"
+        return True
+
+    def _cleanup_failed_locked(self):
+        self._closed = True
+        self.__ssl = None
+        self.__context = None
+        self.__incoming = None
+        self.__outgoing = None
 
     def close(self):
         with self._lock:
