@@ -67,9 +67,12 @@ exact commit-certainty or automatic-retry protocol.
 
 The persisted ledger is validated before use: aggregate and per-role charges
 must fit their configured cumulative caps, role counters must reconcile with
-global counters, and outstanding maxima by role, kind and direction must be
-covered by the already charged totals. This prevents a corrupted reservation
-from authorizing a refund larger than its backing charge.
+global counters, and observed bytes plus the still-unobserved remainder of open
+or uncertain reservations must fit within the charged totals for each role,
+kind and direction. Outstanding uncertain rows must also fit the recorded
+uncertainty counters and observed-byte totals. This prevents prior traffic
+from masking an inflated reservation and authorizing a refund larger than its
+backing charge.
 
 Data exhaustion rejects more data while cleanup tokens and cleanup quota remain
 independently usable. Storage or identity uncertainty rejects all admissions.

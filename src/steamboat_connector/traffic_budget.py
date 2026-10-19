@@ -201,17 +201,32 @@ def _validate_state(state, *, allocation_id, uid, clock_domain):
         identifiers.add(item["reservation_id"])
     outstanding_global = {kind: 0 for kind in _COUNTERS}
     outstanding_roles = {role: {kind: 0 for kind in _COUNTERS} for role in ROLE_NAMES}
+    uncertain_max_global = {kind: 0 for kind in _COUNTERS}
+    uncertain_actual_global = {kind: 0 for kind in _COUNTERS}
+    uncertain_max_roles = {role: {kind: 0 for kind in _COUNTERS} for role in ROLE_NAMES}
+    uncertain_actual_roles = {role: {kind: 0 for kind in _COUNTERS} for role in ROLE_NAMES}
     outstanding_directions = {
         role: {kind: {direction: 0 for direction in ("send", "receive")}
                for kind in _COUNTERS} for role in ROLE_NAMES}
     for item in state["reservations"]:
-        outstanding_global[item["kind"]] += item["max_bytes"]
-        outstanding_roles[item["role"]][item["kind"]] += item["max_bytes"]
-        outstanding_directions[item["role"]][item["kind"]][item["direction"]] += item["max_bytes"]
+        # Observed bytes have already been consumed. Only open maxima and the
+        # unobserved remainder of uncertain I/O still need backing charge.
+        obligation = (item["max_bytes"] if item["status"] == "open"
+                      else item["max_bytes"] - item["actual_bytes"])
+        outstanding_global[item["kind"]] += obligation
+        outstanding_roles[item["role"]][item["kind"]] += obligation
+        outstanding_directions[item["role"]][item["kind"]][item["direction"]] += obligation
+        if item["status"] == "uncertain":
+            uncertain_max_global[item["kind"]] += item["max_bytes"]
+            uncertain_actual_global[item["kind"]] += item["actual_bytes"]
+            uncertain_max_roles[item["role"]][item["kind"]] += item["max_bytes"]
+            uncertain_actual_roles[item["role"]][item["kind"]] += item["actual_bytes"]
     for kind in _COUNTERS:
         if (state["global"]["observed"][kind] > state["global"]["charged"][kind]
                 or state["global"]["uncertain_bytes"][kind]
-                > state["global"]["charged"][kind]):
+                > state["global"]["charged"][kind]
+                or uncertain_max_global[kind] > state["global"]["uncertain_bytes"][kind]
+                or uncertain_actual_global[kind] > state["global"]["observed"][kind]):
             raise TrafficBudgetError("global observed traffic exceeds conservative charges")
         if sum(role["charged"][kind] for role in state["roles"].values()) != state["global"]["charged"][kind]:
             raise TrafficBudgetError("global and role traffic charges disagree")
@@ -221,16 +236,20 @@ def _validate_state(state, *, allocation_id, uid, clock_domain):
             raise TrafficBudgetError("global and role traffic uncertainty disagrees")
         global_total = policy["limits"]["total_network_bytes" if kind == "data"
                                        else "cleanup_total_network_bytes"]
-        if (outstanding_global[kind] > state["global"]["charged"][kind]
+        if (state["global"]["observed"][kind] + outstanding_global[kind]
+                > state["global"]["charged"][kind]
                 or state["global"]["charged"][kind] > global_total):
             raise TrafficBudgetError("global outstanding traffic exceeds its backing charge")
         for role in ROLE_NAMES:
             counters = state["roles"][role]
             role_total = policy["reservations"].get(role, {}).get(
                 "total_network_bytes" if kind == "data" else "cleanup_total_network_bytes", 0)
-            if (outstanding_roles[role][kind] > counters["charged"][kind]
+            if (counters["observed"][kind] + outstanding_roles[role][kind]
+                    > counters["charged"][kind]
                     or counters["charged"][kind] > role_total
-                    or any(value > counters["charged"][kind]
+                    or uncertain_max_roles[role][kind] > counters["uncertain_bytes"][kind]
+                    or uncertain_actual_roles[role][kind] > counters["observed"][kind]
+                    or any(counters["observed"][kind] + value > counters["charged"][kind]
                            for value in outstanding_directions[role][kind].values())):
                 raise TrafficBudgetError("role outstanding traffic exceeds its backing charge")
     return state
@@ -654,6 +673,13 @@ class TrafficBudget:
                     "deadline_ns": item["deadline_ns"]}
 
     def settle(self, allowance, actual_bytes, *, outcome_known):
+        # Hold the owner lock through persistence and cache publication so two
+        # local callers cannot race the same allowance into duplicate commits.
+        with self._owner_guard():
+            return self._settle_locked(allowance, actual_bytes,
+                                       outcome_known=outcome_known)
+
+    def _settle_locked(self, allowance, actual_bytes, *, outcome_known):
         if type(actual_bytes) is not int or type(outcome_known) is not bool:
             raise TrafficBudgetError("allowance settlement is malformed")
         if type(allowance) is not TrafficAllowance:

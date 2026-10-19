@@ -1,7 +1,7 @@
 """Focused tests for the future C2 socket owner's aggregate meter primitive."""
 
-import multiprocessing
 import json
+import multiprocessing
 import os
 import subprocess
 import sys
@@ -211,11 +211,15 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
             path = str(Path(temporary) / "traffic.json")
             budget = self._create_budget(path)
             budget.bind_role("host", BOOT_A)
-            budget.reserve("host", BOOT_A, "send", "data", 20)
+            budget.reserve("host", BOOT_A, "send", "data", 80).settle(
+                80, outcome_known=True)
+            allowance = budget.reserve("host", BOOT_A, "send", "data", 20)
             state = json.loads(Path(path).read_text(encoding="utf-8"))
-            state["reservations"][0]["max_bytes"] = 200
+            state["reservations"][0]["max_bytes"] = 30
             Path(path).write_text(json.dumps(state, sort_keys=True, separators=(",", ":")),
                                   encoding="utf-8")
+            with self.assertRaises(TrafficBudgetError):
+                allowance.assert_live()
             with self.assertRaises(TrafficBudgetError):
                 self._open_budget(path)
 
@@ -507,6 +511,17 @@ class TrafficBudgetTests(unittest.TestCase):
             allowance.settle(5, outcome_known=True)
         with self.assertRaises(TrafficBudgetError):
             allowance.settle(5, outcome_known=True)
+        self.assertTrue(budget._faulted)
+
+    def test_observed_bytes_and_open_maximum_share_backing_charge(self):
+        budget, store, _ = _memory_budget()
+        budget.bind_role("host", BOOT_A)
+        budget.reserve("host", BOOT_A, "send", "data", 80).settle(
+            80, outcome_known=True)
+        allowance = budget.reserve("host", BOOT_A, "send", "data", 20)
+        store.state["reservations"][0]["max_bytes"] = 30
+        with self.assertRaises(TrafficBudgetError):
+            allowance.assert_live()
         self.assertTrue(budget._faulted)
 
     def test_policy_reservations_must_fit_global_network_caps(self):
