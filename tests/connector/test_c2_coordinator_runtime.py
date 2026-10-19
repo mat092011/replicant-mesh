@@ -161,19 +161,19 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
         group_scope = activation["new_host_group_scopes"][0]
         group_scope["model_id"] = source_manifest["fingerprint"]
         from steamboat_security.root_c2_group_scope import sign_c2_host_group_policy
-        group_path = self.root_fixture.protected / "group-policy.json"
+        group_path = self.fx.protected / "group-policy.json"
         group_envelope = json.loads(group_path.read_bytes())
         group_payload = group_envelope["payload"]
         group_payload["scope"] = group_scope
         signed_group = sign_c2_host_group_policy(group_payload, self.operator_private_key)
         group_path.write_bytes(signed_group)
         os.chmod(group_path, 0o600)
-        host_header = json.loads(self.root_fixture.header_path.read_bytes())
+        host_header = json.loads(self.fx.header_path.read_bytes())
         host_header["model_id"] = source_manifest["fingerprint"]
         host_header["group_policy_sha256"] = hashlib.sha256(signed_group).hexdigest()
         host_header_bytes = canonical_json(host_header)
-        self.root_fixture.header_path.write_bytes(host_header_bytes)
-        os.chmod(self.root_fixture.header_path, 0o600)
+        self.fx.header_path.write_bytes(host_header_bytes)
+        os.chmod(self.fx.header_path, 0o600)
         host_launch = next(item for item in activation["new_launch_specs"]
                            if item["role"] == "host")
         host_launch["configuration_sha256"] = hashlib.sha256(host_header_bytes).hexdigest()
