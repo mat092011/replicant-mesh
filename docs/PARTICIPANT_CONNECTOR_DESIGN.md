@@ -23,6 +23,16 @@ intent acknowledgments do not wait on inference. Termination, reaping, and an
 empty owned cgroup must be confirmed within the existing 15-second compute
 grace; uncertain ownership retains all associated reservations and artifacts.
 
+One host role may own up to three fixed component handlers in the same process
+and aggregate cgroup. Each component retains its signed assignment and worker
+boot. Its installer has one catalog high-water mark, one inventory and disk
+budget, and three bounded active host slots. Legacy singleton state requires
+explicit guarded migration. A group lifetime pin must cover all resident
+assignments; opening several independent artifact roots is not the selected
+solution. Component KV, queue, capture and execution limits must either share
+one admission budget or be disjoint allocations whose sums fit the role budget.
+This arrangement permits three stages across the available two physical hosts.
+
 ## Channel credentials
 
 C1 direct participant credential validation is unchanged. C2 adds a separate
@@ -71,6 +81,15 @@ verified-actor admission implementation. It does not feed forwarded certificate
 metadata into the direct-peer API. The concrete core `Authorizer` and runtime
 bridge retain existing payload, grant, replay, session, capture and cleanup
 checks.
+
+The outbound side also needs an explicit delegated transport path. A gateway
+certificate is the actual upstream TLS server identity; the logical host leaf
+comes from current enrollment and the operator-authorized worker-channel map.
+That logical host certificate must never be presented to the existing direct
+outbound API as if it were the TLS peer. A separate gateway entry must verify
+the real gateway connection and selected route, then reuse C1's private scope,
+trusted-context, payload, response and cleanup logic. This preserves the stated
+trusted-gateway boundary without claiming end-to-end host key possession.
 
 Gateway policy and stream-generation liveness must participate in every
 authorization live check, deadline monitor and completion, rather than only
