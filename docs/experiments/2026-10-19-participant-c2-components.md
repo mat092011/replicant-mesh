@@ -754,7 +754,7 @@ combined 770-test inventory and does not establish owner controller startup,
 role launch or READY. The earlier 13-test source-review-pending note is
 historical. No startup/readiness claim follows from these focused probes.
 
-## Current C2 boundary after component 30
+## Historical C2 boundary after component 30
 
 C2 remains private and unaccepted, with every C2.1–C2.6 checkbox open. The
 owner-consent store is privately integrated, but the combined suite does not
@@ -766,3 +766,63 @@ routed numerical and lifecycle acceptance. Deadline-floor focused tests do
 not complete these integrations. C3 remains unchanged; no supported GPU or
 pooled-GPU performance result is established, and no additional hardware
 blocker has been identified.
+
+## Components 31 and 32: integrated component inventory
+
+Component 31 rebuilt the bounded connector and 25 selected security modules
+after the focused owner-consent and deadline work. It passed 797 unique tests
+with zero skips, failures or errors in 49.002 seconds. The frozen source was
+head `845d0bd774cacb3e73edb4022ffeab94d9f4ff43`, with 451 files and digest
+`1a05afa2a29294a0c49b4ff9cabb976dd31397a6b6aa43b673e0dc6e913fc6e2`. The
+pinned Linux/amd64 image was
+`sha256:c5d714dbb64a7ea0662d4a5de69c177296793f69f2fb55935c46585f9a8d9bf8`.
+Its test log is
+`36a3df3d190854a4d4e0e47ff6e7d3818d58b7d253eea35bd878edfd16e6b907`; the
+all-source proof log is
+`6dd7d2c16cbedbf6ab29b3926519e1dc32649111a60a2656aa0db48add2380d1`; and the
+gate record is
+`67ce114e148196f5fb1eae861da58b3ce25c14a9efcd77413a00508a6fb026e4`. The
+run began at 2026-10-19 19:21:40.074Z and ended at 19:22:31.088Z. Component 32,
+not component 31, is the latest integrated inventory.
+
+Component 32 extended the inventory with two selected runtime modules,
+`tests.runtime.test_worker_state` and
+`tests.runtime.test_worker_owner_limits`. It passed 872 unique tests with zero
+skips, failures or errors in 50.490 seconds. The frozen head was
+`3ac18b04c767211b5ad46a60ba2056397a9df2b8`, with 463 files and source digest
+`598e52e9ff773ccca83e32580715a604e886a78ba46ea1f9ee5b36be316f05b3`; the
+pinned image was
+`sha256:d4aeff6682507ad886e2d829785af2cd680a446e263cde64930972591d5ca26a`.
+The all-source proof verified all 463 files with zero mismatches before tests.
+The test run was 2026-10-19 19:57:27.299Z–19:58:19.830Z. Its test log is
+`8c07a0a9690f44e833b1f785c87056384f28677150f877d027aa89e3d85859bb`, source
+proof log `eee79911b6740891806550c6614bd68af48f0d4b31c32d9b4a24abd7827a6981`,
+and gate record
+`371f1a4fd2b162687aa1c62143122d75de75435148fad572494240876dca54bf`. The
+container exited 0, was not OOM-killed, and was removed. The original bounded
+configuration remained 2 CPUs, 6 GiB memory, 256 PIDs, no network, read-only
+root, all capabilities dropped, no-new-privileges, init, 15-second stop,
+256/16 MiB `/tmp` and lab tmpfs, and offline read-only model artifacts. The
+release check recorded 463 files, 89 Markdown files, 386 local links and zero
+errors with the same source digest.
+
+This inventory covers all connector tests, 25 selected security modules and
+the two named runtime modules; it is not the full repository or the full C1
+regression. The newly integrated focused components also have separate native
+evidence: local startup passed 71 tests, actual loopback gateway service 11,
+per-handler bounds 46, fixed-role child configuration 11, and startup profile
+84, all with zero skips. These focused results are included in component 32's
+inventory; they do not demonstrate an actual fixed-role worker/coordinator,
+controller readiness, deployed or WAN gateway, aggregate physical-resource
+enforcement, or a laptop-to-ZimaBlade routed C2 request. The gateway result is
+loopback-only and routes through real TLS, HELLO, and C1 ingress fixtures.
+
+Earlier failed or invalid runs remain part of the record and are not counted as
+successes. Component 31 supersedes the earlier 770-case component 30 inventory;
+the startup, gateway and child-configuration fixture failures remain in their
+focused histories. Component 32 is component-level evidence, not phase
+acceptance. C2.1–C2.6 and the C2 exit gate remain open, C3 is unchanged, and no
+supported GPU or pooled-GPU performance result is established. Cohort SDK and
+host model composition remain separate incomplete work. Shared physical CPU,
+RAM, disk, traffic and session-queue enforcement and CT-11/CT-13 split-host
+numerical/lifecycle acceptance are still required.

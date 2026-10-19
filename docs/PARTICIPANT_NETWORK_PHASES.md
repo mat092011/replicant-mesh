@@ -266,6 +266,17 @@ See the
 for hashes, retained failures and exact scope. Every C2 task and its phase exit
 gate remain open; C3 has not advanced.
 
+**Component update, 2026-10-19:** component 31 passed 797 unique cases with no
+skips, failures or errors; component 32 is the latest integrated bounded suite
+with 872 unique passes and no skips, failures or errors. It covers all
+connector tests, 25 selected security modules and two selected runtime modules,
+not the full repository or C1 regression. The component report records the
+frozen source/image identities, resource limits, focused native evidence and
+retained failures. These results do not establish fixed-role readiness, a
+deployed multi-device route, shared physical resource enforcement or CT-11/CT-13
+acceptance. C2.1–C2.6 and the C2 exit gate remain open; C3–C9 remain at their
+existing statuses.
+
 ## C3 — Validate one GPU execution path
 
 **Outcome:** one explicitly supported GPU/backend/precision combination preserves

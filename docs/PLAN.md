@@ -960,3 +960,15 @@ gateway, shared physical resource accounting, session-queue enforcement, and
 the CT-11/CT-13 laptop-to-ZimaBlade routed numerical/lifecycle gate remain
 unproven. C3 and research P0–P8 statuses are unchanged; the candidate remains
 private and unpublished.
+
+**C2 component update, 2026-10-19:** component 31 passed 797 unique tests
+(zero skips/failures/errors) on 451 frozen source files. Component 32 is the
+latest integrated inventory: 872 unique tests passed (zero skips/failures/errors)
+on 463 frozen files, covering all connector tests, 25 selected security modules
+and two selected runtime modules. Its pinned image/source proof and bounded
+container details, plus separate focused startup/gateway/runtime evidence, are
+recorded in the [component report](experiments/2026-10-19-participant-c2-components.md).
+This is not a full repository or C1 regression. Component passes do not close
+any C2 gate: fixed-role controller/readiness, deployed two-device routing,
+aggregate physical-resource enforcement and CT-11/CT-13 remain outstanding.
+C2.1–C2.6 stay open; C3 and research P0–P8 statuses are unchanged.
