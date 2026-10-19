@@ -1030,6 +1030,86 @@ class ProcessSupervisorTests(unittest.TestCase):
                 attach_release.set()
                 thread.join(1)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires native Linux Popen ownership")
+    def test_native_child_pid_remains_reserved_through_blocked_attachment(self):
+        real_popen, real_killpg = subprocess.Popen, os.killpg
+        entered, release = threading.Event(), threading.Event()
+        holder, outcome, signals = {}, {}, []
+        program = (
+            "import os,signal,time\n"
+            "signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
+            "os.write(1,b'TERM_IGNORED\\n')\n"
+            "while True: time.sleep(10)\n")
+
+        def spawn(command, **kwargs):
+            child = real_popen([sys.executable, "-I", "-S", "-c", program], **kwargs)
+            holder["child"] = child
+            if (not select.select([child.stdout], [], [], 2)[0]
+                    or child.stdout.readline(32) != b"TERM_IGNORED\n"):
+                raise RuntimeError("native child did not install its signal handler")
+            return child
+
+        def attach(group, child):
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("test attachment barrier timed out")
+            # CPython's real poll cannot reap while the placement owner holds
+            # _waitpid_lock. This fixture does not claim kernel cgroup placement.
+            self.assertIsNone(child.poll())
+            self.cgroup.attached = True
+            self.cgroup.set_empty(group)
+
+        def killpg(pid, sig):
+            signals.append(sig)
+            real_killpg(pid, sig)
+
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
+                        side_effect=spawn), mock.patch.object(
+                self.cgroup, "attach_child", side_effect=attach), mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg", side_effect=killpg), \
+                mock.patch("steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.3):
+            thread = threading.Thread(target=lambda: outcome.setdefault(
+                "started", self.backend.start("host", sample_policy())))
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                child = holder["child"]
+                owned = self.backend._owned["host"]
+                self.assertTrue(self.backend.request_stop(["host"])["host"])
+                deadline = time.monotonic() + 1
+                state = None
+                while time.monotonic() < deadline:
+                    state = Path(f"/proc/{child.pid}/stat").read_text().rsplit(") ", 1)[1].split()[0]
+                    if state == "Z":
+                        break
+                    time.sleep(0.005)
+                self.assertIn(signal.SIGKILL, signals)
+                self.assertEqual(state, "Z")
+                self.assertIsNone(child.poll())
+                self.assertIsNone(child.returncode)
+                self.assertFalse(owned.reaped_event.is_set())
+                release.set()
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+                self.assertFalse(outcome["started"])
+                self.assertTrue(self.backend.stop(["host"], 0.3)["host"])
+                self.assertEqual(child.returncode, -signal.SIGKILL)
+                self.assertFalse(Path(f"/proc/{child.pid}").exists())
+            finally:
+                release.set()
+                thread.join(2)
+                child = holder.get("child")
+                if child is not None and child.poll() is None:
+                    try:
+                        real_killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    child.wait(timeout=2)
+                if "host" in self.backend._owned:
+                    self.cgroup.set_empty()
+                    self.backend.stop(["host"], 0.3)
+                self.assertFalse(thread.is_alive())
+
     def test_old_monitor_retirement_rechecks_new_published_generation(self):
         processes = []
         signals = []

@@ -447,6 +447,7 @@ class InheritedGroupPin:
         self.authority = _Authority(entry["assignment_id"], component,
                                     self.assignment_bytes, entry["assignment_sha256"],
                                     self.assignment_deadline, worker_boot_id)
+        self._authorities = {self.authority.assignment_id: self.authority}
 
     def assert_open_descriptors(self):
         with self._lock:
