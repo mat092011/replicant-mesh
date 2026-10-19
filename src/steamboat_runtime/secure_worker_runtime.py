@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+import inspect
 import math
 import threading
 import time
@@ -97,14 +98,22 @@ class _BoundAuthorization:
             self._operation,
             allow_terminal_rpc=(self._operation.terminal_rpc_completed
                                 and not self._operation.authorization_closed))
+        self._bridge._check_runtime_guard()
         try:
-            return self._core.assert_live()
+            result = self._core.assert_live()
         except BaseException as error:
             self._bridge._authorization_liveness_failed(self._operation, error)
+            self._bridge._check_runtime_guard()
             raise
+        self._bridge._check_runtime_guard()
+        return result
 
     def remaining_seconds(self):
-        remaining = self._core.remaining_seconds()
+        self._bridge._check_runtime_guard()
+        try:
+            remaining = self._core.remaining_seconds()
+        finally:
+            self._bridge._check_runtime_guard()
         drain_deadline = self._bridge._session_drain_deadline(self._operation)
         if drain_deadline is None:
             return remaining
@@ -117,7 +126,12 @@ class _BoundAuthorization:
 
     def complete(self, response):
         self.assert_live()
-        result = self._core.complete(response)
+        # If the selected C2 binding expires during the durable C1 completion,
+        # the result is ambiguous to the caller. Fence and withhold delivery.
+        try:
+            result = self._core.complete(response)
+        finally:
+            self._bridge._check_runtime_guard()
         owner = self._operation.owner
         if owner is not None:
             if self._operation.method == "OpenSession" and response.code == "OK":
@@ -244,9 +258,19 @@ class SecureWorkerRuntimeBridge:
     core Authorizer and then must match that exact parsed request object.
     """
 
-    def __init__(self, authorizer, handler, *, sweep_interval_seconds=1.0,
+    def __init__(self, authorizer, handler, *, runtime_guard=None,
+                 sweep_interval_seconds=1.0,
                  max_inflight_operations=MAX_INFLIGHT_OPERATIONS,
                  notice_capacity=None):
+        if (runtime_guard is not None
+                and (not callable(runtime_guard)
+                     or inspect.iscoroutinefunction(runtime_guard)
+                     or inspect.isasyncgenfunction(runtime_guard)
+                     or inspect.iscoroutinefunction(
+                         getattr(runtime_guard, "__call__", None))
+                     or inspect.isasyncgenfunction(
+                         getattr(runtime_guard, "__call__", None)))):
+            raise TypeError("runtime guard must be a synchronous callable or None")
         if (isinstance(sweep_interval_seconds, bool)
                 or not isinstance(sweep_interval_seconds, (int, float))
                 or not math.isfinite(sweep_interval_seconds)
@@ -312,6 +336,10 @@ class SecureWorkerRuntimeBridge:
         self._notice_lock = threading.Lock()
         self._pending_notices = {}
         self._callback_fault = threading.Event()
+        self._runtime_guard = runtime_guard
+        self._runtime_invalidated = threading.Event()
+        self._runtime_invalidation_reason = ""
+        self._runtime_fence_scheduled = False
         self._wake_lock = threading.Lock()
         self._wake_scheduled = False
         self._loop = None
@@ -340,7 +368,87 @@ class SecureWorkerRuntimeBridge:
 
     @property
     def unavailable(self):
-        return self._unavailable or self._callback_fault.is_set()
+        return (self._unavailable or self._callback_fault.is_set()
+                or self._runtime_invalidated.is_set())
+
+    def request_runtime_invalidation(self, reason):
+        """Fence admission immediately and schedule owner-loop cleanup.
+
+        This method is safe for synchronous C2 teardown subscribers. It never
+        waits for bridge, handler, filesystem, or inference locks and retains
+        no caller-supplied diagnostic text.
+        """
+        if type(reason) is not str:
+            raise TypeError("runtime invalidation reason must be text")
+        self._runtime_invalidation_reason = "C2 runtime binding teardown"
+        self._runtime_invalidated.set()
+        return self._schedule_runtime_fence()
+
+    def _on_owner_loop(self):
+        try:
+            return self._loop is not None and asyncio.get_running_loop() is self._loop
+        except RuntimeError:
+            return False
+
+    def _schedule_runtime_fence(self):
+        loop = self._loop
+        if loop is None:
+            return False
+        with self._wake_lock:
+            if self._runtime_fence_scheduled:
+                return True
+            self._runtime_fence_scheduled = True
+        try:
+            loop.call_soon_threadsafe(self._apply_runtime_invalidation)
+            return True
+        except BaseException:
+            with self._wake_lock:
+                self._runtime_fence_scheduled = False
+            self._callback_fault.set()
+            self._unconfirmed_cleanup = True
+            return False
+
+    def _apply_runtime_invalidation(self):
+        if not self._on_owner_loop():
+            self._schedule_runtime_fence()
+            return
+        with self._wake_lock:
+            self._runtime_fence_scheduled = False
+        if self._runtime_invalidated.is_set():
+            self._fence(self._runtime_invalidation_reason
+                        or "C2 runtime binding guard failed")
+
+    def _check_runtime_guard(self):
+        """Run the optional selected-C2 check without holding bridge locks."""
+        if self._runtime_invalidated.is_set():
+            self._apply_runtime_invalidation()
+            raise RuntimeBridgeUnavailable("selected C2 runtime binding is unavailable")
+        guard = self._runtime_guard
+        if guard is None:
+            return
+        if self._loop is not None and not self._on_owner_loop():
+            self._runtime_invalidation_reason = "C2 runtime guard used outside owner loop"
+            self._runtime_invalidated.set()
+            self._schedule_runtime_fence()
+            raise RuntimeBridgeUnavailable(
+                "selected C2 runtime guard requires the owning event loop")
+        try:
+            result = guard()
+            if result is not None:
+                if inspect.isawaitable(result):
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
+                raise RuntimeBindingError("runtime guard must return exactly None")
+        except BaseException:
+            self._runtime_invalidation_reason = "C2 runtime binding guard failed"
+            self._runtime_invalidated.set()
+            self._apply_runtime_invalidation()
+            raise RuntimeBridgeUnavailable(
+                "selected C2 runtime binding is unavailable") from None
+        if self._runtime_invalidated.is_set():
+            self._apply_runtime_invalidation()
+            raise RuntimeBridgeUnavailable("selected C2 runtime binding is unavailable")
 
     def status(self):
         supervision = self._handler.supervision_status()
@@ -380,6 +488,7 @@ class SecureWorkerRuntimeBridge:
                 raise RuntimeBindingError(
                     "reclamation wait authorization is not the current bridge operation")
         self._assert_loop()
+        self._check_runtime_guard()
         owner = operation.owner
         if owner is None or not owner.invalidated:
             return False
@@ -452,6 +561,7 @@ class SecureWorkerRuntimeBridge:
                 raise RuntimeBindingError(
                     "retirement confirmation requires the exact closed authorization")
         self._assert_loop()
+        self._check_runtime_guard()
         self._process_notices()
         self._reconcile()
         if (self._closed or self.unavailable or self._unconfirmed_cleanup
@@ -469,6 +579,7 @@ class SecureWorkerRuntimeBridge:
         if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 300:
             raise ValueError("worker drain timeout must be an exact integer in [1, 300]")
         self._assert_loop()
+        self._check_runtime_guard()
         with self._lock:
             if not self._started or self._closed:
                 raise RuntimeBridgeUnavailable("worker drain requires a live runtime bridge")
@@ -495,6 +606,7 @@ class SecureWorkerRuntimeBridge:
     def owner_lifecycle_status(self):
         """Report owner drain phase separately from runtime fault supervision."""
         self._assert_loop()
+        self._check_runtime_guard()
         if not self._started or self._closed:
             raise RuntimeBridgeUnavailable("owner lifecycle requires a live runtime bridge")
         if self._drain_deadline is None:
@@ -527,6 +639,7 @@ class SecureWorkerRuntimeBridge:
         self._loop = loop
         self._wake = asyncio.Event()
         self._started = True
+        self._check_runtime_guard()
         self._maintenance_task = loop.create_task(self._maintenance())
         self._sweep_once()
         self._process_notices()
@@ -588,10 +701,14 @@ class SecureWorkerRuntimeBridge:
         self._assert_loop()
         if service != WORKER_SERVICE:
             raise RuntimeBindingError("runtime bridge accepts only the worker service")
+        self._check_runtime_guard()
         self._reserve_admission(method)
         core_authorization = None
         registered = False
         try:
+            # Recheck after bounded admission accounting so teardown racing
+            # the reservation cannot enter the C1 authorizer unnoticed.
+            self._check_runtime_guard()
             if ingress is None:
                 core_authorization = self.authorizer_core.authorize(
                     service=service, method=method, payload=payload, metadata=metadata,
@@ -601,6 +718,8 @@ class SecureWorkerRuntimeBridge:
                     service, method, payload, metadata, ingress=ingress,
                     envelope=envelope, request_bytes=request_bytes,
                     frame_sequence=frame_sequence, wire_lane=wire_lane)
+            self._check_runtime_guard()
+            if ingress is not None:
                 if core_authorization.payload is not payload:
                     raise RuntimeBindingError(
                         "gateway authorization changed the captured parsed Request object")
@@ -718,6 +837,7 @@ class SecureWorkerRuntimeBridge:
                 authorization.model_id)
 
     def _begin_dispatch(self, method, request):
+        self._check_runtime_guard()
         with self._lock:
             if self.unavailable or self._closed or not self._started:
                 raise RuntimeBridgeUnavailable("secure worker runtime is unavailable")
@@ -729,6 +849,7 @@ class SecureWorkerRuntimeBridge:
             return operation
 
     def _assert_operation_live(self, operation, *, allow_terminal_rpc=False):
+        self._check_runtime_guard()
         if self.unavailable or self._closed:
             raise RuntimeBridgeUnavailable("secure worker runtime is fenced")
         if operation.authorization_closed:
@@ -877,6 +998,12 @@ class SecureWorkerRuntimeBridge:
     async def _maintenance(self):
         next_sweep = self._loop.time() + self.sweep_interval_seconds
         while not self._closed:
+            try:
+                self._check_runtime_guard()
+            except RuntimeBridgeUnavailable:
+                # The event is sticky; continue processing C1 retirement and
+                # cleanup notices on the owning loop after the runtime fences.
+                pass
             self._wake.clear()
             with self._wake_lock:
                 self._wake_scheduled = False
@@ -919,6 +1046,7 @@ class SecureWorkerRuntimeBridge:
 
     def _sweep_once(self):
         try:
+            self._check_runtime_guard()
             sample = self.authorizer_core.clock.sample()
             self._expire_drain(sample)
             self.authorizer_core.snapshot_store.current(sample=sample)
