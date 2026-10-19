@@ -121,6 +121,7 @@ class ChannelFragmentWriter:
         self._rollover_required = False
         self._retired = False
         self._in_flight = None
+        self._in_flight_final_lane = None
         self._lock = Lock()
 
     @property
@@ -255,12 +256,9 @@ class ChannelFragmentWriter:
             message.index += 1
             self._in_flight = frame
             if final:
-                if lane == "control":
-                    self._control_bytes -= len(message.payload)
-                    self._active_control = None
-                else:
-                    self._data_bytes -= len(message.payload)
-                    self._active_data = None
+                # Keep the logical message counted until the committed final
+                # frame is acknowledged by the transport owner.
+                self._in_flight_final_lane = lane
             return frame
 
     def frame_sent(self, frame):
@@ -269,6 +267,13 @@ class ChannelFragmentWriter:
             if self._in_flight is None or frame is not self._in_flight:
                 self._retire_locked()
                 raise ChannelWriterError("sent-frame acknowledgment does not match committed output")
+            if self._in_flight_final_lane == "control":
+                self._control_bytes -= len(self._active_control.payload)
+                self._active_control = None
+            elif self._in_flight_final_lane == "data":
+                self._data_bytes -= len(self._active_data.payload)
+                self._active_data = None
+            self._in_flight_final_lane = None
             self._in_flight = None
 
     def retire(self):
@@ -286,3 +291,4 @@ class ChannelFragmentWriter:
         self._control_bytes = 0
         self._message_ids.clear()
         self._in_flight = None
+        self._in_flight_final_lane = None

@@ -136,6 +136,46 @@ class ChannelFragmentWriterTests(unittest.TestCase):
         writer.frame_sent(frame)
         self.assertEqual(writer.accounting.pending_control_messages, 8)
 
+    def test_final_control_frame_remains_counted_until_transport_ack(self):
+        cancel = wire.encode_bundle(
+            "CancelSession", wire.REQUEST, fragment_kind=wire.CONTROL,
+            binding=b"b", protobuf=b"c")
+        writer = _writer(data_bytes=100, control_bytes=8 * len(cancel))
+        for index in range(8):
+            self.assertTrue(writer.enqueue(
+                kind=wire.CONTROL, message_id=(index + 1).to_bytes(16, "big"),
+                payload=cancel))
+        frame = writer.next_frame()
+        self.assertEqual(writer.accounting.pending_control_messages, 8)
+        self.assertEqual(writer.pending_bytes, 8 * len(cancel))
+        self.assertFalse(writer.enqueue(kind=wire.CONTROL, message_id=b"x" * 16,
+                                        payload=cancel))
+        writer.frame_sent(frame)
+        self.assertEqual(writer.accounting.pending_control_messages, 7)
+        self.assertEqual(writer.pending_bytes, 7 * len(cancel))
+        self.assertTrue(writer.enqueue(kind=wire.CONTROL, message_id=b"x" * 16,
+                                       payload=cancel))
+
+    def test_final_data_frame_remains_active_until_transport_ack(self):
+        small = _response("Step", b"x")
+        writer = _writer(data_bytes=9 * len(small))
+        self.assertTrue(writer.enqueue(kind=wire.RESPONSE,
+                                       message_id=b"a" * 16, payload=small))
+        frame = writer.next_frame()
+        for index in range(8):
+            self.assertTrue(writer.enqueue(
+                kind=wire.RESPONSE, message_id=(index + 1).to_bytes(16, "big"),
+                payload=small))
+        self.assertEqual(writer.accounting.pending_data_messages, 9)
+        self.assertEqual(writer.pending_bytes, 9 * len(small))
+        self.assertFalse(writer.enqueue(kind=wire.RESPONSE,
+                                        message_id=b"z" * 16, payload=small))
+        writer.frame_sent(frame)
+        self.assertEqual(writer.accounting.pending_data_messages, 8)
+        self.assertEqual(writer.pending_bytes, 8 * len(small))
+        self.assertFalse(writer.enqueue(kind=wire.RESPONSE,
+                                        message_id=b"z" * 16, payload=small))
+
     def test_generation_indices_sequence_and_fragment_ceiling_are_exact(self):
         payload = _response("Step", b"p" * 10)
         writer = _writer(data_bytes=100, fragment_payload_bytes=4)

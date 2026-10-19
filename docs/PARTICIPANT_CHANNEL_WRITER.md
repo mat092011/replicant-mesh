@@ -30,7 +30,9 @@ same object to `frame_sent()` before asking for another. If the send outcome is
 uncertain, call `retire()` and discard the whole stream. Control fragments are
 selected before the next data fragment, and an active control message always
 finishes before another data fragment is emitted. Each lane has at most one
-partial logical message. Message IDs are retained for the connection lifetime;
+partial logical message. A message's count and payload-byte charge remain
+reserved through acknowledgment of its final committed frame. Message IDs are
+retained for the connection lifetime;
 after 1,024 unique accepted IDs, `rollover_required` is set and further
 admission is rejected so the exact history remains bounded. Sequence exhaustion
 likewise requires a new connection generation.
