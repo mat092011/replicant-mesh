@@ -150,6 +150,9 @@ def encode_bundle(method, classification, *, fragment_kind, envelope=b"", bindin
         raise ChannelWireError("protobuf body is required")
     if classification == BUNDLE_RESPONSE and (envelope or binding):
         raise ChannelWireError("responses cannot carry a delegation or request binding")
+    if (classification == BUNDLE_RESPONSE and method_code in CONTROL_METHODS
+            and fragment_kind != CONTROL_RESPONSE):
+        raise ChannelWireError("cleanup replies require the control response lane")
     if classification == REQUEST and not binding:
         raise ChannelWireError("requests require a canonical binding")
     if classification == REQUEST and method_code in CONTROL_METHODS and len(protobuf) > MAX_CONTROL_PROTOBUF_BYTES:
@@ -187,6 +190,9 @@ def decode_bundle(payload, *, fragment_kind):
         raise ChannelWireError("bundle lengths are invalid")
     if classification == BUNDLE_RESPONSE and (envelope_len or binding_len):
         raise ChannelWireError("response bundle has request-only fields")
+    if (classification == BUNDLE_RESPONSE and method_code in CONTROL_METHODS
+            and fragment_kind != CONTROL_RESPONSE):
+        raise ChannelWireError("cleanup replies require the control response lane")
     if classification == REQUEST and binding_len == 0:
         raise ChannelWireError("request bundle lacks a binding")
     if fragment_kind == CONTROL and (method_code not in CONTROL_METHODS

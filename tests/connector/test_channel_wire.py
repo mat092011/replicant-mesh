@@ -366,6 +366,19 @@ class ChannelWireTests(unittest.TestCase):
             list(decoder.feed(_frame(wire.DATA, wire.START | wire.END, 2,
                                      b"n" * 16, 0, b"b")))
 
+    def test_cleanup_response_cannot_use_the_ordinary_data_lane(self):
+        for method in ("CancelSession", "CloseSession", "SessionStatus"):
+            for size in (1, wire.MAX_CONTROL_PROTOBUF_BYTES + 1):
+                with self.subTest(method=method, size=size):
+                    with self.assertRaises(wire.ChannelWireError):
+                        wire.encode_bundle(method, wire.BUNDLE_RESPONSE,
+                            fragment_kind=wire.RESPONSE, protobuf=b"x" * size)
+                    raw = struct.pack(wire.BUNDLE_FORMAT, wire.BUNDLE_MAGIC,
+                        wire.METHOD_CODES[method], wire.BUNDLE_RESPONSE, 0, 0, 0, size)
+                    with self.assertRaises(wire.ChannelWireError):
+                        wire.decode_bundle(raw + b"x" * size,
+                                           fragment_kind=wire.RESPONSE)
+
     def test_pending_lanes_reject_count_and_byte_pressure_and_prioritize_control(self):
         lanes = wire.PendingMessageLanes(byte_capacity=6, data_capacity=1, control_capacity=1)
         data = wire.DecodedMessage(wire.DATA, GENERATION, DATA_ID, 1, 1, b"1234")
