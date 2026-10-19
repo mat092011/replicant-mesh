@@ -112,6 +112,56 @@ class C2CoordinatorChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(owner._startup_tasks), 1)
         self.assertEqual(owner._attempts, [])
 
+    async def test_guard_consuming_startup_budget_prevents_dns_task_creation(self):
+        loop = asyncio.get_running_loop()
+
+        class DelayedLoop:
+            now = loop.time()
+
+            def time(self):
+                return self.now
+
+        fake_loop = DelayedLoop()
+        owner = self._partial_owner()
+        owner._loop = fake_loop
+
+        def slow_guard():
+            fake_loop.now += 2
+            return None
+
+        owner._runtime_guard = slow_guard
+        with mock.patch("steamboat_connector.c2_coordinator_channel.socket.socket") as make_socket:
+            with self.assertRaisesRegex(C2CoordinatorChannelError, "deadline"):
+                await _open_selected_socket(
+                    owner, fake_loop, "gateway.example", 443, fake_loop.time() + 1)
+            make_socket.assert_not_called()
+        self.assertEqual(owner._startup_tasks, [])
+
+    async def test_policy_refresh_precedes_final_binding_authority_check(self):
+        owner = self._partial_owner()
+        order = []
+        changed = False
+
+        class PolicyOwner:
+            def current(self):
+                nonlocal changed
+                order.append("policy")
+                changed = True
+                return object()
+
+        class Binding:
+            def assert_live(self):
+                order.append("binding")
+                if changed:
+                    raise C2CoordinatorChannelError("binding expired during policy refresh")
+                return None
+
+        owner._policy_owner = PolicyOwner()
+        owner._binding = Binding()
+        with self.assertRaisesRegex(C2CoordinatorChannelError, "expired"):
+            owner._guard_runtime()
+        self.assertEqual(order, ["policy", "binding"])
+
     async def test_pending_connect_retains_one_socket_and_blocks_cleanup(self):
         release_connect = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -217,6 +267,7 @@ class C2CoordinatorChannelLifecycleTests(unittest.IsolatedAsyncioTestCase):
         retained = object()
         error.retained_owner = retained
         _retain_egress_constructor_failure(owner, error)
+        self.assertIs(owner._startup_cleanup_error, error)
         owner._state = "faulted"
         with self.assertRaises(C2CoordinatorChannelError) as raised:
             await owner.close(grace_seconds=0.2)

@@ -91,6 +91,11 @@ def _check_startup_deadline(loop, deadline, operation):
             f"shared coordinator startup deadline elapsed during {operation}")
 
 
+def _guard_before(owner, loop, deadline, operation):
+    _check_runtime_guard(owner)
+    _check_startup_deadline(loop, deadline, operation)
+
+
 def _retain_egress_constructor_failure(owner, error):
     """Preserve the real core error when TLS ownership never transfers."""
     if error.cleanup_status == "uncertain" or error.credential_directory is not None:
@@ -103,6 +108,7 @@ def _retain_egress_constructor_failure(owner, error):
 
 
 async def _await_startup_task(owner, task, deadline, operation):
+    _check_runtime_guard(owner)
     _check_startup_deadline(owner._loop, deadline, operation)
     remaining = deadline - owner._loop.time()
     _done, pending = await asyncio.wait((task,), timeout=remaining)
@@ -110,12 +116,13 @@ async def _await_startup_task(owner, task, deadline, operation):
         raise C2CoordinatorChannelError(f"{operation} remains in flight; retain owner")
     _check_startup_deadline(owner._loop, deadline, operation)
     _check_runtime_guard(owner)
+    _check_startup_deadline(owner._loop, deadline, operation)
     return task.result()
 
 
 async def _open_selected_socket(owner, loop, endpoint_host, endpoint_port, deadline):
     """Resolve and attempt exactly one TCP address under the shared deadline."""
-    _check_runtime_guard(owner)
+    _guard_before(owner, loop, deadline, "selected gateway DNS")
     dns_task = asyncio.create_task(loop.getaddrinfo(
         endpoint_host, endpoint_port, type=socket.SOCK_STREAM,
         proto=socket.IPPROTO_TCP))
@@ -123,7 +130,7 @@ async def _open_selected_socket(owner, loop, endpoint_host, endpoint_port, deadl
     infos = await _await_startup_task(owner, dns_task, deadline, "selected gateway DNS")
     if not infos:
         raise C2CoordinatorChannelError("selected signed gateway endpoint did not resolve")
-    _check_runtime_guard(owner)
+    _guard_before(owner, loop, deadline, "TCP socket creation")
     family, socktype, proto, _canonname, address = infos[0]
     sock = socket.socket(family, socktype, proto)
     attempt = {"socket": sock, "close_status": "open", "driver": None,
@@ -135,6 +142,7 @@ async def _open_selected_socket(owner, loop, endpoint_host, endpoint_port, deadl
     sock.setblocking(False)
     _check_runtime_guard(owner)
     _check_startup_deadline(loop, deadline, "TCP socket setup")
+    _guard_before(owner, loop, deadline, "selected gateway TCP connect")
     connect_task = asyncio.create_task(loop.sock_connect(sock, address))
     owner._startup_tasks.append(connect_task)
     await _await_startup_task(owner, connect_task, deadline, "selected gateway TCP connect")
@@ -215,12 +223,12 @@ class C2CoordinatorChannel:
         """Synchronous owner guard; success is exactly None."""
         if self._invalidated.is_set() or self._state not in {"starting", "open"}:
             raise C2CoordinatorChannelError("C2 coordinator channel runtime is fenced")
-        result = self._binding.assert_live()
-        if result is not None:
-            raise C2CoordinatorChannelError("selected C2 binding guard returned a non-None value")
         policy = self._policy_owner.current()
         if policy is None:
             raise C2CoordinatorChannelError("durable channel policy is unavailable")
+        result = self._binding.assert_live()
+        if result is not None:
+            raise C2CoordinatorChannelError("selected C2 binding guard returned a non-None value")
         if self._invalidated.is_set() or self._state not in {"starting", "open"}:
             raise C2CoordinatorChannelError("C2 coordinator channel was fenced during guard")
         return None
@@ -352,7 +360,7 @@ class C2CoordinatorChannel:
                     raise C2CoordinatorChannelError("owned cleanup task was cancelled")
                 cleanup_error = self._cleanup_task.exception()
                 if cleanup_error is not None:
-                    raise C2CoordinatorChannelError("owned channel cleanup failed") from cleanup_error
+                    raise cleanup_error
                 self._complete_close()
                 return True
             except BaseException as error:
@@ -464,13 +472,14 @@ async def build_c2_coordinator_channel(child_binding: C2ChildBinding, *,
                            uid=binding._root_store._uid, maximum=64 * 1024,
                            label="gateway CA")
         endpoint_host, endpoint_port = gateway["coordinator_endpoint_host"], gateway["coordinator_endpoint_port"]
-        _check_runtime_guard(owner)
+        coordinator_private_key_pem = binding.tls_materials.private_key_pem
+        _guard_before(owner, loop, startup_deadline, "gateway TLS owner construction")
         try:
             egress = GatewayCoordinatorEgress.connect(
                 authorizer=authorizer, policy_store=policy_owner.core_store,
                 logical_host_certificate_pem=first_cert,
                 gateway_id=settings.gateway.gateway_id, gateway_ca_pem=ca_pem,
-                coordinator_private_key_pem=binding.tls_materials.private_key_pem)
+                coordinator_private_key_pem=coordinator_private_key_pem)
         except GatewayEgressError as constructor_error:
             _retain_egress_constructor_failure(owner, constructor_error)
             raise
@@ -478,12 +487,13 @@ async def build_c2_coordinator_channel(child_binding: C2ChildBinding, *,
         _check_startup_deadline(loop, startup_deadline, "TLS owner construction")
         owner.socket = await _open_selected_socket(
             owner, loop, endpoint_host, endpoint_port, startup_deadline)
+        _guard_before(owner, loop, startup_deadline, "socket driver construction")
         owner.driver = ChannelSocket(owner.socket, egress, traffic,
                                      role="coordinator", boot_id=boot_id)
         owner._attempts[-1]["driver"] = owner.driver
         _check_startup_deadline(loop, startup_deadline, "socket driver construction")
         while True:
-            _check_runtime_guard(owner)
+            _guard_before(owner, loop, startup_deadline, "gateway TLS pump")
             owner.driver.pump()
             complete = egress.handshake_complete
             drained = (owner.driver.pending_ciphertext_bytes == 0
@@ -495,8 +505,10 @@ async def build_c2_coordinator_channel(child_binding: C2ChildBinding, *,
                 break
             await asyncio.sleep(PUMP_SLEEP_SECONDS)
             _check_runtime_guard(owner)
+        _guard_before(owner, loop, startup_deadline, "coordinator HELLO construction")
         owner.hello = CoordinatorHelloClient(egress, reassembly_capacity=wire.MAX_BUNDLE_BYTES)
         _check_startup_deadline(loop, startup_deadline, "coordinator HELLO construction")
+        _guard_before(owner, loop, startup_deadline, "coordinator stream construction")
         owner.stream = ChannelStream(
             owner.driver, owner.hello,
             writer_reservation_bytes=(writer_reservation_overhead_bytes()
@@ -504,7 +516,7 @@ async def build_c2_coordinator_channel(child_binding: C2ChildBinding, *,
             decoded_byte_capacity=wire.MAX_BUNDLE_BYTES,
             tls_owner_reservation_bytes=TLS_OWNER_MIN_RESERVATION_BYTES)
         while not owner.stream.transport_bootstrap_complete:
-            _check_runtime_guard(owner)
+            _guard_before(owner, loop, startup_deadline, "coordinator HELLO pump")
             owner.stream.pump()
             _check_startup_deadline(loop, startup_deadline, "coordinator HELLO")
             await asyncio.sleep(PUMP_SLEEP_SECONDS)
@@ -513,6 +525,7 @@ async def build_c2_coordinator_channel(child_binding: C2ChildBinding, *,
         if (owner.driver.pending_ciphertext_bytes or owner.driver.pending_plaintext_bytes
                 or egress.pending_encrypted_bytes):
             raise C2CoordinatorChannelError("coordinator HELLO output was not fully drained")
+        _guard_before(owner, loop, startup_deadline, "channel client construction")
         owner.client = CoordinatorChannelClient(
             egress=egress, stream=owner.stream,
             authorization_watcher=AuthorizationWatcher(),
@@ -523,7 +536,9 @@ async def build_c2_coordinator_channel(child_binding: C2ChildBinding, *,
         if not callable(getattr(owner.client, "request_runtime_invalidation", None)):
             raise C2CoordinatorChannelError("client runtime invalidation capability is absent")
         _check_runtime_guard(owner)
+        _guard_before(owner, loop, startup_deadline, "primary target registration")
         primary_view = egress.register_target(authorizer, first_cert)
+        _guard_before(owner, loop, startup_deadline, "primary target binding")
         proxies = [owner.client.bind_target(primary_view)]
         _check_startup_deadline(loop, startup_deadline, "primary target binding")
         for worker, cert_pem, target in target_rows[1:]:
@@ -533,7 +548,9 @@ async def build_c2_coordinator_channel(child_binding: C2ChildBinding, *,
                 target=target, worker_request_type=Request,
                 trusted_request_context_type=TrustedRequestContext,
                 allow_bootstrap_describe=True)
+            _guard_before(owner, loop, startup_deadline, "cohort target registration")
             view = egress.register_target(target_authorizer, cert_pem)
+            _guard_before(owner, loop, startup_deadline, "cohort target binding")
             proxies.append(owner.client.bind_target(view))
             _check_startup_deadline(loop, startup_deadline, "cohort target binding")
         owner.targets = tuple(proxies)
