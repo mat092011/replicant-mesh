@@ -7,7 +7,6 @@ import os
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -382,12 +381,44 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         self.addCleanup(store.close)
         calls = []
         binding.subscribe_teardown(calls.append)
-        started = threading.Event()
+        protected_done = threading.Event()
+        continue_after_protected = threading.Event()
+        final_lock_attempt = threading.Event()
         finished = threading.Event()
         failures = []
+        underlying_lock = binding._lock
+
+        class ObservedLock:
+            def __init__(self):
+                self.local = threading.local()
+
+            def __enter__(self):
+                count = getattr(self.local, "count", 0) + 1
+                self.local.count = count
+                if count == 2:
+                    final_lock_attempt.set()
+                underlying_lock.acquire()
+                return self
+
+            def __exit__(self, _type, _value, _traceback):
+                underlying_lock.release()
+
+        binding._lock = ObservedLock()
+        original_protected_check = binding._check_protected_files
+        protected_checks = 0
+
+        def pause_after_second_protected_check():
+            nonlocal protected_checks
+            original_protected_check()
+            protected_checks += 1
+            if protected_checks == 2:
+                protected_done.set()
+                if not continue_after_protected.wait(5):
+                    raise RuntimeError("test timed out at final protected-read barrier")
+
+        binding._check_protected_files = pause_after_second_protected_check
 
         def check_live():
-            started.set()
             try:
                 binding.assert_live()
             except BaseException as exc:
@@ -395,15 +426,20 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
             finally:
                 finished.set()
 
-        with binding._lock:
-            worker = threading.Thread(target=check_live)
-            worker.start()
-            self.assertTrue(started.wait(2))
-            time.sleep(0.02)
+        worker = threading.Thread(target=check_live)
+        worker.start()
+        self.assertTrue(protected_done.wait(5))
+        underlying_lock.acquire()
+        try:
+            continue_after_protected.set()
+            self.assertTrue(final_lock_attempt.wait(5))
             self.wall += 61
             self.mono += 61
+        finally:
+            continue_after_protected.set()
+            underlying_lock.release()
         self.assertTrue(finished.wait(5))
-        worker.join(timeout=1)
+        worker.join(timeout=2)
         self.assertEqual(len(failures), 1)
         self.assertIsInstance(failures[0], CredentialError)
         self.assertIn("policy expired", str(failures[0]))
