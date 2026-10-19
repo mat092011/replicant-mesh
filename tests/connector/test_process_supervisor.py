@@ -78,6 +78,10 @@ class FakeCgroup:
         if self.fail_attach:
             raise OSError("attach refused")
         self.attached = True
+        if process.poll() is not None:
+            self.set_empty(group)
+            (Path(group) / "cgroup.procs").write_text("", encoding="ascii")
+            return
         (Path(group) / "cgroup.events").write_text("populated 1\n", encoding="ascii")
         (Path(group) / "cgroup.procs").write_text(str(process.pid), encoding="ascii")
 
@@ -101,7 +105,7 @@ class FakeCgroup:
 class FakeProcess:
     pid = 43121
 
-    def __init__(self, args, kwargs, cgroup):
+    def __init__(self, args, kwargs, cgroup, *, ignore_term=False):
         self.args = args
         self.pid = 43121 + (1 if args[4] == "coordinator" else 0)
         self.kwargs = kwargs
@@ -109,6 +113,7 @@ class FakeProcess:
         self.group = cgroup.group
         self.returncode = None
         self.stdout = object()
+        self.ignore_term = ignore_term
 
     def poll(self):
         return self.returncode
@@ -120,6 +125,8 @@ class FakeProcess:
         return self.returncode
 
     def on_signal(self, sig, *, kill_descendants=True):
+        if sig == signal.SIGTERM and self.ignore_term:
+            return
         if sig in (signal.SIGTERM, 9):
             self.returncode = 0
         if sig == 9:
@@ -169,12 +176,13 @@ class ProcessSupervisorTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def _spawn_patch(self, *, fail_attach=False, kill_descendants=True):
+    def _spawn_patch(self, *, fail_attach=False, kill_descendants=True,
+                     ignore_term=False):
         self.cgroup.fail_attach = fail_attach
         holder = {}
 
         def spawn(*args, **kwargs):
-            process = FakeProcess(args[0], kwargs, self.cgroup)
+            process = FakeProcess(args[0], kwargs, self.cgroup, ignore_term=ignore_term)
             holder["process"] = process
             return process
 
@@ -230,7 +238,7 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertEqual(self.backend.status(), {})
 
     def test_overlapping_stop_does_not_extend_first_absolute_deadline(self):
-        holder, popen, _ = self._spawn_patch(kill_descendants=False)
+        holder, popen, _ = self._spawn_patch(kill_descendants=False, ignore_term=True)
         with popen:
             self.assertTrue(self.backend.start("host", sample_policy()))
         with mock.patch("steamboat_connector.process_supervisor.os.killpg",
@@ -246,12 +254,13 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertIn("host", self.backend.status())
 
     def test_request_stop_deadline_survives_delayed_final_stop(self):
-        holder, popen, _ = self._spawn_patch(kill_descendants=False)
+        holder, popen, _ = self._spawn_patch(kill_descendants=False, ignore_term=True)
         signals = []
 
         def killpg(pid, sig):
             signals.append(sig)
-            holder["process"].on_signal(sig)
+            if sig == 9:
+                holder["process"].on_signal(sig)
 
         with popen, mock.patch(
                 "steamboat_connector.process_supervisor.os.killpg",
@@ -272,12 +281,13 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 0.15)
 
     def test_request_stop_tightens_watchdog_deadline_without_extension(self):
-        holder, popen, _ = self._spawn_patch(kill_descendants=False)
+        holder, popen, _ = self._spawn_patch(kill_descendants=False, ignore_term=True)
         signals = []
 
         def killpg(pid, sig):
             signals.append(sig)
-            holder["process"].on_signal(sig)
+            if sig == 9:
+                holder["process"].on_signal(sig)
 
         with popen, mock.patch(
                 "steamboat_connector.process_supervisor.os.killpg",
@@ -298,6 +308,46 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertIn(9, signals)
             self.assertTrue(self.backend._events_populated(owned.group))
             self.assertTrue(self.backend.stop(["host"], 0.4)["host"])
+
+    def test_request_stop_ack_does_not_wait_for_owned_or_global_locks(self):
+        holder, popen, killpg = self._spawn_patch(ignore_term=True)
+        with popen, killpg:
+            self.assertTrue(self.backend.start("host", sample_policy()))
+        owned = self.backend._owned["host"]
+        watchdog = self.backend._stop_watchdogs["host"]
+        signal_event = threading.Event()
+
+        class ObservedEvent:
+            def set(self):
+                signal_event.set()
+                watchdog_event.set()
+
+            def wait(self, timeout=None):
+                return watchdog_event.wait(timeout)
+
+            def clear(self):
+                watchdog_event.clear()
+
+        watchdog_event = watchdog.wake
+        watchdog.wake = ObservedEvent()
+        locks = (self.backend._lock, self.backend._watchdog_lock,
+                 owned.escalation_lock)
+        for lock in locks:
+            lock.acquire()
+        try:
+            started = time.monotonic()
+            self.assertTrue(self.backend.request_stop(["host"])["host"])
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 0.5)
+            self.assertTrue(signal_event.is_set())
+            self.assertTrue(owned.stopping)
+        finally:
+            for lock in reversed(locks):
+                lock.release()
+        with mock.patch("steamboat_connector.process_supervisor.os.killpg",
+                        side_effect=lambda pid, sig: holder["process"].on_signal(sig),
+                        create=True):
+            self.assertTrue(self.backend.stop(["host"], 0.5)["host"])
 
     def test_drain_cutoff_is_not_process_cleanup_deadline(self):
         holder, popen, _ = self._spawn_patch()
@@ -400,7 +450,7 @@ class ProcessSupervisorTests(unittest.TestCase):
         holder = {}
 
         def spawn(*args, **kwargs):
-            process = FakeProcess(args[0], kwargs, self.cgroup)
+            process = FakeProcess(args[0], kwargs, self.cgroup, ignore_term=True)
             holder[args[0][4]] = process
             return process
 
@@ -450,7 +500,8 @@ class ProcessSupervisorTests(unittest.TestCase):
         def killpg(pid, sig):
             process = next(item for item in holder.values() if item.pid == pid)
             signals.append((process.args[0][4], sig))
-            process.on_signal(sig)
+            if sig == 9:
+                process.on_signal(sig)
 
         with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
                         side_effect=spawn), mock.patch(
@@ -462,6 +513,9 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertEqual(self.backend.request_stop(["host", "coordinator"]),
                              {"host": True, "coordinator": True})
             self.assertEqual(len(self.backend._stop_watchdogs), 2)
+            deadline = time.monotonic() + 0.2
+            while len(signals) < 2 and time.monotonic() < deadline:
+                time.sleep(0.005)
             self.assertEqual([sig for _, sig in signals], [signal.SIGTERM, signal.SIGTERM])
             deadline = time.monotonic() + 0.3
             while (sum(sig == 9 for _, sig in signals) < 2
