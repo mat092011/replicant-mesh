@@ -300,6 +300,21 @@ class GatewayEgressTests(unittest.TestCase):
         with self.assertRaises(GatewayEgressError):
             auth.assert_live()
 
+    def test_expired_request_guard_does_not_fault_an_independent_live_route(self):
+        now = self.clock.sample().monotonic
+        with mock.patch.object(self.adapter, "_assert_context_for_auth",
+                               side_effect=(now + 1, now + 100)):
+            short = self.egress.mint_route_guard(
+                method="OpenSession", trusted_request_context=self.context)
+            long = self.egress.mint_route_guard(
+                method="OpenSession", trusted_request_context=self.context)
+        self.time_source.advance(2)
+        with self.assertRaises(SessionError):
+            short.assert_live()
+        self.assertTrue(long.assert_live())
+        self.egress.assert_transport_live()
+        self.assertFalse(self.egress._faulted)
+
     def test_wrong_logical_host_and_policy_worker_pin_are_rejected(self):
         wrong_host_egress = GatewayCoordinatorEgress.connect(
             authorizer=self.adapter, policy_store=self.policy_store,

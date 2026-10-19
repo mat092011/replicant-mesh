@@ -391,18 +391,19 @@ class GatewayCoordinatorEgress:
     def _assert_guard_live(self, identity, deadline):
         with self._lock:
             self._assert_transport_live_locked()
+            if identity[0] is not self._generation or identity[1] != self._view.policy_digest:
+                self._fault_locked()
+                raise GatewayEgressError("gateway route belongs to a stale generation")
             try:
                 sample = self.clock.sample()
-                if sample.monotonic >= min(deadline, self._view.deadline_monotonic):
-                    raise SessionError("gateway route authorization expired")
-                if identity[0] is not self._generation or identity[1] != self._view.policy_digest:
-                    raise GatewayEgressError("gateway route belongs to a stale generation")
-                return min(deadline, self._view.deadline_monotonic)
             except Exception as error:
                 self._fault_locked()
-                if isinstance(error, (GatewayEgressError, SessionError)):
-                    raise
                 raise GatewayEgressError("gateway route clock is unavailable") from error
+            if sample.monotonic >= deadline:
+                # This exact request capability expired. The shared TLS and
+                # signed policy generation remain usable for other routes.
+                raise SessionError("gateway route authorization expired")
+            return min(deadline, self._view.deadline_monotonic)
 
     def mint_route_guard(self, *, method, trusted_request_context):
         """Authorize the exact coordinator/worker route for one C1 worker call."""
