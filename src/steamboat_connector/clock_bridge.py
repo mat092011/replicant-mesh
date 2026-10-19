@@ -749,4 +749,4 @@ class ChildClockBridge:
         else:
             with self._state_lock:
                 self._stop_state = "closed"
-        return error is None
+        return error is None and not prior_uncertainty
