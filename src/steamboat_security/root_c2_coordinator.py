@@ -218,6 +218,9 @@ class C2CoordinatorRuntimeBinding:
                 if self._invalid:
                     raise CredentialError(self._reason or "binding invalidated during guard")
                 sample = self._clock.sample()
+                # Retain every authenticated selected observation, while
+                # allowing a distinct later signed expiry to renew policy.
+                self._deadline_floors.retain(view, sample)
                 retained_view = self._deadline_floors.retain(final_view, sample)
                 if (sample.latest_wall >= retained_view.expires_at
                         or sample.monotonic >= retained_view.deadline_monotonic):

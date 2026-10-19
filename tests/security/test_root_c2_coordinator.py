@@ -292,6 +292,40 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
         self.assertEqual(binding._snapshot_store.current().revision, payload_b["revision"])
         binding.assert_live()
 
+    def test_first_selected_view_uncertainty_deadline_is_retained(self):
+        self.fx.wall += 30
+        self.fx.mono += 30
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        payload = json.loads(self.fx.active)["payload"]
+        payload["revision"] += 1
+        payload["expires_at"] = int(self.fx.wall) + 40
+        short_head = sign_snapshot(payload, self.fx.fx.new_snapshot_key)
+        binding.install_policy(short_head)
+        events = []
+        binding.subscribe_teardown(events.append)
+        original = binding._selected_policy
+        selected_reads = 0
+        uncertainty = [0.0]
+        self.fx.clock._uncertainty = lambda: uncertainty[0]
+        def uncertain_first(*args, **kwargs):
+            nonlocal selected_reads
+            selected_reads += 1
+            if selected_reads == 1:
+                uncertainty[0] = 20.0
+            try:
+                return original(*args, **kwargs)
+            finally:
+                uncertainty[0] = 0.0
+        with patch.object(binding, "_selected_policy", side_effect=uncertain_first):
+            binding.assert_live()
+        self.assertEqual(selected_reads, 2)
+        self.fx.wall += 1
+        self.fx.mono += 21
+        with self.assertRaisesRegex(SnapshotError, "expired"):
+            binding.assert_live()
+        self.assertEqual(len(events), 1)
+
     def test_expiry_during_final_protected_io_invalidates(self):
         store, binding = self._load()
         self.addCleanup(store.close)

@@ -371,9 +371,15 @@ class C2HostRuntimeBinding:
                 # This is deliberately the last clock read. No filesystem or
                 # store lock is acquired after it, so its bounds cover all work
                 # above and the actual return decision.
+                # Preserve the earliest authenticated policy observation too;
+                # do not treat its expiry as a veto when a distinct signed
+                # expiry is selected later in this same guard.
+                self._deadline_floors.retain(selected_policy_view, sample)
+                self._retain_group_channel_deadlines(sample)
                 final_sample = self._clock.sample()
                 self._check_deadlines(final_sample)
                 self._retain_group_channel_deadlines(final_sample)
+                self._check_deadlines(final_sample)
                 retained_view = self._deadline_floors.retain(final_policy_view, final_sample)
                 if (final_sample.latest_wall >= retained_view.expires_at
                         or final_sample.monotonic >= retained_view.deadline_monotonic):

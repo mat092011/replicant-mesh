@@ -151,7 +151,8 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         group_ttl = 300 if self._testMethodName in {
             "test_channel_wall_expiry_rejects_clock_drift_even_before_monotonic_deadline",
             "test_final_uncertainty_deadline_is_retained_across_clock_drift",
-            "test_final_uncertainty_retains_channel_monotonic_deadline",
+            "test_initial_uncertainty_retains_channel_monotonic_deadline",
+            "test_first_selected_view_uncertainty_deadline_is_retained",
             "test_selected_head_mismatch_retains_deadline_before_refresh"} else 60
         if self._testMethodName == "test_final_uncertainty_retains_group_policy_deadline":
             group_ttl = 70
@@ -530,25 +531,27 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
             binding.assert_live()
         self.assertEqual(len(calls), 1)
 
-    def test_final_uncertainty_retains_group_policy_deadline(self):
+    def test_initial_uncertainty_retains_group_policy_deadline(self):
         self.wall += 30
         self.mono += 30
         store, binding = self._load()
         self.addCleanup(store.close)
         calls = []
         binding.subscribe_teardown(calls.append)
-        original_read = runtime_module.safe_read
-        reads = 0
-        def widen_on_final_read(*args, **kwargs):
-            nonlocal reads
-            result = original_read(*args, **kwargs)
-            reads += 1
-            if reads == 22:
-                self.uncertainty = 20.0
+        self.uncertainty = 20.0
+        original_check = binding._check_deadlines
+        checks = 0
+        def restore_after_initial_sample(sample):
+            nonlocal checks
+            result = original_check(sample)
+            checks += 1
+            if checks == 1:
+                self.assertEqual(sample.uncertainty, 20.0)
+                self.uncertainty = 0.0
             return result
-        with patch.object(runtime_module, "safe_read", side_effect=widen_on_final_read):
+        with patch.object(binding, "_check_deadlines", side_effect=restore_after_initial_sample):
             binding.assert_live()
-        self.assertEqual(reads, 22)
+        self.assertEqual(checks, 3)
         self.uncertainty = 0.0
         self.wall += 1
         self.mono += 21
@@ -556,29 +559,62 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
             binding.assert_live()
         self.assertEqual(len(calls), 1)
 
-    def test_final_uncertainty_retains_channel_monotonic_deadline(self):
+    def test_initial_uncertainty_retains_channel_monotonic_deadline(self):
         self.wall += 30
         self.mono += 30
         store, binding = self._load()
         self.addCleanup(store.close)
         calls = []
         binding.subscribe_teardown(calls.append)
-        original_read = runtime_module.safe_read
-        reads = 0
-        def widen_on_final_read(*args, **kwargs):
-            nonlocal reads
-            result = original_read(*args, **kwargs)
-            reads += 1
-            if reads == 22:
-                self.uncertainty = 20.0
+        self.uncertainty = 20.0
+        original_check = binding._check_deadlines
+        checks = 0
+        def restore_after_initial_sample(sample):
+            nonlocal checks
+            result = original_check(sample)
+            checks += 1
+            if checks == 1:
+                self.assertEqual(sample.uncertainty, 20.0)
+                self.uncertainty = 0.0
             return result
-        with patch.object(runtime_module, "safe_read", side_effect=widen_on_final_read):
+        with patch.object(binding, "_check_deadlines", side_effect=restore_after_initial_sample):
             binding.assert_live()
-        self.assertEqual(reads, 22)
-        self.uncertainty = 0.0
+        self.assertEqual(checks, 3)
         self.wall += 51
         self.mono += 71
         with self.assertRaisesRegex(CredentialError, "channel certificate expired"):
+            binding.assert_live()
+        self.assertEqual(len(calls), 1)
+
+    def test_first_selected_view_uncertainty_deadline_is_retained(self):
+        self.wall += 30
+        self.mono += 30
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        payload = json.loads(self.active)["payload"]
+        payload["revision"] += 1
+        payload["expires_at"] = int(self.wall) + 40
+        short_head = sign_snapshot(payload, self.fx.new_snapshot_key)
+        binding.install_policy(short_head)
+        calls = []
+        binding.subscribe_teardown(calls.append)
+        original = binding._assert_selected_policy
+        selected_reads = 0
+        def uncertain_first(*args, **kwargs):
+            nonlocal selected_reads
+            selected_reads += 1
+            if selected_reads == 1:
+                self.uncertainty = 20.0
+            try:
+                return original(*args, **kwargs)
+            finally:
+                self.uncertainty = 0.0
+        with patch.object(binding, "_assert_selected_policy", side_effect=uncertain_first):
+            binding.assert_live()
+        self.assertEqual(selected_reads, 2)
+        self.wall += 1
+        self.mono += 21
+        with self.assertRaisesRegex(SnapshotError, "expired"):
             binding.assert_live()
         self.assertEqual(len(calls), 1)
 
