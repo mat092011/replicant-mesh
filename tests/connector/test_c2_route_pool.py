@@ -7,8 +7,7 @@ import time
 import unittest
 from unittest import mock
 
-from steamboat_connector.c2_route_pool import C2RoutePool, RoutePoolError
-from steamboat_connector.c2_route_pool import project_verified_host_member
+from steamboat_connector.c2_route_pool import C2RoutePool, RoutePoolError, project_host_scope_member
 from steamboat_connector.validation import new_id
 
 
@@ -18,10 +17,6 @@ def route(i):
 
 def member(i, component="worker-1", role="host"):
     return {"selected_root_generation":f"{i:064x}","parent_boot_id":f"{i+100:032x}","account_id":new_id("acct"),"device_id":new_id("dev"),"role":role,"component":component,"worker_boot_id":f"{i+200:032x}","assignment_id":new_id("asg") if role=="host" else None,"credential_serial":f"{i+1:x}","credential_key_hash":f"{i:064x}","credential_certificate_hash":f"{i:064x}","credential_epoch":1,"admission_epoch":1}
-
-class _TestAuthorization:
-    def assert_live(self): return True
-    def remaining_seconds(self): return 60
 
 class C2ProjectionTests(unittest.TestCase):
     def test_verified_selected_scope_projection(self):
@@ -42,10 +37,10 @@ class C2ProjectionTests(unittest.TestCase):
         encoded=sign_c2_host_group_policy(payload,private)
         clock=Clock(wall=time.time,monotonic=time.monotonic,uncertainty_seconds=lambda:0.0)
         verified=verify_c2_host_group_policy(encoded,public,clock=clock)
-        projected=project_verified_host_member(verified,"worker-1")
+        projected=project_host_scope_member(verified.scope,"worker-1")
         self.assertEqual(projected["selected_root_generation"],"c"*64)
         self.assertEqual(projected["credential_serial"],"a1")
-        with self.assertRaises(RoutePoolError): project_verified_host_member(verified,"worker-2")
+        with self.assertRaises(RoutePoolError): project_host_scope_member(verified.scope,"worker-2")
 
     def test_exact_integer_bounds_are_validated_without_storage(self):
         from steamboat_connector.c2_route_pool import _validate_route, _validate_member
@@ -62,35 +57,36 @@ class C2ProjectionTests(unittest.TestCase):
         from steamboat_connector.c2_route_pool import MAX_FILE_BYTES, VERSION, PROFILE
         from steamboat_connector.validation import json_bytes
         routes={}; allow=[]
+        group=[member(10+j,f"worker-{j}") for j in (1,2,3)]+[member(14,"coordinator","personal_coordinator")]
+        for m in group:
+            m["credential_serial"]="f"*40; m["credential_epoch"]=m["admission_epoch"]=2**63-1
+            allow.append(m)
         for i in range(1,9):
-            rt=route(i); rt["coordinator_serial"]="f"*40; rt["coordinator_credential_epoch"]=2**63-1
+            coordinator=group[3]
+            rt=route(i); rt.update(coordinator_account_id=coordinator["account_id"],tenant_account_id=coordinator["account_id"],coordinator_device_id=coordinator["device_id"],coordinator_serial="f"*40,coordinator_key_hash=coordinator["credential_key_hash"],coordinator_credential_epoch=2**63-1,coordinator_boot_id=coordinator["worker_boot_id"])
             rkey=__import__("hashlib").sha256(json_bytes(rt)).hexdigest(); selected={}
-            group=[member(i*10+j,f"worker-{j}") for j in (1,2,3)]+[member(i*10+4,"coordinator","personal_coordinator")]
             for m in group:
-                m["credential_serial"]="f"*40; m["credential_epoch"]=m["admission_epoch"]=2**63-1
                 mkey=__import__("hashlib").sha256(json_bytes(m)).hexdigest()
-                selected[mkey]={"member":m,"token":"f"*64,"released":False}; allow.append(m)
+                selected[mkey]={"member":m,"token":f"{i:064x}"[-64:],"released":False}
             routes[rkey]={"route":rt,"closed":False,"members":selected}
         config=__import__("hashlib").sha256(json_bytes({"physical_host_id":"f"*64,"pool_id":"pool","allowed_members":allow,"max_routes":8})).hexdigest()
         encoded=json_bytes({"version":VERSION,"profile":PROFILE,"config_digest":config,"routes":routes},maximum_bytes=MAX_FILE_BYTES)
         self.assertLessEqual(len(encoded),MAX_FILE_BYTES)
 
-def context(rt):
-    from steamboat_runtime.participant_context import TrustedRequestContext
-    return TrustedRequestContext(rt["tenant_account_id"],rt["request_id"],rt["session_id"],rt["route_id"],rt["coordinator_boot_id"],rt["route_epoch"],rt["attempt"],_TestAuthorization(),time.monotonic()+30)
-
 def _reserve_process(path, allowed, rt, ready, start, out):
     ledger=C2RoutePool(path, physical_host_id="f"*64, pool_id="pool", allowed_members=allowed)
     ready.put(True)
     start.wait()
-    try: ledger.reserve(context(rt), rt, allowed[0]); out.put("committed")
+    try: ledger.reserve(rt, allowed[0]); out.put("committed")
     except RoutePoolError as error: out.put("refused:"+str(error))
     except Exception as error: out.put("unexpected:"+type(error).__name__)
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "C2 storage uses Linux openat and flock")
 class C2RoutePoolTests(unittest.TestCase):
-    def create(self, path, allowed): return C2RoutePool.provision(path, physical_host_id="f"*64, pool_id="pool", allowed_members=allowed)
+    def create(self, path, allowed):
+        path=Path(path); path.mkdir(mode=0o700,exist_ok=True); path.chmod(0o700)
+        return C2RoutePool.provision(path, physical_host_id="f"*64, pool_id="pool", allowed_members=allowed)
     def open(self, path, allowed): return C2RoutePool(path, physical_host_id="f"*64, pool_id="pool", allowed_members=allowed)
 
     def test_coordinator_counts_once_and_release_is_exact_and_terminal(self):
@@ -99,22 +95,22 @@ class C2RoutePoolTests(unittest.TestCase):
             newcomer=member(5,"worker-3")
             l=self.create(Path(d)/"state",ms+[newcomer]); r=route(1)
             r.update(coordinator_account_id=ms[3]["account_id"],tenant_account_id=ms[3]["account_id"],coordinator_device_id=ms[3]["device_id"],coordinator_boot_id=ms[3]["worker_boot_id"],coordinator_serial=ms[3]["credential_serial"],coordinator_key_hash=ms[3]["credential_key_hash"],coordinator_credential_epoch=ms[3]["credential_epoch"])
-            leases=[l.reserve(context(r),r,m) for m in ms]
-            self.assertEqual(l.reserve(context(r),r,ms[1]),leases[1])
+            leases=[l.reserve(r,m) for m in ms]
+            self.assertEqual(l.reserve(r,ms[1]).receipt,leases[1].receipt)
             self.assertEqual(len(l.snapshot()["routes"]),1)
             self.assertEqual(sum(len(x["members"]) for x in l.snapshot()["routes"].values()),4)
-            with self.assertRaises(RoutePoolError): l.release(leases[0], actual_reclamation_confirmed=None)
-            self.assertTrue(l.release(leases[0], actual_reclamation_confirmed=True))
-            self.assertFalse(l.release(leases[0], actual_reclamation_confirmed=True))
-            self.assertEqual(l.reserve(context(r),r,ms[1]),leases[1])
-            with self.assertRaises(RoutePoolError): l.reserve(context(r),r,ms[0])
-            with self.assertRaises(RoutePoolError): l.reserve(context(r),r,newcomer)
+            with self.assertRaises(RoutePoolError): l.release(leases[0].receipt, actual_reclamation_confirmed=None)
+            self.assertTrue(l.release(leases[0].receipt, actual_reclamation_confirmed=True).released)
+            self.assertFalse(l.release(leases[0].receipt, actual_reclamation_confirmed=True).released)
+            self.assertEqual(l.reserve(r,ms[1]).receipt,leases[1].receipt)
+            with self.assertRaises(RoutePoolError): l.reserve(r,ms[0])
+            with self.assertRaises(RoutePoolError): l.reserve(r,newcomer)
 
     def test_changed_member_identity_cannot_borrow_receipt(self):
         with tempfile.TemporaryDirectory() as d:
-            m=member(1); l=self.create(Path(d)/"state",[m]); r=route(1); receipt=l.reserve(context(r),r,m)
+            m=member(1); l=self.create(Path(d)/"state",[m]); r=route(1); receipt=l.reserve(r,m).receipt
             changed=dict(m, selected_root_generation="9"*32)
-            with self.assertRaises(RoutePoolError): l.reserve(context(r),r,changed)
+            with self.assertRaises(RoutePoolError): l.reserve(r,changed)
             with self.assertRaises(RoutePoolError): l.release(dict(receipt, member_key="0"*20), actual_reclamation_confirmed=True)
 
     def test_ninth_live_route_rejected_and_reopen_preserves_state(self):
@@ -122,8 +118,9 @@ class C2RoutePoolTests(unittest.TestCase):
             m=member(1); path=Path(d)/"state"; l=self.create(path,[m])
             receipts=[]
             for i in range(1,9):
-                rt=route(i); receipts.append(l.reserve(context(rt),rt,m))
-            with self.assertRaises(RoutePoolError): l.reserve(context(route(9)),route(9),m)
+                rt=route(i); receipts.append(l.reserve(rt,m).receipt)
+            ninth=route(9)
+            with self.assertRaisesRegex(RoutePoolError,"live route limit"): l.reserve(ninth,m)
             l=self.open(path,[m]); self.assertEqual(len(l.snapshot()["routes"]),8)
             for rec in receipts: l.release(rec,actual_reclamation_confirmed=True)
 
@@ -132,7 +129,7 @@ class C2RoutePoolTests(unittest.TestCase):
             m=member(1); path=Path(d)/"state"; l=self.create(path,[m])
             held=[]
             for i in range(1,8):
-                rt=route(i); held.append(l.reserve(context(rt),rt,m))
+                rt=route(i); held.append(l.reserve(rt,m).receipt)
             mp_context=multiprocessing.get_context("spawn"); start=mp_context.Event(); out=mp_context.Queue(); ready=mp_context.Queue()
             children=[mp_context.Process(target=_reserve_process,args=(path,[m],route(i),ready,start,out)) for i in (8,9)]
             try:
@@ -158,7 +155,7 @@ class C2RoutePoolTests(unittest.TestCase):
     def test_exact_types_and_route_schema(self):
         with tempfile.TemporaryDirectory() as d:
             m=member(1); l=self.create(Path(d)/"state",[m]); r=route(1); r["attempt"]=True
-            with self.assertRaises(RoutePoolError): l.reserve(context(r),r,m)
+            with self.assertRaises(RoutePoolError): l.reserve(r,m)
 
     def test_unknown_commit_fences_same_instance_other_instance_and_reopen(self):
         with tempfile.TemporaryDirectory() as d:
@@ -169,16 +166,37 @@ class C2RoutePoolTests(unittest.TestCase):
                 original(*args,**kwargs)
                 raise OSError("injected post-replace acknowledgement loss")
             with mock.patch.object(mod,"atomic_write_private",side_effect=commit_then_lose_ack):
-                with self.assertRaises(RoutePoolError): l.reserve(context(rt),rt,m)
+                with self.assertRaises(RoutePoolError): l.reserve(rt,m)
             with self.assertRaises(RoutePoolError): l.snapshot()
             with self.assertRaises(RoutePoolError): other.snapshot()
             with self.assertRaises(RoutePoolError): self.open(path,[m])
 
+    def test_post_unlink_fsync_failure_reports_confirmed_commit_and_cleanup_status(self):
+        with tempfile.TemporaryDirectory() as d:
+            m=member(1); path=Path(d)/"state"; l=self.create(path,[m]); other=self.open(path,[m]); rt=route(1)
+            import steamboat_connector.c2_route_pool as mod
+            original=mod.os.fsync; calls={"n":0}
+            def fail_after_cleanup_sync(fd):
+                calls["n"]+=1
+                if calls["n"]==5: raise OSError("injected post-unlink directory fsync error")
+                return original(fd)
+            with mock.patch.object(mod.os,"fsync",side_effect=fail_after_cleanup_sync):
+                result=l.reserve(rt,m)
+            self.assertFalse(result.fence_cleanup_confirmed)
+            self.assertEqual(len(other.snapshot()["routes"]),1)
+            self.assertEqual(sum(len(x["members"]) for x in other.snapshot()["routes"].values()),1)
+            # If a pending marker reappears after a crash, all opens fail closed.
+            pending=path/"c2-route-pool-v2.pending"
+            pending.write_text('{"version":2,"profile":"physical_pool_route_membership_v2","config_digest":"'+'f'*64+'","transaction_id":"'+'a'*64+'"}')
+            pending.chmod(0o600)
+            with self.assertRaises(RoutePoolError): other.snapshot()
+
     def test_explicit_provision_only_and_nested_state_validation(self):
         with tempfile.TemporaryDirectory() as d:
             path=Path(d)/"state"; m=member(1); r=route(1)
+            path.mkdir(mode=0o700); path.chmod(0o700)
             with self.assertRaises(RoutePoolError): self.open(path,[m])
-            l=self.create(path,[m]); receipt=l.reserve(context(r),r,m)
+            l=self.create(path,[m]); receipt=l.reserve(r,m).receipt
             with self.assertRaises(RoutePoolError): self.create(path,[m])
             state=l.snapshot(); route_record=next(iter(state["routes"].values()))
             entry=next(iter(route_record["members"].values())); entry["token"]="bad"
@@ -187,10 +205,7 @@ class C2RoutePoolTests(unittest.TestCase):
 
     def test_eight_routes_four_members_under_fixed_file_bound(self):
         with tempfile.TemporaryDirectory() as d:
-            members=[]
-            for i in range(1,9):
-                members.extend([member(i*10+j,f"worker-{j}") for j in (1,2,3)])
-                members.append(member(i*10+4,"coordinator","personal_coordinator"))
+            members=[member(i,f"worker-{i}") for i in (1,2,3)]+[member(4,"coordinator","personal_coordinator")]
             for m in members:
                 m["credential_serial"]="f"*40
                 m["credential_epoch"]=2**63-1
@@ -200,10 +215,9 @@ class C2RoutePoolTests(unittest.TestCase):
                 rt=route(i)
                 rt["coordinator_serial"]="f"*40
                 rt["coordinator_credential_epoch"]=2**63-1
-                group=members[(i-1)*4:i*4]
-                coordinator=group[3]
+                coordinator=members[3]
                 rt.update(coordinator_account_id=coordinator["account_id"],tenant_account_id=coordinator["account_id"],coordinator_device_id=coordinator["device_id"],coordinator_boot_id=coordinator["worker_boot_id"],coordinator_key_hash=coordinator["credential_key_hash"])
-                for m in group: l.reserve(context(rt),rt,m)
+                for m in members: l.reserve(rt,m)
             self.assertEqual(sum(len(x["members"]) for x in l.snapshot()["routes"].values()),32)
             self.assertLessEqual((Path(d)/"state"/"c2-route-pool-v2.json").stat().st_size,131072)
 

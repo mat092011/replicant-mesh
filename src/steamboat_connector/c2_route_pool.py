@@ -11,7 +11,7 @@ from pathlib import Path
 import secrets
 import stat
 import threading
-import time
+from dataclasses import dataclass
 
 from .storage import FileLock, StorageError, atomic_write_private, open_private_directory, read_private_file
 from .validation import json_bytes, strict_json_loads, valid_typed_id
@@ -91,17 +91,26 @@ def _write_all(fd, data):
         view=view[count:]
 
 
-def project_verified_host_member(verified_policy, component):
-    """Project one membership tuple from the exact signature-verified C2 scope value."""
-    from steamboat_security.root_c2_group_scope import VerifiedC2HostGroupPolicy
-    if type(verified_policy) is not VerifiedC2HostGroupPolicy:
-        raise RoutePoolError("exact verified C2 host group policy required")
-    if type(verified_policy.deadline_monotonic) not in (int,float) or time.monotonic() >= verified_policy.deadline_monotonic:
-        raise RoutePoolError("verified C2 host group policy is expired")
-    scope=verified_policy.scope
+@dataclass(frozen=True)
+class ReservationResult:
+    receipt: dict
+    fence_cleanup_confirmed: bool
+
+
+@dataclass(frozen=True)
+class ReleaseResult:
+    released: bool
+    fence_cleanup_confirmed: bool
+
+
+def project_host_scope_member(scope, component):
+    """Project fields from a parsed C2 host scope; this does not prove provenance."""
+    from steamboat_security.root_c2_group_scope import C2HostGroupScope
+    if type(scope) is not C2HostGroupScope:
+        raise RoutePoolError("exact parsed C2 host group scope value required")
     if type(component) is not str: raise RoutePoolError("component must be exact text")
     selected=[c for c in scope.components if c.component==component]
-    if len(selected)!=1: raise RoutePoolError("component is not in the selected verified scope")
+    if len(selected)!=1: raise RoutePoolError("component is not in the selected parsed scope")
     c=selected[0]
     member={"selected_root_generation":scope.generation_sha256,"parent_boot_id":scope.parent_boot_id,
         "account_id":scope.account_id,"device_id":scope.device_id,"role":"host","component":c.component,
@@ -254,14 +263,20 @@ class C2RoutePool:
         os.close(fd)
         try:
             self._write(state)
+        except Exception as error:
+            self._faulted=True
+            raise RoutePoolError("state commit is uncertain; durable pending fence retained") from error
+        # The state write and directory fsync completed. Fence cleanup is a
+        # separate outcome: its failure does not undo or uncharge this commit.
+        try:
             fd=open_private_directory(self.directory,uid=self.uid)
             try:
                 os.unlink(self.pending_path.name,dir_fd=fd)
                 os.fsync(fd)
             finally: os.close(fd)
-        except Exception as error:
-            self._faulted=True
-            raise RoutePoolError("transaction outcome or fence cleanup is uncertain; operator recovery required") from error
+            return True
+        except Exception:
+            return False
     def _check_state(self, s):
         if type(s) is not dict or set(s) != {"version", "profile", "config_digest", "routes"} or type(s["version"]) is not int or s["version"] != VERSION or s["profile"] != PROFILE or s["config_digest"] != self.config_digest or type(s["routes"]) is not dict:
             raise RoutePoolError("unknown schema or configuration binding; ledger is fail-closed")
@@ -301,14 +316,9 @@ class C2RoutePool:
         if live_routes>MAX_ROUTES or live_members>MAX_MEMBERS or member_records>MAX_MEMBER_RECORDS:
             raise RoutePoolError("ledger live or retained-record bound exceeded")
 
-    def reserve(self, trusted_context, route, member):
+    def reserve(self, route, member):
         self._healthy()
-        from steamboat_runtime.participant_context import TrustedRequestContext
-        if type(trusted_context) is not TrustedRequestContext: raise RoutePoolError("exact TrustedRequestContext projection required")
-        try: trusted_context.assert_data_live()
-        except Exception as error: raise RoutePoolError("trusted request context is not live") from error
         _validate_route(route); _validate_member(member)
-        if (route["tenant_account_id"],route["request_id"],route["session_id"],route["route_id"],route["coordinator_boot_id"],route["route_epoch"],route["attempt"]) != (trusted_context.tenant_account_id,trusted_context.request_id,trusted_context.session_id,trusted_context.route_id,trusted_context.coordinator_boot_id,trusted_context.route_epoch,trusted_context.attempt): raise RoutePoolError("route differs from trusted C1 request context")
         routekey=hashlib.sha256(json_bytes(route)).hexdigest(); memberkey=hashlib.sha256(json_bytes(member)).hexdigest()
         if member["component"]=="coordinator" and (member["account_id"],member["device_id"],member["worker_boot_id"],member["credential_serial"],member["credential_key_hash"],member["credential_epoch"]) != (route["coordinator_account_id"],route["coordinator_device_id"],route["coordinator_boot_id"],route["coordinator_serial"],route["coordinator_key_hash"],route["coordinator_credential_epoch"]): raise RoutePoolError("co-located coordinator member differs from route identity")
         if memberkey not in self.allowed: raise RoutePoolError("member is outside protected configuration allowlist")
@@ -320,7 +330,7 @@ class C2RoutePool:
                 if memberkey in rec["members"]:
                     existing=rec["members"][memberkey]
                     if existing["released"]: raise RoutePoolError("released member cannot rejoin route")
-                    return {"version":VERSION,"profile":PROFILE,"route_key":routekey,"member_key":memberkey,"token":existing["token"]}
+                    return ReservationResult({"version":VERSION,"profile":PROFILE,"route_key":routekey,"member_key":memberkey,"token":existing["token"]},True)
                 if rec["closed"]: raise RoutePoolError("route is closing; late joins are refused")
             else:
                 for old in s["routes"].values():
@@ -340,9 +350,9 @@ class C2RoutePool:
             token=secrets.token_hex(32)
             receipt={"version":VERSION,"profile":PROFILE,"route_key":routekey,"member_key":memberkey,"token":token}
             rec["members"][memberkey]={"member":member,"token":token,"released":False}
-            try: self._commit(s)
+            try: cleanup=self._commit(s)
             except RoutePoolError: raise
-            return dict(receipt)
+            return ReservationResult(dict(receipt),cleanup)
 
     def release(self, receipt, *, actual_reclamation_confirmed):
         self._healthy()
@@ -354,11 +364,11 @@ class C2RoutePool:
             ent=None if rec is None else rec["members"].get(receipt["member_key"])
             expected=None if ent is None else {"version":VERSION,"profile":PROFILE,"route_key":receipt["route_key"],"member_key":receipt["member_key"],"token":ent["token"]}
             if ent is None or expected != receipt: raise RoutePoolError("receipt is stale or does not identify this exact reservation")
-            if ent["released"]: return False
+            if ent["released"]: return ReleaseResult(False,True)
             ent["released"]=True
             rec["closed"]=True
-            self._commit(s)
-            return True
+            cleanup=self._commit(s)
+            return ReleaseResult(True,cleanup)
 
     def snapshot(self):
         self._healthy()

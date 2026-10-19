@@ -20,13 +20,14 @@ credential serial/key hash/epoch and boot, request/session/route IDs, route
 epoch, attempt and model. Each selected member pins root generation, parent
 boot, role, component, worker boot, host assignment, credential identity/epoch
 and admission epoch, host account/device, certificate hash and key hash. Host
-members can be projected only from the exact signature-verified C2 host-group
-policy type. Route admission checks the exact C1 `TrustedRequestContext`
-projection for tenant, request/session/route IDs, coordinator boot, route epoch
-and attempt. This enforces projection consistency; the ledger itself performs
-no caller authorization, and these Python values are not cryptographic
-capabilities. The caller must obtain them through the existing verification
-and admission paths. The exact closed schemas and ID grammars are validated.
+members can be projected from the parsed C2 host-group scope value. The
+projection helper checks value shape and component membership; it cannot prove
+where that Python value came from. The route is a neutral closed projection,
+not a coordinator-only request context. It can be recorded from a worker-side
+caller without requiring a `TrustedRequestContext`; future coordinator and
+worker integrations must provide their own trusted factories. The ledger
+performs no caller authorization, and these Python values are not cryptographic
+capabilities. The exact closed schemas and ID grammars are validated.
 Members must be present in the protected constructor allowlist, which is bound
 with physical-host identity, pool ID and route cap in a configuration digest.
 Changing that configuration on reopen fails closed; no migration is provided.
@@ -57,9 +58,12 @@ primitive has no reset path. Unknown schemas, unsafe
 files, malformed or oversized state, configuration drift and ambiguous durable
 write failures fail closed. Every mutation first fsyncs a durable pending
 transaction fence, and every open or operation refuses while it exists. An
-ambiguous write leaves that fence for operator or supervisor recovery; a new
-object cannot bypass it. Operations use both a thread lock and the shared file
-lock. Filesystem locking does not establish that a directory is shared by
+uncertain state write leaves that fence for operator or supervisor recovery; a
+new object cannot bypass it. After a confirmed state commit, fence cleanup has
+its own result flag. If unlink or its directory fsync fails, the reservation or
+release remains committed and correctly charged; cleanup is reported as
+unconfirmed. If the marker reappears after a crash, opens fail closed. Operations
+use both a thread lock and the shared file lock. Filesystem locking does not establish that a directory is shared by
 the intended physical host; that remains an operator provisioning fact.
 
 The current runtime does not call this component. It has no global admission
