@@ -337,19 +337,62 @@ class RuntimeC2GuardTests(unittest.IsolatedAsyncioTestCase):
         while not self.bridge._runtime_fence_applied:
             await asyncio.sleep(0.005)
 
-    async def test_c2_fence_applies_once_and_maintenance_keeps_bounded_cadence(self):
-        sweeps = []
-        original = self.bridge._sweep_once
+    async def test_c2_fence_is_single_application_and_maintenance_stays_bounded(self):
+        await self._open()
+        counts = {name: 0 for name in (
+            "binding_invalidation", "handler_invalidation", "supervisor",
+            "wake", "maintenance_pass")}
+        sweep_times = []
+
+        def counted(obj, method_name, key):
+            original = getattr(obj, method_name)
+
+            def invoke(*args, **kwargs):
+                counts[key] += 1
+                return original(*args, **kwargs)
+            return invoke
+
+        original_sweep = self.bridge._sweep_once
 
         def counted_sweep():
-            sweeps.append(1)
-            original()
+            sweep_times.append(asyncio.get_running_loop().time())
+            original_sweep()
 
-        self.bridge._sweep_once = counted_sweep
-        self.bridge.request_runtime_invalidation("cadence test")
-        await asyncio.wait_for(self._wait_for_runtime_fence(), 1)
-        await asyncio.wait_for(self._wait_for_sweep_count(sweeps, 3), 1)
-        self.assertEqual(sweeps.count(1), len(sweeps))
+        patches = (
+            mock.patch.object(self.bridge.session_bindings, "invalidate_all",
+                side_effect=counted(self.bridge.session_bindings,
+                                    "invalidate_all", "binding_invalidation")),
+            mock.patch.object(self.bridge._handler, "invalidate_for_authorization",
+                side_effect=counted(self.bridge._handler,
+                                    "invalidate_for_authorization", "handler_invalidation")),
+            mock.patch.object(self.bridge._handler, "_notify_supervisor",
+                side_effect=counted(self.bridge._handler, "_notify_supervisor", "supervisor")),
+            mock.patch.object(self.bridge, "_signal_wake",
+                side_effect=counted(self.bridge, "_signal_wake", "wake")),
+            mock.patch.object(self.bridge, "_poll_gateway_ingresses",
+                side_effect=counted(self.bridge, "_poll_gateway_ingresses", "maintenance_pass")),
+            mock.patch.object(self.bridge, "_sweep_once", side_effect=counted_sweep),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            self.bridge.request_runtime_invalidation("cadence test")
+            await asyncio.wait_for(self._wait_for_runtime_fence(), 1)
+            # Observe several ordinary sweep periods after the one immediate
+            # fence wake; a repeated wake loop would drive maintenance passes
+            # far beyond the configured 20 ms sweep cadence.
+            await asyncio.sleep(0.16)
+
+        self.assertEqual(counts["binding_invalidation"], 1)
+        self.assertEqual(counts["handler_invalidation"], 1)
+        self.assertEqual(counts["supervisor"], 1)
+        self.assertEqual(counts["wake"], 1)
+        self.assertTrue(self.bridge._runtime_fence_applied)
+        self.assertGreaterEqual(len(sweep_times), 4)
+        self.assertLessEqual(len(sweep_times), 12)
+        self.assertGreaterEqual(counts["maintenance_pass"], len(sweep_times))
+        self.assertLessEqual(counts["maintenance_pass"], len(sweep_times) + 4)
+        if len(sweep_times) > 1:
+            gaps = [right - left for left, right in zip(sweep_times, sweep_times[1:])]
+            self.assertTrue(all(gap >= 0.008 for gap in gaps), gaps)
         self.assertFalse(self.bridge._unconfirmed_cleanup)
         self.assertFalse(self.bridge._unavailable)
         self.assertTrue(self.bridge.unavailable)
@@ -366,11 +409,6 @@ class RuntimeC2GuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.bridge.unavailable)
         self.assertTrue(self.bridge._unconfirmed_cleanup)
         self.assertFalse(self.bridge.status()["cleanup_confirmed"])
-
-    async def _wait_for_sweep_count(self, values, count):
-        while len(values) < count:
-            await asyncio.sleep(0.005)
-
 
 if __name__ == "__main__":
     unittest.main()
