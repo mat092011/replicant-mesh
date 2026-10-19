@@ -655,10 +655,14 @@ class ProcessRoleBackend:
             watchdog.wake.clear()
 
     def _retire_stop_watchdog(self, role, generation):
-        # A stale generation must never wake or retire the replacement's
-        # role watchdog. The caller holds no lifecycle locks here.
-        with self._watchdog_lock:
-            with self._lock:
+        # This is optional housekeeping after ownership is already reclaimed.
+        # Never let it extend the stop deadline or touch a replacement.
+        if not self._watchdog_lock.acquire(blocking=False):
+            return
+        try:
+            if not self._lock.acquire(blocking=False):
+                return
+            try:
                 if (self._owned.get(role) is not None
                         or self._start_intents.get(role) is not None):
                     return
@@ -666,6 +670,10 @@ class ProcessRoleBackend:
                 if watchdog is not None:
                     watchdog.armed.set()
                     watchdog.wake.set()
+            finally:
+                self._lock.release()
+        finally:
+            self._watchdog_lock.release()
 
     def spawn_owned_start(self, role, policy, *, cancel_event=None,
                           before_popen_check=None, expected_role_config_sha256=None,

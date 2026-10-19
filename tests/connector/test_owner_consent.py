@@ -126,6 +126,8 @@ class OwnerConsentTests(unittest.TestCase):
         store = self.store()
         self.addCleanup(store.close)
         store.set_role_enabled("host", True)
+        second = self.store()
+        self.addCleanup(second.close)
         blocked = threading.Event()
         changed = threading.Event()
         original_flock = fcntl.flock
@@ -142,8 +144,6 @@ class OwnerConsentTests(unittest.TestCase):
 
         with store.serialized_snapshot() as snapshot:
             self.assertEqual(snapshot.epoch, 1)
-            second = self.store()
-            self.addCleanup(second.close)
             with mock.patch.object(fcntl, "flock", side_effect=observed_flock):
                 thread = threading.Thread(target=lambda: (
                     second.set_role_enabled("host", False), changed.set()))

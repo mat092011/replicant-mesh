@@ -1,7 +1,6 @@
 import os
 import json
 import hashlib
-import hashlib
 from pathlib import Path
 import shutil
 import select
@@ -20,7 +19,6 @@ from steamboat_connector.process_supervisor import (ProcessRoleBackend,
                                                      ROLE_CONFIG_MAX_BYTES,
                                                      READY_LINE_MAX, _StartIntent)
 from steamboat_connector.resources import CgroupV2Controller, ResourceError
-from steamboat_connector.validation import json_bytes
 from steamboat_connector.validation import json_bytes
 
 
@@ -402,6 +400,75 @@ class ProcessSupervisorTests(unittest.TestCase):
                         side_effect=lambda pid, sig: holder["process"].on_signal(sig),
                         create=True):
             self.assertTrue(self.backend.stop(["host"], 0.5)["host"])
+
+    def test_reclaimed_generation_watchdog_retirement_skips_contended_lifecycle_lock(self):
+        from types import SimpleNamespace
+
+        acquired, release = threading.Event(), threading.Event()
+        new_owned = SimpleNamespace(stopping=False)
+        new_intent = _StartIntent()
+        watchdog = SimpleNamespace(armed=threading.Event(), wake=threading.Event())
+        self.backend._owned["host"] = new_owned
+        self.backend._start_intents["host"] = new_intent
+        self.backend._stop_watchdogs["host"] = watchdog
+
+        def hold_lifecycle_lock():
+            with self.backend._lock:
+                acquired.set()
+                release.wait(5)
+
+        holder = threading.Thread(target=hold_lifecycle_lock)
+        holder.start()
+        try:
+            self.assertTrue(acquired.wait(2))
+            old_reclaimed_generation = SimpleNamespace(reclaimed=True)
+            started = time.monotonic()
+            self.backend._retire_stop_watchdog("host", old_reclaimed_generation)
+            self.assertLess(time.monotonic() - started, 0.5)
+            self.assertIs(self.backend._owned["host"], new_owned)
+            self.assertIs(self.backend._start_intents["host"], new_intent)
+            self.assertIs(self.backend._stop_watchdogs["host"], watchdog)
+            self.assertFalse(watchdog.armed.is_set())
+            self.assertFalse(watchdog.wake.is_set())
+        finally:
+            release.set()
+            holder.join(2)
+            self.assertFalse(holder.is_alive())
+
+    def test_reclaimed_owned_stop_reaches_nonblocking_watchdog_retirement(self):
+        holder, popen, killpg = self._spawn_patch()
+        lock_acquired, release_lock = threading.Event(), threading.Event()
+        original_retire = self.backend._retire_stop_watchdog
+        retired = []
+
+        def hold_lifecycle_lock(role, generation):
+            def hold():
+                with self.backend._lock:
+                    lock_acquired.set()
+                    release_lock.wait(5)
+
+            thread = threading.Thread(target=hold)
+            thread.start()
+            try:
+                self.assertTrue(lock_acquired.wait(2))
+                started = time.monotonic()
+                original_retire(role, generation)
+                self.assertLess(time.monotonic() - started, 0.5)
+                retired.append(generation)
+            finally:
+                release_lock.set()
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+
+        with popen, killpg, mock.patch.object(
+                self.backend, "_retire_stop_watchdog",
+                side_effect=hold_lifecycle_lock):
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            old_owned = self.backend._owned["host"]
+            self.assertTrue(self.backend.stop(["host"], 1.0)["host"])
+            self.assertTrue(old_owned.reclaimed)
+        self.assertEqual(retired, [old_owned.start_intent])
+        self.assertNotIn("host", self.backend._owned)
 
     def test_deadline_force_flag_cannot_be_overwritten_by_late_writer(self):
         intent = _StartIntent()
