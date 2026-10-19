@@ -1301,9 +1301,61 @@ components include actual process Clock handoff, coordinator guard cases
 (20-case focused check; the 92-test compatibility check is separate), the
 20 host-service and 24 channel-socket tests, 13 coordinator-head cases, ten
 host-runtime-close cases, and settings/route extensions. This is not the full
-repository, full C1 regression or C2 phase acceptance. The actual host-process
-fixture remains under review and has not passed its native run; coordinator
-outbound-owner implementation is active. Component 36 does not establish a
-complete fixed-role process, end-to-end route or HELLO/READY, nor shared
+repository, full C1 regression or C2 phase acceptance. At this component-36
+checkpoint, the actual host-process fixture had not passed its native run;
+coordinator outbound-owner implementation was active. Component 36 does not
+establish a complete fixed-role cohort, end-to-end route or HELLO/READY, nor shared
 physical-resource enforcement or CT-11/CT-13. Every C2 checkbox remains open;
 C3 and research statuses are unchanged.
+
+## Selected host-process lifecycle probe and pure pool-config contract
+
+A focused host-process native test passed one unique case with zero skips,
+failures or errors in 7.544 seconds (2026-10-19 22:19:04.724–22:19:13.539
+UTC). The frozen source head was `c41990b06eabd2c19eede812b1869163c66286df`,
+with 499 files and digest
+`e38781230ada0c6bd0143c7877adb3910e491d497df515ed51857ca4d441ded2`; its log
+SHA-256 is
+`064ff8e49088cdad0fcdc4abef909b45c0323c65874251358a35e39cd20b23a7`. It used
+the pinned image
+`sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`,
+the established resource caps and offline read-only artifacts.
+
+The case used the actual `ProcessRoleBackend`/`Popen`, private gate, inherited
+Clock bridge, C2 selected binding and group pins, assigned-stage health,
+signed-numeric loopback TLS, worker HELLO and parent READY; it then checked
+bounded stop/reap and gateway cleanup before pin release. Fake cgroup files
+stood in only for filesystem lifecycle: this is no physical-quota result. It
+covered one worker component, not a coordinator process, full multi-role
+route, inference RPC numerics or the two-host C2 gate. The host-process fixture
+passed this focused native case after source review by author `6751` and private
+integration through `ca23a1f0ce1d1511e588d6dea8749cfe8e47d048`.
+
+Three earlier single-case attempts are retained. Native1 failed because parent
+READY was false (3.114 seconds; head
+`a45b7f34267e07c03e710bb5cb2d120b3d5df15d`, digest
+`034d213b1edc6e3ce5000450b06c9cb208d89b7854959453eb2c94f2f6f5debf`, log
+SHA-256 `5349a9b7337d236aa680f609e1d98c76c198b593789053e77be038a5dc85826c`).
+Native2 failed after private stderr exposed an installer/owner memory-cap
+mismatch (installer 256 MiB, signed policy 256 MiB, owner allocation 1 GiB;
+2.923 seconds; head `a90a9bfe11771fc7c8e0fcf655adb452cc566768`, digest
+`a34b5a66c1e551b4407d773186e123b60cbba6a9d3a8c905f4e2fedb9f1e9da0`, log
+SHA-256 `77123a0d562c59a49c66497781f99485adca35f307b1aa8b3edbf42b9debf8e9`).
+Native3 errored because gateway TLS needed the selected cohort CA rather than a
+separate gateway CA (7.288 seconds; head
+`6c1ea7f549c3c67456f8240f4b88eda12ec68237`, digest
+`0d8445832f8458cece03654e55597699aa230f55bd282d7d01594b104786939b`, log
+SHA-256 `f39243c90401632b212646aa0299ccb8414a6b8b4c8b8c64b1b723d3efc48ae5`).
+Native2 and native3 used a diagnostic Popen stderr wrapper; native4 restored
+the standard test path after the parent audit. These trial failures remain
+part of the history and are not passes.
+
+Separately, the closed C2 physical-pool allocation-v2 data contract at
+`30e5332` passed 9 portable unit tests with zero skips in 0.088 seconds using
+the corrected `sys.path`-to-`src` command. Its pure parser canonicalizes and
+checks schema and arithmetic only; it has no filesystem access, authority or
+kernel owner. It was not part of component 36. The parser leaves the existing
+v1 `PoolControllerLock` untouched; no physical pool is provisioned or enforced
+by this data contract. All C2 checkboxes remain open, C3 is unchanged, and the
+default daemon remains inactive. A full host/coordinator/consumer route and
+real shared-resource owner are still pending.

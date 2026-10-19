@@ -338,13 +338,25 @@ unique tests with zero skips/failures/errors on a 496-file frozen snapshot
 `fdfc14f60b09f86e535873635e6752bd3f67324b4dbc22eb7aa3ee798c97567f`). It
 covers all connector tests, 28 selected security modules and two runtime
 modules, not the full repository or full C1 regression. Although it includes
-focused process handoff, host-service and runtime-close checks, the actual
-host-process fixture remains under review and has not passed its native run;
-coordinator outbound-owner implementation is active. No fixed-role readiness,
-end-to-end route or shared physical-resource result is established. All C2
-checkboxes and the phase exit gate remain open; C3 has not advanced. See the
+focused process handoff, host-service and runtime-close checks, at that
+checkpoint the actual host-process fixture remained under review and had not
+passed its native run; coordinator outbound-owner implementation was active.
+No fixed-role readiness, end-to-end route or shared physical-resource result
+is established. All C2 checkboxes and the phase exit gate remain open; C3 has
+not advanced. See the
 [component record](experiments/2026-10-19-participant-c2-components.md) for
 scope and retained evidence.
+
+A subsequent focused host-process test passed one case with zero skips in
+7.544 seconds on a 499-file frozen source snapshot (head
+`c41990b06eabd2c19eede812b1869163c66286df`, digest
+`e38781230ada0c6bd0143c7877adb3910e491d497df515ed51857ca4d441ded2`). It
+checked selected host startup through worker HELLO and parent READY, assigned-
+stage health, bounded stop/reap and cleanup before releasing pins. Fake cgroup
+files stood in for filesystem lifecycle only. This does not establish a
+coordinator process, complete route, RPC numerical equivalence or physical
+quota enforcement. The pure C2 pool-config parser separately passed 9 portable
+tests; it validates data only and is not in component 36. C2 remains open.
 
 ## C3 — Validate one GPU execution path
 

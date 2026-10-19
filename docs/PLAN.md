@@ -1116,10 +1116,25 @@ source files at head `0228579c88d83b82f7d8c7b4870edf594cf01893` (digest
 covers all connector tests, 28 selected security modules and the same two
 runtime modules, not the full repository or full C1 regression. Added coverage
 includes process Clock handoff, coordinator guard, host service, coordinator
-head and host runtime-close checks. The actual host-process fixture remains
-under review and has not passed its native run; coordinator outbound-owner
-implementation remains active. No complete fixed-role startup, C2 route or
+head and host runtime-close checks. At that checkpoint, the actual host-process
+fixture had not passed its native run; coordinator outbound-owner
+implementation remained active. No complete fixed-role startup, C2 route or
 physical quota acceptance is established. All C2 checkboxes remain open; C3
 and research statuses are unchanged. See the
 [component record](experiments/2026-10-19-participant-c2-components.md) for
 image, source-proof, test-log and gate identities.
+
+**C2 host-process focused probe, 2026-10-19:** one actual selected host
+process case passed in 7.544 seconds (zero skips) at head
+`c41990b06eabd2c19eede812b1869163c66286df` (499 files; digest
+`e38781230ada0c6bd0143c7877adb3910e491d497df515ed51857ca4d441ded2`). It
+checked worker HELLO, parent READY, assigned-stage health, bounded stop/reap
+and cleanup before pin release. Fake cgroup files covered filesystem
+lifecycle only; this was one worker component, not a complete multi-role
+route or physical-quota result. The three failed earlier attempts remain
+documented. Separately, the pure allocation-v2 pool-config parser passed 9
+portable tests; it does not provision or enforce resources and was not in the
+component-36 inventory. C2.1–C2.6 remain open; full host/coordinator/consumer
+route, actual physical-resource owner and two-host acceptance remain pending.
+See the [component record](experiments/2026-10-19-participant-c2-components.md)
+for source, image and retained attempts.
