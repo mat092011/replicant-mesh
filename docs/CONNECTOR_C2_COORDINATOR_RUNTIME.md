@@ -3,9 +3,12 @@
 `build_c2_coordinator_runtime` assembles one CPU coordinator head from an exact
 selected coordinator child binding, its one genuine inherited coordinator
 artifact pin, and the active read-only coordinator assignment. Before loading
-weights, it compares the signed catalog, verifier key, assignment identity and
-digest, model-manifest fingerprint, active installation record, and selected
-runtime settings. The owner policy must validate and fit the global limits;
+weights, it compares the signed catalog and assignment bytes from the actual
+read-only installer view against the inherited pin guard, verifier key,
+assignment identity and digest, model-manifest fingerprint, active installation
+record, and selected runtime settings. The normalized selected `artifact_root`
+must exactly match the installer root. The owner policy must validate and fit
+the global limits;
 the effective CPU session capacity and request deadline narrow the signed
 manifest, owner reservation, and global policy. The weight reservation must
 cover the signed coordinator safetensors file size.
@@ -14,10 +17,13 @@ The runtime exposes guarded tokenizer, embedding, and output-head calls plus a
 one-token finite-shape health check. Model operations use the assigned
 coordinator model's bounded CPU executor. Caller cancellation or request timeout
 does not release an executing future. Shutdown has a shared maximum five-second
-budget and is successful only after the actual model confirms its CPU work has
-drained. An uncertain close retains the model, child-binding lease, and pin-set
-references for process-reap cleanup. The inherited pin set is caller-owned and
-is never closed by this runtime.
+budget, including close-lock contention, and is successful only after the actual
+model confirms its CPU work has drained and the selected-root lease exits. A
+timed-out drain remains fenced and retains the model, child-binding lease, and
+pin-set references; after actual CPU work finishes, a later bounded close can
+confirm reclamation. A faulted lease exit retains all references for
+process-reap cleanup. The inherited pin set is caller-owned and is never closed
+by this runtime.
 
 This is model assembly only. It does not start a process, open the declared
 consumer listener, connect to workers, schedule complete inference, enforce

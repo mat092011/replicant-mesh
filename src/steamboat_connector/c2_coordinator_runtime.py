@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import threading
 from types import MappingProxyType
 
@@ -53,9 +54,24 @@ def _validate_coordinator(binding, child_pins, installer, owner_policy):
     guard.check()
 
     settings = load_c2_coordinator_settings(binding)
+    # The signed selected settings choose the artifact store too.  Never let a
+    # caller-supplied installer silently redirect that selection.
+    if os.path.normcase(os.path.abspath(settings.artifact_root)) != os.path.normcase(
+            os.path.abspath(os.fspath(installer.root))):
+        raise CredentialError("selected coordinator artifact root differs from installer root")
     verifier = installer.verifier
-    signed_catalog = bytes(owner.signed_catalog)
-    signed_assignment = bytes(owner.signed_assignment)
+    view = installer.open_view(settings.assignment.assignment_id,
+        account_id=binding._spec.account_id, device_id=binding._spec.device_id,
+        role="coordinator")
+    if view.catalog is None or view.assignment is None:
+        raise CredentialError("active coordinator view has no verified signed documents")
+    # Single-component inherited pins retain only the exact anti-rollback
+    # record.  The read-only installer view is the genuine signed-byte owner.
+    signed_catalog = bytes(view.catalog.document_bytes)
+    signed_assignment = bytes(view.assignment.document_bytes)
+    if (hashlib.sha256(signed_catalog).hexdigest() != guard.catalog_sha256
+            or hashlib.sha256(signed_assignment).hexdigest() != guard.assignment_sha256):
+        raise CredentialError("installer signed documents differ from inherited pin")
     catalog = verifier.verify_catalog(signed_catalog)
     assignment = verifier.verify_assignment(
         signed_assignment, catalog, account_id=binding._spec.account_id,
@@ -86,9 +102,6 @@ def _validate_coordinator(binding, child_pins, installer, owner_policy):
     if not fits:
         raise CredentialError(f"coordinator reservation exceeds global owner policy: {reason}")
 
-    view = installer.open_view(settings.assignment.assignment_id,
-        account_id=binding._spec.account_id, device_id=binding._spec.device_id,
-        role="coordinator")
     manifest = view._locked_manifest()
     if (view.installer is not installer or view.role != "coordinator"
             or view.assignment is None
@@ -151,8 +164,10 @@ class C2CoordinatorRuntime:
         self._invalidated = threading.Event()
         self._state = "assembling"
         self._close_error = None
+        self._retryable_drain = False
         self._close_lock = asyncio.Lock()
         self._cleanup_tasks = []
+        self._model_close_task = None
         binding.subscribe_teardown(self._binding_invalidated)
 
     @property
@@ -200,11 +215,13 @@ class C2CoordinatorRuntime:
             error = task.exception()
             if error is not None:
                 self._close_error = error
-                self._state = "faulted"
+                if not self._retryable_drain:
+                    self._state = "faulted"
 
-    async def _run_model_call(self, operation):
+    async def _run_model_call(self, operation_factory):
         self.assert_live()
         try:
+            operation = operation_factory()
             result = await asyncio.wait_for(
                 operation, timeout=self._limits["request_timeout_seconds"])
         except BaseException:
@@ -214,32 +231,41 @@ class C2CoordinatorRuntime:
         return result
 
     async def tokenize(self, text):
-        return await self._run_model_call(self._model.tokenize(text))
+        return await self._run_model_call(lambda: self._model.tokenize(text))
 
     async def embed(self, ids):
-        return await self._run_model_call(self._model.embed(ids))
+        return await self._run_model_call(lambda: self._model.embed(ids))
 
     async def finish(self, hidden, *, all_logits=False):
         return await self._run_model_call(
-            self._model.finish(hidden, all_logits=all_logits))
+            lambda: self._model.finish(hidden, all_logits=all_logits))
 
     async def health_check(self):
         """Run one deterministic assigned-head embed/finish shape check."""
         self.assert_live()
         import torch
         token = torch.tensor([[1]], dtype=torch.int64, device="cpu")
-        hidden = await self._run_model_call(self._model.embed(token))
-        logits = await self._run_model_call(self._model.finish(hidden))
+        hidden = await self._run_model_call(lambda: self._model.embed(token))
+        logits = await self._run_model_call(lambda: self._model.finish(hidden))
         if (logits.device.type != "cpu" or logits.dtype != torch.float32
                 or tuple(logits.shape) != (1, 1, self._model.config["vocab_size"])
                 or not bool(torch.isfinite(logits).all())):
             raise C2CoordinatorRuntimeError("assigned coordinator head health check failed")
+        self.assert_live()
         return True
 
     async def close(self, grace_seconds=5.0):
         if type(grace_seconds) not in (int, float) or not 0 < grace_seconds <= 5.0:
             raise ValueError("coordinator runtime shutdown grace must be in (0, 5]")
-        async with self._close_lock:
+        deadline = self._loop.time() + float(grace_seconds)
+        try:
+            await asyncio.wait_for(self._close_lock.acquire(), timeout=float(grace_seconds))
+        except asyncio.TimeoutError as error:
+            self._invalidated.set()
+            self._close_error = error
+            raise C2CoordinatorRuntimeError(
+                "coordinator cleanup lock remained busy; retain owners") from error
+        try:
             if self._state == "closed":
                 return True
             if self._state == "faulted":
@@ -247,7 +273,7 @@ class C2CoordinatorRuntime:
                     "coordinator runtime cleanup is uncertain") from self._close_error
             self._state = "closing"
             self._invalidated.set()
-            deadline = self._loop.time() + float(grace_seconds)
+            self._retryable_drain = False
             try:
                 if self._model is None:
                     raise C2CoordinatorRuntimeError(
@@ -257,10 +283,30 @@ class C2CoordinatorRuntime:
                     raise C2CoordinatorRuntimeError("coordinator cleanup deadline elapsed")
                 model_grace = min(remaining,
                     self._model.limits["compute_cancel_grace_seconds"])
-                task = asyncio.create_task(self._model.close(timeout_seconds=model_grace))
-                self._cleanup_tasks.append(task)
+                task = self._model_close_task
+                if task is None or task.done():
+                    if task is not None:
+                        if task in self._cleanup_tasks:
+                            self._cleanup_tasks.remove(task)
+                        if task.cancelled() or task.exception() is not None:
+                            raise C2CoordinatorRuntimeError(
+                                "assigned coordinator model cleanup task failed") from (
+                                    None if task.cancelled() else task.exception())
+                        if task.result() is True:
+                            pass
+                        else:
+                            task = None
+                    if task is None:
+                        task = asyncio.create_task(
+                            self._model.close(timeout_seconds=model_grace))
+                        self._model_close_task = task
+                        self._cleanup_tasks.append(task)
                 done, pending = await asyncio.wait((task,), timeout=remaining)
                 if pending:
+                    # Keep this task and every owner for a later bounded retry.
+                    self._retryable_drain = True
+                    self._close_error = C2CoordinatorRuntimeError(
+                        "assigned coordinator CPU work did not drain before this attempt ended")
                     raise C2CoordinatorRuntimeError(
                         "assigned coordinator CPU work did not drain")
                 if task.cancelled():
@@ -271,23 +317,36 @@ class C2CoordinatorRuntime:
                     raise C2CoordinatorRuntimeError(
                         "assigned coordinator model cleanup failed") from task_error
                 if task.result() is not True:
+                    self._retryable_drain = True
                     raise C2CoordinatorRuntimeError(
-                        "assigned coordinator model did not confirm cleanup")
-                self._cleanup_tasks.remove(task)
-                self._model = None
+                        "assigned coordinator CPU work did not drain")
+                if task in self._cleanup_tasks:
+                    self._cleanup_tasks.remove(task)
+                self._model_close_task = None
+                # Retire the selected-root lease before dropping any owner.
+                # If it faults, retain model, pin set, and binding strongly.
                 self._lease.__exit__(None, None, None)
+                self._model = None
                 self._lease = None
                 self._binding = None
                 self._child_pins = None
                 self._installer = None
                 self._owner_policy = None
                 self._state = "closed"
+                self._retryable_drain = False
                 return True
             except BaseException as error:
                 self._close_error = error
-                self._state = "faulted"
+                if self._model_close_task is not None and not self._model_close_task.done():
+                    self._state = "closing"
+                elif self._retryable_drain:
+                    self._state = "closing"
+                else:
+                    self._state = "faulted"
                 raise C2CoordinatorRuntimeError(
                     "coordinator cleanup is uncertain; retain owners through process reap") from error
+        finally:
+            self._close_lock.release()
 
 
 async def build_c2_coordinator_runtime(child_binding_owner, child_pin_set, installer, *,
@@ -321,6 +380,7 @@ async def build_c2_coordinator_runtime(child_binding_owner, child_pin_set, insta
                 or runtime._model.limits["max_sessions"] < limits["max_sessions"]):
             raise CredentialError("loaded coordinator model did not retain its narrowed capacity")
         await runtime.health_check()
+        runtime.assert_live()
         runtime._state = "open"
         return runtime
     except BaseException as error:

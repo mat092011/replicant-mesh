@@ -149,6 +149,7 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
         settings_fixture = object.__new__(settings_tests.C2CoordinatorSettingsTests)
         settings_fixture.setUpClass()
         settings = settings_fixture.document()
+        settings["artifact_root"] = str(store_path)
         settings["catalog_public_key_hex"] = verifier.public_key.hex()
         settings["assignment"].update(
             assignment_id=assignment_id,
@@ -157,6 +158,16 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
             assignment_sha256=hashlib.sha256(assignment_bytes).hexdigest())
         if self._testMethodName.endswith("_bad_selected_catalog_key"):
             settings["catalog_public_key_hex"] = "04" + "11" * 64
+        elif self._testMethodName.endswith("_bad_valid_selected_catalog_key"):
+            from cryptography.hazmat.primitives.asymmetric import ec
+            alternate = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+                serialization.Encoding.X962,
+                serialization.PublicFormat.UncompressedPoint)
+            settings["catalog_public_key_hex"] = alternate.hex()
+            settings["assignment"]["catalog_public_key_sha256"] = hashlib.sha256(
+                alternate).hexdigest()
+        elif self._testMethodName.endswith("_bad_selected_artifact_root"):
+            settings["artifact_root"] = str(store_path / "different-root")
         elif self._testMethodName.endswith("_bad_selected_assignment_digest"):
             settings["assignment"]["assignment_sha256"] = "f" * 64
         elif self._testMethodName.endswith("_bad_selected_assignment_id"):
@@ -269,6 +280,135 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.runtime.health_check())
         self.assertTrue(await self.runtime.close(grace_seconds=5))
         self.assertEqual(self.runtime._state, "closed")
+        with self.assertRaises(C2CoordinatorRuntimeError):
+            await self.runtime.tokenize("after close")
+
+    async def test_cancelled_cpu_awaiter_retains_model_and_retry_reclaims_after_drain(self):
+        import threading
+        import weakref
+        import torch
+        from steamboat_runtime.coordinator_model import CoordinatorModel
+
+        model = self.runtime = await build_c2_coordinator_runtime(
+            self.child_owner, self.child_pins, self.installer,
+            owner_policy=self.owner_policy(1 << 30, sessions=2))
+        assigned = model._model
+        lease = model._lease
+        assigned_ref = weakref.ref(assigned)
+        original_embed = CoordinatorModel._embed
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def blocked_embed(actual_model, ids):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test executor release deadline elapsed")
+            return original_embed(actual_model, ids)
+
+        with mock.patch.object(CoordinatorModel, "_embed", blocked_embed):
+            call = asyncio.create_task(model.embed(torch.tensor([[1]], dtype=torch.int64)))
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            call.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await call
+            self.assertGreaterEqual(assigned.diagnostics()["pending_cpu_operations"], 1)
+            with self.assertRaises(C2CoordinatorRuntimeError):
+                await model.close(grace_seconds=0.05)
+            self.assertIs(model._model, assigned)
+            self.assertIs(model._lease, lease)
+            self.assertIs(model._child_pins, self.child_pins)
+            with self.assertRaises(C2CoordinatorRuntimeError):
+                await model.embed(torch.tensor([[1]], dtype=torch.int64))
+            release.set()
+            deadline = asyncio.get_running_loop().time() + 5
+            while assigned.diagnostics()["pending_cpu_operations"] and \
+                    asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+            self.assertEqual(assigned.diagnostics()["pending_cpu_operations"], 0)
+        self.assertTrue(await model.close(grace_seconds=5))
+        self.assertIsNone(model._model)
+        self.assertIsNone(model._lease)
+        self.assertIsNone(model._child_pins)
+        del assigned
+        self.assertIsNone(assigned_ref())
+
+    async def test_binding_invalidation_fences_but_retains_inflight_cpu_owner(self):
+        import threading
+        import torch
+        from steamboat_runtime.coordinator_model import CoordinatorModel
+
+        runtime = self.runtime = await build_c2_coordinator_runtime(
+            self.child_owner, self.child_pins, self.installer,
+            owner_policy=self.owner_policy(1 << 30, sessions=2))
+        assigned = runtime._model
+        original_embed = CoordinatorModel._embed
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def blocked_embed(actual_model, ids):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test executor release deadline elapsed")
+            return original_embed(actual_model, ids)
+
+        with mock.patch.object(CoordinatorModel, "_embed", blocked_embed):
+            call = asyncio.create_task(runtime.embed(torch.tensor([[1]], dtype=torch.int64)))
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            runtime._binding.invalidate("test selected-binding invalidation")
+            deadline = asyncio.get_running_loop().time() + 1
+            while runtime._state != "closing" and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.005)
+            self.assertEqual(runtime._state, "closing")
+            self.assertIs(runtime._model, assigned)
+            self.assertIs(runtime._child_pins, self.child_pins)
+            with self.assertRaises(C2CoordinatorRuntimeError):
+                await runtime.embed(torch.tensor([[1]], dtype=torch.int64))
+            self.assertFalse(call.done())
+            release.set()
+            done_deadline = asyncio.get_running_loop().time() + 5
+            while runtime._state != "closed" and asyncio.get_running_loop().time() < done_deadline:
+                await asyncio.sleep(0.01)
+            self.assertEqual(runtime._state, "closed")
+            self.assertIsNone(runtime._model)
+            self.assertIsNone(runtime._child_pins)
+            with self.assertRaises(C2CoordinatorRuntimeError):
+                await call
+
+    async def test_lease_exit_failure_keeps_closed_model_and_pin_owners_referenced(self):
+        runtime = self.runtime = await build_c2_coordinator_runtime(
+            self.child_owner, self.child_pins, self.installer,
+            owner_policy=self.owner_policy(1 << 30, sessions=2))
+        model, lease, pins = runtime._model, runtime._lease, runtime._child_pins
+        original_exit = lease.__exit__
+        with mock.patch.object(lease, "__exit__",
+                               side_effect=RuntimeError("injected lease cleanup uncertainty")):
+            with self.assertRaises(C2CoordinatorRuntimeError):
+                await runtime.close(grace_seconds=5)
+        self.assertEqual(runtime._state, "faulted")
+        self.assertIs(runtime._model, model)
+        self.assertIs(runtime._lease, lease)
+        self.assertIs(runtime._child_pins, pins)
+        # The injected failure happened before invoking the real lease owner;
+        # explicitly finish fixture teardown without weakening runtime rules.
+        original_exit(None, None, None)
+
+    async def test_close_lock_wait_is_inside_grace_and_retains_owners(self):
+        runtime = self.runtime = await build_c2_coordinator_runtime(
+            self.child_owner, self.child_pins, self.installer,
+            owner_policy=self.owner_policy(1 << 30, sessions=2))
+        model, pins = runtime._model, runtime._child_pins
+        await runtime._close_lock.acquire()
+        try:
+            started = asyncio.get_running_loop().time()
+            with self.assertRaises(C2CoordinatorRuntimeError):
+                await runtime.close(grace_seconds=0.05)
+            elapsed = asyncio.get_running_loop().time() - started
+            self.assertLess(elapsed, 0.5)
+            self.assertIs(runtime._model, model)
+            self.assertIs(runtime._child_pins, pins)
+        finally:
+            runtime._close_lock.release()
+        self.assertTrue(await runtime.close(grace_seconds=5))
 
     async def _assert_anchor_fault_precedes_model_materialization(self, accepted_errors):
         from steamboat_runtime.assigned_artifacts import AssignedArtifactView
@@ -283,6 +423,14 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
         from steamboat_connector.c2_coordinator_settings import C2CoordinatorSettingsError
         await self._assert_anchor_fault_precedes_model_materialization(
             (C2CoordinatorSettingsError,))
+
+    async def test_bad_valid_selected_catalog_key(self):
+        from steamboat_security.errors import CredentialError
+        await self._assert_anchor_fault_precedes_model_materialization((CredentialError,))
+
+    async def test_bad_selected_artifact_root(self):
+        from steamboat_security.errors import CredentialError
+        await self._assert_anchor_fault_precedes_model_materialization((CredentialError,))
 
     async def test_bad_selected_assignment_digest_fails_before_weight_loading(self):
         from steamboat_security.errors import CredentialError
