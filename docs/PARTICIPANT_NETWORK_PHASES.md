@@ -326,9 +326,11 @@ C2.1–C2.6 and the phase exit gate remain open.
 Component 35 subsequently passed 978 bounded combined tests with zero skips,
 and a separate supervised Clock handoff passed 91 native tests. A broader
 coordinator compatibility diagnostic exposed a reproducible cancellation
-regression after an 18-case focused pass; the fix remains in progress. These
-results do not establish fixed-role readiness or the real C2 route. The
-component record retains failures and controls. All C2 gates remain open.
+regression after an 18-case focused pass. The reviewed correction subsequently
+passed all 92 targeted compatibility cases with zero skips, including the
+previously failing cancellation control and model-backed checks. These results
+do not establish fixed-role readiness or the real C2 route. The component
+record retains failures and controls. All C2 gates remain open.
 
 ## C3 — Validate one GPU execution path
 
