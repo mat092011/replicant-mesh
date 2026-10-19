@@ -78,7 +78,9 @@ class FakeCgroup:
         if self.fail_attach:
             raise OSError("attach refused")
         self.attached = True
-        if process.poll() is not None:
+        # Popen.poll() mirrors CPython: it returns None without reaping while
+        # _waitpid_lock is held by the supervisor across PID placement.
+        if process.returncode is not None:
             self.set_empty(group)
             (Path(group) / "cgroup.procs").write_text("", encoding="ascii")
             return
@@ -114,15 +116,22 @@ class FakeProcess:
         self.returncode = None
         self.stdout = object()
         self.ignore_term = ignore_term
+        self._waitpid_lock = threading.Lock()
 
     def poll(self):
-        return self.returncode
+        if not self._waitpid_lock.acquire(blocking=False):
+            return None
+        try:
+            return self.returncode
+        finally:
+            self._waitpid_lock.release()
 
     def wait(self, timeout=None):
-        if self.returncode is None:
-            import subprocess
-            raise subprocess.TimeoutExpired(self.args, timeout)
-        return self.returncode
+        with self._waitpid_lock:
+            if self.returncode is None:
+                import subprocess
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            return self.returncode
 
     def on_signal(self, sig, *, kill_descendants=True):
         if sig == signal.SIGTERM and self.ignore_term:
@@ -976,6 +985,103 @@ class ProcessSupervisorTests(unittest.TestCase):
                 if "host" in self.backend._owned:
                     self.backend.stop(["host"], 0.4)
         self.assertFalse(thread.is_alive())
+
+    def test_stop_kills_during_pid_locked_attach_without_reaping_early(self):
+        attach_entered = threading.Event()
+        attach_release = threading.Event()
+        self.cgroup.attach_entered = attach_entered
+        self.cgroup.attach_release = attach_release
+        holder, popen, _ = self._spawn_patch(ignore_term=True)
+        signals = []
+        outcome = {}
+
+        def killpg(pid, sig):
+            signals.append(sig)
+            holder["process"].on_signal(sig)
+
+        with popen, mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg",
+                side_effect=killpg, create=True), mock.patch(
+                "steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.2):
+            thread = threading.Thread(target=lambda: outcome.setdefault(
+                "started", self.backend.start("host", sample_policy())))
+            thread.start()
+            try:
+                self.assertTrue(attach_entered.wait(1))
+                process = holder["process"]
+                self.assertFalse(process._waitpid_lock.acquire(blocking=False))
+                self.assertTrue(self.backend.request_stop(["host"])["host"])
+                deadline = time.monotonic() + 0.18
+                while 9 not in signals and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                self.assertIn(9, signals)
+                self.assertEqual(process.returncode, 0)
+                self.assertIsNone(process.poll())
+                owned = self.backend._owned["host"]
+                self.assertFalse(owned.reaped_event.is_set())
+                attach_release.set()
+                thread.join(1)
+                self.assertFalse(thread.is_alive())
+                self.assertFalse(outcome["started"])
+                self.assertTrue(owned.reaped_event.wait(0.2))
+                self.assertEqual(process.poll(), 0)
+                self.assertTrue(self.backend.stop(["host"], 0.3)["host"])
+            finally:
+                attach_release.set()
+                thread.join(1)
+
+    def test_old_monitor_retirement_rechecks_new_published_generation(self):
+        processes = []
+        signals = []
+
+        def spawn(*args, **kwargs):
+            process = FakeProcess(args[0], kwargs, self.cgroup, ignore_term=True)
+            process.pid = 44000 + len(processes)
+            processes.append(process)
+            return process
+
+        def killpg(pid, sig):
+            process = next(item for item in processes if item.pid == pid)
+            signals.append((pid, sig))
+            process.on_signal(sig)
+
+        original_owner = self.backend._stop_watchdog_owner
+        decision_seen = threading.Event()
+        allow_retirement = threading.Event()
+        paused = threading.Event()
+
+        def pause_after_finished_decision(watchdog):
+            result = original_owner(watchdog)
+            if result[1] and not paused.is_set():
+                paused.set()
+                decision_seen.set()
+                allow_retirement.wait(1)
+            return result
+
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
+                        side_effect=spawn), mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg",
+                side_effect=killpg, create=True), mock.patch.object(
+                self.backend, "_stop_watchdog_owner",
+                side_effect=pause_after_finished_decision), mock.patch(
+                "steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.2):
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            first_watchdog = self.backend._stop_watchdogs["host"]
+            self.assertTrue(self.backend.stop(["host"], 0.4)["host"])
+            self.assertTrue(decision_seen.wait(0.5))
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            second_owned = self.backend._owned["host"]
+            self.assertIsNotNone(self.backend._stop_watchdogs.get("host"))
+            allow_retirement.set()
+            time.sleep(0.02)
+            self.assertIs(self.backend._stop_watchdogs.get("host"), first_watchdog)
+            self.assertTrue(self.backend.request_stop(["host"])["host"])
+            deadline = time.monotonic() + 0.3
+            while (second_owned.process.returncode is None
+                   and time.monotonic() < deadline):
+                time.sleep(0.005)
+            self.assertEqual(second_owned.process.returncode, 0)
+            self.assertTrue(self.backend.stop(["host"], 0.3)["host"])
 
     def test_empty_cgroup_disposal_uses_real_rmdir_and_unknown_state_is_retained(self):
         empty = Path(self.temp.name) / "empty-group"

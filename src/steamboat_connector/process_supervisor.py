@@ -27,6 +27,7 @@ READY_TIMEOUT_SECONDS = 30.0
 READY_LINE_MAX = 64
 ROLE_CONFIG_MAX_BYTES = 65_536
 STOP_GRACE_MAX_SECONDS = 15.0
+ATTACH_PID_LOCK_TIMEOUT_SECONDS = 1.0
 SIGKILL = getattr(signal, "SIGKILL", 9)
 _CHILD_ENV = {"PATH": "/usr/bin:/bin", "PYTHONNOUSERSITE": "1"}
 
@@ -76,7 +77,12 @@ class _StopWatchdog:
 
 
 class ProcessRoleBackend:
-    """Start only the fixed worker/coordinator modules under cgroup-v2."""
+    """Own fixed role children under cgroup-v2 on the pinned CPython 3.12 runtime.
+
+    The private Popen._waitpid_lock is held over numeric PID placement into a
+    cgroup. This prevents poll/wait from reaping and freeing that PID between
+    reading it and writing cgroup.procs. Unsupported runtimes fail closed.
+    """
 
     def __init__(self, state_directory, cgroup, clock=time.monotonic):
         if not sys.platform.startswith("linux"):
@@ -268,25 +274,23 @@ class ProcessRoleBackend:
         deadline = target.cancel_deadline if intent else target.stop_deadline
         return deadline, target.term_deadline
 
-    def _ensure_stop_watchdog(self, role):
-        """Preallocate one bounded escalation worker before a role can run."""
-        with self._watchdog_lock:
-            current = self._stop_watchdogs.get(role)
-            if current is not None and not current.closing:
-                if current.thread.is_alive():
-                    return True
-            watchdog = _StopWatchdog(role)
-            self._stop_watchdogs[role] = watchdog
-            thread = threading.Thread(target=self._run_stop_watchdog,
-                                      args=(watchdog,),
-                                      name=f"participant-stop-{role}", daemon=True)
-            watchdog.thread = thread
-            try:
-                thread.start()
-            except RuntimeError:
-                self._stop_watchdogs.pop(role, None)
-                return False
+    def _ensure_stop_watchdog_locked(self, role):
+        """Ensure the role monitor while the caller holds _watchdog_lock."""
+        current = self._stop_watchdogs.get(role)
+        if current is not None and not current.closing and current.thread.is_alive():
             return True
+        watchdog = _StopWatchdog(role)
+        self._stop_watchdogs[role] = watchdog
+        thread = threading.Thread(target=self._run_stop_watchdog,
+                                  args=(watchdog,),
+                                  name=f"participant-stop-{role}", daemon=True)
+        watchdog.thread = thread
+        try:
+            thread.start()
+        except RuntimeError:
+            self._stop_watchdogs.pop(role, None)
+            return False
+        return True
 
     def _arm_stop_watchdog(self, role):
         watchdog = self._stop_watchdogs.get(role)
@@ -396,9 +400,15 @@ class ProcessRoleBackend:
             if finished:
                 with self._watchdog_lock:
                     if self._stop_watchdogs.get(watchdog.role) is watchdog:
-                        self._stop_watchdogs.pop(watchdog.role, None)
-                        watchdog.closing = True
-                return
+                        # Recheck the current generation after taking the
+                        # publication lock; start() may have installed a new
+                        # intent after the first observation.
+                        _, still_finished = self._stop_watchdog_owner(watchdog)
+                        if still_finished:
+                            self._stop_watchdogs.pop(watchdog.role, None)
+                            watchdog.closing = True
+                            return
+                continue
             if owner is not None:
                 if owner.process is not None:
                     _, term_deadline = self._effective_deadlines(owner)
@@ -449,20 +459,34 @@ class ProcessRoleBackend:
         except (OSError, ValueError, ResourceError, StorageError):
             return False
 
-        # A live role must always have its bounded escalation owner. Precreate
-        # at most one worker per supported role before publishing the start.
-        if not self._ensure_stop_watchdog(role):
-            return False
-
-        # Claim the role before config I/O or cgroup creation so a duplicate
-        # start cannot mutate its config or create an unowned process.
-        with self._lock:
-            if ((cancel_event is not None and cancel_event.is_set())
-                    or role in self._owned or role in self._start_intents):
+        # Publish intent and ensure its monitor under the same lock used by
+        # monitor retirement, eliminating the gap where a new generation could
+        # be claimed just as the old thread removes the role's sole watcher.
+        with self._watchdog_lock:
+            with self._lock:
+                if ((cancel_event is not None and cancel_event.is_set())
+                        or role in self._owned or role in self._start_intents):
+                    return False
+                intent = _StartIntent()
+                self._start_intents[role] = intent
+            if not self._ensure_stop_watchdog_locked(role):
+                with self._lock:
+                    if self._start_intents.get(role) is intent:
+                        del self._start_intents[role]
                 return False
-            intent = _StartIntent()
-            self._start_intents[role] = intent
-            self._arm_stop_watchdog(role)
+            watchdog = self._stop_watchdogs[role]
+            if cancel_event is not None and cancel_event.is_set():
+                intent.cancelled.set()
+                intent.finished = True
+                with self._lock:
+                    if self._start_intents.get(role) is intent:
+                        del self._start_intents[role]
+                self._stop_watchdogs.pop(role, None)
+                watchdog.closing = True
+                watchdog.armed.set()
+                return False
+            watchdog.armed.set()
+            watchdog.wake.set()
 
         group = None
         read_fd = write_fd = -1
@@ -523,7 +547,7 @@ class ProcessRoleBackend:
                         self._signal_owned_term(owned)
             os.close(read_fd)
             read_fd = -1
-            self.cgroup.attach_child(group, process)
+            self._attach_child_safely(group, process)
             owned.attached = True
             with self._lock:
                 cancelled = self._cancelled(intent, cancel_event) or owned.stopping
@@ -614,6 +638,22 @@ class ProcessRoleBackend:
             return not Path(group).exists()
         except OSError:
             return False
+
+    def _attach_child_safely(self, group, process):
+        if (sys.implementation.name != "cpython"
+                or sys.version_info[:2] != (3, 12)):
+            raise ResourceError("safe cgroup attachment requires pinned CPython 3.12")
+        waitpid_lock = getattr(process, "_waitpid_lock", None)
+        acquire = getattr(waitpid_lock, "acquire", None)
+        release = getattr(waitpid_lock, "release", None)
+        if not callable(acquire) or not callable(release):
+            raise ResourceError("Popen ownership lock is unavailable")
+        if not acquire(timeout=ATTACH_PID_LOCK_TIMEOUT_SECONDS):
+            raise ResourceError("timed out acquiring child PID ownership lock")
+        try:
+            self.cgroup.attach_child(group, process)
+        finally:
+            release()
 
     @staticmethod
     def _acquire_until(lock, deadline):
