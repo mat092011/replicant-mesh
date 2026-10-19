@@ -169,6 +169,11 @@ independently and leave C1b pending; containers cannot substitute for this gate.
 
 ## C2 — Deliver the headless participant connector
 
+**Current checkpoint, 2026-10-20:** source work in progress has been saved for
+publication at the maintainer's request. See the [resume checkpoint](PARTICIPANT_C2_PROGRESS.md)
+for verified components and unfinished work. This does not accept C2 or close
+any task below.
+
 **Outcome:** a participant can consume inference, contribute a supported shard,
 and explicitly enable personal orchestration using one controlled application.
 **Entry:** C0 for C2a, C1a for secure integration; real routing for final acceptance.

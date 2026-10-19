@@ -1153,3 +1153,10 @@ This is TLS/HELLO and controlled-reply component evidence, not a complete model
 route. The coordinator owner, physical resource controls, management/consumer
 composition and real two-host C2 gate remain pending. C2.1–C2.6 remain open;
 C3 and research statuses are unchanged.
+
+**C2 source checkpoint, 2026-10-20:** the maintainer requested committing and
+pushing the work in progress. The [resume checkpoint](PARTICIPANT_C2_PROGRESS.md)
+records the verified components, unreviewed coordinator-owner fixes, explicitly
+skipped unfinished TLS fixture, data-only pool accounting and remaining work.
+This is an intermediate source save before C2 acceptance. C2.1–C2.6 and its exit
+gate remain open; C3 and research statuses are unchanged.
