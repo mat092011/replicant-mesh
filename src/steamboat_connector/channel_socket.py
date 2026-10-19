@@ -1,9 +1,4 @@
-"""Bounded nonblocking TCP pump for fixed owner-minted C2 TLS engines.
-
-This component owns one already-connected socket and one fixed TLS owner. It
-does not frame plaintext, authenticate application messages, or claim route
-readiness. Its accounting boundary is TCP payload handed to/from the socket.
-"""
+"""Bounded nonblocking TCP pump for fixed owner-minted C2 TLS engines."""
 
 from __future__ import annotations
 
@@ -12,16 +7,14 @@ import socket
 import threading
 
 from steamboat_connector.traffic_budget import (
-    TrafficBudget, TrafficBudgetDenied, TrafficBudgetError,
+    TrafficBudget, TrafficBudgetDenied,
 )
 from steamboat_security.channel_tls import is_owned_worker_tls
 from steamboat_security.gateway_tls import is_owned_gateway_worker_tls
 from steamboat_security.gateway_coordinator_tls import (
     is_owned_gateway_coordinator_tls,
 )
-from steamboat_security.gateway_egress import (
-    GatewayCoordinatorEgress, is_owned_gateway_coordinator_egress,
-)
+from steamboat_security.gateway_egress import is_owned_gateway_coordinator_egress
 
 
 MAX_SOCKET_CHUNK = 16 * 1024
@@ -39,22 +32,19 @@ class ChannelBackpressure(ChannelSocketError):
 
 
 def _tls_engine(owner):
-    if is_owned_worker_tls(owner) or is_owned_gateway_worker_tls(owner):
-        return owner
-    if is_owned_gateway_coordinator_tls(owner):
-        return owner
-    if is_owned_gateway_coordinator_egress(owner):
+    if (is_owned_worker_tls(owner) or is_owned_gateway_worker_tls(owner)
+            or is_owned_gateway_coordinator_tls(owner)
+            or is_owned_gateway_coordinator_egress(owner)):
         return owner
     raise TypeError("TLS owner must be an internally minted fixed-profile owner")
 
 
 class ChannelSocket:
-    """Drive a connected nonblocking TCP socket and genuine owned TLS engine.
+    """Drive one connected TCP socket and one genuine owner-minted TLS engine.
 
-    ``test_socket=True`` is an explicit test-only escape hatch for a controlled
-    wrapper around a real socket. Production accepts only the exact socket type.
-    TrafficBudget role binding/allocation must already exist; construction never
-    creates or refreshes an allowance.
+    `test_socket=True` is an explicit test-only escape hatch for wrappers around
+    real sockets. Production accepts only a connected IPv4/IPv6 TCP socket.
+    The caller must bind the TrafficBudget role before constructing the driver.
     """
 
     def __init__(self, connected_socket, tls_owner, traffic_budget, *, role,
@@ -62,13 +52,15 @@ class ChannelSocket:
         if (type(traffic_budget) is not TrafficBudget
                 or type(role) is not str or type(boot_id) is not str):
             raise TypeError("socket driver requires a bound TrafficBudget role")
-        if type(connected_socket) is not socket.socket and not (
-                test_socket is True and callable(getattr(connected_socket, "send", None))
-                and callable(getattr(connected_socket, "recv", None))
-                and callable(getattr(connected_socket, "close", None))):
-            raise TypeError("socket must be an exact connected socket")
         if type(test_socket) is not bool:
             raise TypeError("test_socket flag must be boolean")
+        if type(connected_socket) is socket.socket:
+            self._validate_connected_tcp(connected_socket)
+        elif (test_socket and all(callable(getattr(connected_socket, name, None))
+                                  for name in ("setblocking", "send", "recv", "close"))):
+            pass
+        else:
+            raise TypeError("socket must be an exact connected TCP socket")
         self._socket = connected_socket
         self._tls = _tls_engine(tls_owner)
         self._budget = traffic_budget
@@ -77,6 +69,7 @@ class ChannelSocket:
         self._lock = threading.RLock()
         self._pending_ciphertext = bytearray()
         self._pending_ciphertext_kind = "data"
+        self._tls_output_kind = "data"
         self._pending_plaintext = None
         self._pending_plaintext_kind = None
         self._received_plaintext = None
@@ -85,8 +78,24 @@ class ChannelSocket:
         self._failure = None
         self._socket_sent = 0
         self._socket_received = 0
+        self._io_outcome_uncertain = False
+        self._metering_uncertain = False
         self._backpressure = None
         self._socket.setblocking(False)
+
+    @staticmethod
+    def _validate_connected_tcp(sock):
+        if sock.family not in (socket.AF_INET, socket.AF_INET6):
+            raise TypeError("production socket must use IPv4 or IPv6")
+        if (sock.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) & 0xF) != socket.SOCK_STREAM:
+            raise TypeError("production socket must be TCP stream")
+        try:
+            peer = sock.getpeername()
+        except OSError as error:
+            raise TypeError("production socket must already be connected") from error
+        if (type(peer) is not tuple or len(peer) < 2
+                or type(peer[1]) is not int or not 1 <= peer[1] <= 65535):
+            raise TypeError("production socket peer address is malformed")
 
     @property
     def failure(self):
@@ -95,6 +104,14 @@ class ChannelSocket:
     @property
     def socket_byte_counts(self):
         return self._socket_sent, self._socket_received
+
+    @property
+    def io_outcome_uncertain(self):
+        return self._io_outcome_uncertain
+
+    @property
+    def metering_uncertain(self):
+        return self._metering_uncertain
 
     @property
     def pending_ciphertext_bytes(self):
@@ -109,10 +126,11 @@ class ChannelSocket:
         return self._incoming_cleanup_mode
 
     @property
-    def ready_for_plaintext(self):
+    def tls_handshake_complete(self):
         with self._lock:
             self._require_live()
             try:
+                self._assert_owner_live()
                 return bool(self._tls.handshake_complete)
             except Exception as error:
                 self._retire("TLS handshake/liveness check failed", error)
@@ -122,9 +140,14 @@ class ChannelSocket:
             raise TypeError("cleanup mode must be boolean")
         with self._lock:
             self._require_live()
+            try:
+                self._assert_owner_live()
+            except Exception as error:
+                self._retire("TLS liveness check failed", error)
             if self._incoming_cleanup_mode and not enabled:
                 raise ChannelSocketError("incoming cleanup mode is irreversible")
-            if enabled and (self._pending_ciphertext or self._pending_plaintext is not None):
+            if enabled and (self._pending_ciphertext or self._pending_plaintext is not None
+                            or self._tls.pending_encrypted_bytes):
                 raise ChannelBackpressure("drain pending data before cleanup-only mode")
             self._incoming_cleanup_mode = enabled
 
@@ -135,8 +158,14 @@ class ChannelSocket:
             raise ValueError("plaintext kind is invalid")
         with self._lock:
             self._require_live()
-            if not self.ready_for_plaintext:
-                raise ChannelSocketError("TLS handshake is incomplete")
+            try:
+                self._assert_owner_live()
+                if not self._tls.handshake_complete:
+                    raise ChannelSocketError("TLS handshake is incomplete")
+            except ChannelSocketError:
+                raise
+            except Exception as error:
+                self._retire("TLS liveness check failed", error)
             if self._pending_plaintext is not None:
                 raise ChannelBackpressure("one plaintext chunk is already pending")
             self._pending_plaintext = data
@@ -145,40 +174,46 @@ class ChannelSocket:
     def take_plaintext(self):
         with self._lock:
             self._require_live()
+            try:
+                self._assert_owner_live()
+            except Exception as error:
+                self._retire("TLS liveness check failed", error)
             value = self._received_plaintext
             self._received_plaintext = None
             return value
 
     def pump(self):
-        """Perform one bounded readiness/deadline and socket-I/O iteration."""
+        """Perform one deadline check and bounded nonblocking socket iteration."""
         with self._lock:
             self._require_live()
             self._backpressure = None
+            send_calls = 0
+            receive_calls = 0
             try:
-                # Owner checks drive the TLS deadline even when the socket is idle.
-                _ = self._tls.handshake_complete
+                self._assert_owner_live()
                 self._collect_ciphertext()
-                calls = 0
-                while self._pending_ciphertext and calls < MAX_IO_CALLS_PER_PUMP:
+                self._drive_tls_read_and_write()
+                while self._pending_ciphertext and send_calls < MAX_IO_CALLS_PER_PUMP:
                     if not self._send_once():
                         break
-                    calls += 1
-                if self._backpressure is None and not self._pending_ciphertext:
-                    self._drive_plaintext()
-                calls = 0
-                while (calls < MAX_IO_CALLS_PER_PUMP
-                       and self._received_plaintext is None):
+                    send_calls += 1
+                # TLS decoding does not wait for writer readiness. Every input
+                # chunk is decoded before another bounded receive can accumulate.
+                self._drive_tls_read_and_write(write_allowed=False)
+                while (self._backpressure is None
+                       and self._received_plaintext is None
+                       and receive_calls < MAX_IO_CALLS_PER_PUMP):
                     if not self._receive_once():
                         break
-                    calls += 1
-                    if self._received_plaintext is not None:
-                        break
+                    receive_calls += 1
+                    self._drive_tls_read_and_write(write_allowed=False)
                 self._collect_ciphertext()
-                while (self._pending_ciphertext and calls < MAX_IO_CALLS_PER_PUMP
+                while (self._pending_ciphertext
+                       and send_calls < MAX_IO_CALLS_PER_PUMP
                        and self._backpressure is None):
                     if not self._send_once():
                         break
-                    calls += 1
+                    send_calls += 1
             except ChannelBackpressure:
                 pass
             except ChannelSocketError:
@@ -189,7 +224,9 @@ class ChannelSocket:
                     "backpressure": self._backpressure,
                     "socket_byte_counts": self.socket_byte_counts,
                     "pending_ciphertext_bytes": len(self._pending_ciphertext),
-                    "pending_plaintext_bytes": len(self._pending_plaintext or b"")}
+                    "pending_plaintext_bytes": len(self._pending_plaintext or b""),
+                    "io_outcome_uncertain": self._io_outcome_uncertain,
+                    "metering_uncertain": self._metering_uncertain}
 
     tick = pump
 
@@ -199,33 +236,43 @@ class ChannelSocket:
                 return
             self._retire("socket driver closed", raise_error=False)
 
+    def _assert_owner_live(self):
+        self._tls.assert_transport_live()
+
     def _safe_handshake(self):
         if self._closed:
             return False
         try:
+            self._assert_owner_live()
             return bool(self._tls.handshake_complete)
         except Exception as error:
             self._retire("TLS deadline or policy check failed", error)
-            return False
 
-    def _collect_ciphertext(self, *, kind="data"):
+    def _collect_ciphertext(self):
+        self._assert_owner_live()
         if self._pending_ciphertext:
             return
-        try:
-            chunk = self._tls.take_encrypted(MAX_PENDING_CIPHERTEXT)
-        except Exception as error:
-            self._retire("TLS encrypted output failed", error)
-        if type(chunk) is not bytes or len(chunk) > MAX_PENDING_CIPHERTEXT:
+        pending = self._tls.pending_encrypted_bytes
+        if not pending:
+            self._tls_output_kind = "data"
+            return
+        chunk = self._tls.take_encrypted(min(MAX_PENDING_CIPHERTEXT, pending))
+        if type(chunk) is not bytes or not chunk or len(chunk) > MAX_PENDING_CIPHERTEXT:
             self._retire("TLS owner returned malformed encrypted output")
-        if chunk:
-            self._pending_ciphertext.extend(chunk)
-            self._pending_ciphertext_kind = kind
+        self._pending_ciphertext.extend(chunk)
+        self._pending_ciphertext_kind = self._tls_output_kind
+        if self._tls.pending_encrypted_bytes == 0:
+            self._tls_output_kind = "data"
 
-    def _drive_plaintext(self):
+    def _drive_tls_read_and_write(self, *, write_allowed=True):
+        self._assert_owner_live()
         if not self._tls.handshake_complete:
             return
-        if self._pending_plaintext is not None:
+        if (write_allowed and self._pending_plaintext is not None
+                and not self._pending_ciphertext
+                and self._tls.pending_encrypted_bytes == 0):
             kind = self._pending_plaintext_kind
+            self._tls_output_kind = kind
             try:
                 written = self._tls.write_plaintext(self._pending_plaintext)
             except Exception as error:
@@ -236,8 +283,9 @@ class ChannelSocket:
                 self._pending_plaintext = self._pending_plaintext[written:] or None
                 if self._pending_plaintext is None:
                     self._pending_plaintext_kind = None
-                self._collect_ciphertext(kind=kind)
+                self._collect_ciphertext()
         if self._received_plaintext is None:
+            self._assert_owner_live()
             try:
                 plaintext = self._tls.read_plaintext(MAX_PENDING_PLAINTEXT)
             except Exception as error:
@@ -246,6 +294,7 @@ class ChannelSocket:
                 if type(plaintext) is not bytes or len(plaintext) > MAX_PENDING_PLAINTEXT:
                     self._retire("TLS owner returned malformed plaintext")
                 self._received_plaintext = plaintext
+                self._collect_ciphertext()
 
     def _allowance(self, direction, max_bytes=MAX_SOCKET_CHUNK):
         kind = (self._pending_ciphertext_kind if direction == "send"
@@ -253,112 +302,108 @@ class ChannelSocket:
         try:
             allowance = self._budget.reserve(
                 self._role, self._boot_id, direction, kind, max_bytes)
-            try:
-                allowance.assert_live()
-            except Exception:
-                try:
-                    allowance.settle(0, outcome_known=True)
-                except Exception:
-                    pass
-                raise
-            return allowance
         except TrafficBudgetDenied as error:
             self._backpressure = str(error)
             raise ChannelBackpressure(str(error)) from error
-        except Exception as error:
-            self._retire("traffic allowance or liveness check failed", error)
-
-    def _send_once(self):
-        payload = bytes(self._pending_ciphertext[:MAX_SOCKET_CHUNK])
-        allowance = self._allowance("send", len(payload))
         try:
-            count = self._socket.send(payload)
-        except (BlockingIOError, InterruptedError) as error:
+            allowance.assert_live()
+        except Exception as error:
             try:
                 allowance.settle(0, outcome_known=True)
-            except Exception as settle_error:
-                self._retire("known-zero send settlement failed", settle_error)
+            except Exception:
+                self._metering_uncertain = True
+            self._retire("traffic allowance or liveness check failed", error)
+        return allowance
+
+    def _send_once(self):
+        self._assert_owner_live()
+        payload = bytes(self._pending_ciphertext[:MAX_SOCKET_CHUNK])
+        allowance = self._allowance("send", len(payload))
+        self._assert_owner_live()
+        try:
+            count = self._socket.send(payload)
+        except (BlockingIOError, InterruptedError):
+            self._settle(allowance, 0, outcome_known=True)
             return False
         except OSError as error:
             if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
-                try:
-                    allowance.settle(0, outcome_known=True)
-                except Exception as settle_error:
-                    self._retire("known-zero send settlement failed", settle_error)
+                self._settle(allowance, 0, outcome_known=True)
                 return False
-            try:
-                allowance.settle(len(payload), outcome_known=False)
-            except Exception:
-                pass
+            self._io_outcome_uncertain = True
+            self._settle_uncertain_io(allowance)
             self._retire("socket send outcome is uncertain", error)
         except BaseException as error:
-            try:
-                allowance.settle(len(payload), outcome_known=False)
-            except Exception:
-                pass
+            self._io_outcome_uncertain = True
+            self._settle_uncertain_io(allowance)
             self._retire("socket send outcome is uncertain", error)
         if type(count) is not int or not 0 <= count <= len(payload):
-            try:
-                allowance.settle(len(payload), outcome_known=False)
-            except Exception:
-                pass
+            self._io_outcome_uncertain = True
+            self._settle_uncertain_io(allowance)
             self._retire("socket returned an invalid send count")
-        try:
-            allowance.settle(count, outcome_known=True)
-        except Exception as error:
-            self._retire("send settlement failed", error)
+        if count:
+            self._socket_sent += count
+        self._settle(allowance, count, outcome_known=True)
+        if count == 0:
+            self._retire("socket send made no progress")
         if count:
             del self._pending_ciphertext[:count]
-            self._socket_sent += count
         return count > 0
 
     def _receive_once(self):
+        self._assert_owner_live()
         allowance = self._allowance("receive")
+        self._assert_owner_live()
         try:
             data = self._socket.recv(MAX_SOCKET_CHUNK)
         except (BlockingIOError, InterruptedError):
-            try:
-                allowance.settle(0, outcome_known=True)
-            except Exception as error:
-                self._retire("known-zero receive settlement failed", error)
+            self._settle(allowance, 0, outcome_known=True)
             return False
         except OSError as error:
             if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
-                try:
-                    allowance.settle(0, outcome_known=True)
-                except Exception as settle_error:
-                    self._retire("known-zero receive settlement failed", settle_error)
+                self._settle(allowance, 0, outcome_known=True)
                 return False
-            try:
-                allowance.settle(MAX_SOCKET_CHUNK, outcome_known=False)
-            except Exception:
-                pass
+            self._io_outcome_uncertain = True
+            self._settle_uncertain_io(allowance)
             self._retire("socket receive outcome is uncertain", error)
         except BaseException as error:
-            try:
-                allowance.settle(MAX_SOCKET_CHUNK, outcome_known=False)
-            except Exception:
-                pass
+            self._io_outcome_uncertain = True
+            self._settle_uncertain_io(allowance)
             self._retire("socket receive outcome is uncertain", error)
         if type(data) is not bytes or len(data) > MAX_SOCKET_CHUNK:
-            try:
-                allowance.settle(MAX_SOCKET_CHUNK, outcome_known=False)
-            except Exception:
-                pass
+            self._io_outcome_uncertain = True
+            self._settle_uncertain_io(allowance)
             self._retire("socket returned malformed receive data")
-        try:
-            allowance.settle(len(data), outcome_known=True)
-        except Exception as error:
-            self._retire("receive settlement failed", error)
+        if data:
+            self._socket_received += len(data)
+        self._settle(allowance, len(data), outcome_known=True)
         if not data:
             self._retire("TCP peer closed the stream")
-        self._socket_received += len(data)
+        self._assert_owner_live()
         try:
             self._tls.feed_encrypted(data)
         except Exception as error:
             self._retire("TLS encrypted input failed", error)
         self._collect_ciphertext()
         return True
+
+    def _settle(self, allowance, actual, *, outcome_known):
+        try:
+            result = allowance.settle(actual, outcome_known=outcome_known)
+            if result.get("uncertain"):
+                self._metering_uncertain = True
+        except Exception as error:
+            self._metering_uncertain = True
+            self._retire("traffic settlement failed after socket I/O", error)
+
+    def _settle_uncertain_io(self, allowance):
+        # The syscall may have transferred bytes, but its lower bound is zero.
+        # The ledger retains the full reservation and records zero observed bytes.
+        try:
+            result = allowance.settle(0, outcome_known=False)
+            if not result.get("uncertain"):
+                self._metering_uncertain = True
+        except Exception:
+            self._metering_uncertain = True
 
     def _require_live(self):
         if self._closed:
@@ -371,14 +416,15 @@ class ChannelSocket:
             return
         self._closed = True
         self._failure = reason
-        self._pending_ciphertext.clear()
-        self._pending_plaintext = None
-        self._pending_plaintext_kind = None
-        self._received_plaintext = None
         for obj, method in ((self._socket, "close"), (self._tls, "close")):
             try:
                 getattr(obj, method)()
             except Exception:
                 pass
+        # Unsent ciphertext is discarded only after retiring the entire TLS stream.
+        self._pending_ciphertext.clear()
+        self._pending_plaintext = None
+        self._pending_plaintext_kind = None
+        self._received_plaintext = None
         if raise_error:
             raise ChannelSocketError(reason) from cause

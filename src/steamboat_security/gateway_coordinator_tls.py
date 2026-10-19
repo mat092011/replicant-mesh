@@ -405,6 +405,35 @@ class OwnedGatewayCoordinatorTLS:
             except GatewayCoordinatorTLSError:
                 return False
 
+    def assert_transport_live(self):
+        """Check policy/clock liveness without taking ciphertext from the BIO."""
+        with self._lock:
+            self._require_open_locked()
+            if self._handshake_done:
+                self._assert_live_locked()
+                return True
+            sample = self._sample_clock_locked()
+            if sample.monotonic >= self._started + MAX_HANDSHAKE_SECONDS:
+                self._fault_locked()
+                raise GatewayCoordinatorTLSError("TLS handshake deadline exceeded")
+            try:
+                current = self.policy_store.current()
+            except Exception as error:
+                self._fault_locked()
+                raise GatewayCoordinatorTLSError("current channel policy is unavailable") from error
+            if (current.revision != self._policy_view.revision
+                    or current.policy_digest != self._policy_view.policy_digest):
+                self._fault_locked()
+                raise GatewayCoordinatorTLSError(
+                    "channel policy changed during TLS handshake")
+            return False
+
+    @property
+    def pending_encrypted_bytes(self):
+        with self._lock:
+            self._require_open_locked()
+            return self.__outgoing.pending
+
     @property
     def authenticated_channel(self):
         with self._lock:

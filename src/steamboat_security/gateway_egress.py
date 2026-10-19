@@ -251,6 +251,18 @@ class GatewayCoordinatorEgress:
                 self._verify_gateway_peer()
             return self._gateway_verified
 
+    def assert_transport_live(self):
+        """Run the live policy/profile check without taking queued ciphertext."""
+        with self._lock:
+            self._assert_transport_live_locked()
+            return self._gateway_verified
+
+    @property
+    def pending_encrypted_bytes(self):
+        with self._lock:
+            self._assert_transport_live_locked()
+            return self._tls.pending_encrypted_bytes
+
     def take_encrypted(self, maximum=16 * 1024):
         with self._lock:
             self._assert_transport_live_locked()

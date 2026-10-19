@@ -269,6 +269,23 @@ class OwnedWorkerTLS:
         with self._lock:
             return self._handshake_done and not self._closed and not self._faulted
 
+    def assert_transport_live(self):
+        """Check Clock, owner state and startup deadline without consuming bytes."""
+        with self._lock:
+            self._require_live_locked()
+            sample = self._sample_clock_locked()
+            if (not self._handshake_done
+                    and sample.monotonic >= self._started + MAX_HANDSHAKE_SECONDS):
+                self._fail_locked()
+                raise OwnedWorkerTLSError("TLS handshake deadline exceeded")
+            return self._handshake_done
+
+    @property
+    def pending_encrypted_bytes(self):
+        with self._lock:
+            self._require_live_locked()
+            return self.__outgoing.pending
+
     def take_encrypted(self, maximum=MAX_CHUNK_BYTES):
         with self._lock:
             self._require_live_locked()

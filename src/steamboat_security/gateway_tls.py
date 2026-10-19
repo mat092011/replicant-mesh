@@ -357,6 +357,35 @@ class OwnedGatewayWorkerTLS:
             except GatewayWorkerTLSError:
                 return False
 
+    def assert_transport_live(self):
+        """Check current policy and deadline without removing TLS output bytes."""
+        with self._lock:
+            self._require_live_locked()
+            if self._handshake_done:
+                self._assert_live_locked()
+                return True
+            sample = self._sample_clock_locked()
+            if sample.monotonic >= self._started + MAX_HANDSHAKE_SECONDS:
+                self._fault_locked()
+                raise GatewayWorkerTLSError("TLS handshake deadline exceeded")
+            try:
+                view = self.policy_store.current()
+            except Exception as error:
+                self._fault_locked()
+                raise GatewayWorkerTLSError("current channel policy is unavailable") from error
+            if (view.revision != self._view.revision
+                    or view.policy_digest != self._view.policy_digest):
+                self._fault_locked()
+                raise GatewayWorkerTLSError(
+                    "channel policy changed during TLS handshake")
+            return False
+
+    @property
+    def pending_encrypted_bytes(self):
+        with self._lock:
+            self._require_live_locked()
+            return self.__outgoing.pending
+
     def take_encrypted(self, maximum=MAX_CHUNK_BYTES):
         with self._lock:
             self._require_live_locked()
