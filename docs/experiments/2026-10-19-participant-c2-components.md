@@ -217,16 +217,112 @@ The retained component-8 and component-9 failed test log hashes are respectively
 `da60ba3f77296a2fb29c2801271a013c33c2ae5f72c1c4204845698aca0260b6`
 and `7a6b307217a2bf295222d78340d608f76d0f4be72b1060cf5a4ac029bd876214`.
 
+## Shared host pin, gateway admission and native lifecycle components
+
+The host role now has one aggregate artifact pin for up to three active signed
+assignments in the same installer. Its concrete per-assignment guards cannot
+release the group. A real inherited-descriptor exec, installer exclusion, three
+resident assigned handlers, unequal interleaving against the complete reference
+(`atol=1e-3, rtol=0`) and zero session/cache cleanup are exercised on Linux.
+The gate also checks duplicate boot rejection, descriptor alias reuse and
+retained uncertain close outcomes. The supervisor's blocked-attachment control
+uses a real CPython child: SIGKILL leaves its PID reserved as an unreaped zombie
+until placement releases its ownership lock, then the owned child is reaped.
+The attachment fixture still supplies cgroup population; it is not kernel quota
+evidence.
+
+Component 12 retained one error among 224 tests because its new model fixture
+tried cleanup on a second asyncio loop. Component 13 retained one error because
+it called a nonexistent `PipelineModel.close`. One retained `asyncio.Runner`
+now owns execution and shutdown; reference sessions use their actual close and
+diagnostic APIs. Component 14 passed all 224 cases. Component 15 retained one
+error among 229 tests because an uncertain-close fixture expected a subclass
+instead of the shared owner's `ArtifactPinError`; that assertion was corrected.
+The retained failed test log hashes, respectively, are
+`67b432fecd429647dd265855c1a596a8564fddedccb6bdc88e4df826f923b305`,
+`77dfddecd2e61017afe7672793b26861fa0802ecf7571a5f6506593009a963b0`
+and `9cb3635f7957138401d68c43d445d3a048655141b5d30fb892f678ea403c398d`.
+
+Component 16 passed **229 tests, zero skips/failures/errors, 18.227 seconds**.
+Its frozen source was
+`cb871d4424e83dcf2417b939d9f01d89432c16ac287b64a3865a8ad56d4984ae`
+(366 files), and its image was
+`sha256:b6a362d047c83258f428eb89c48659bd8d237d940872b259ec0ae86f2e78457d`.
+All source files matched; source-proof and test log hashes are
+`30e41d785dcd72639e2df966f81d126335300b8cc0eb43679626f8f317217910`
+and `cbb92d544da5a43d6ebb0619f481b123dbf32531d43970c7b9c44b42a601146a`.
+
+Gateway delegation now enters C1 authorization and the existing secure runtime
+bridge through explicit APIs, preserving grants, exact parsed-request capture,
+session ownership and cleanup. Stream closure serializes with session claims.
+An admission fault after a new claim but before runtime owner capture retains
+the invalidated claim and fences the runtime until supervised reclamation;
+it does not claim an absent cache or successful recovery. TLS client ownership
+uses the actual configured key/certificate, pinned authenticated gateway and
+bounded MemoryBIO I/O. A client handshake alone does not prove that the server
+requested and authorized its client certificate.
+
+Component 17 retained one error among 298 tests because its native fixture
+changed a manifest fingerprint, which the actual handler correctly rejected.
+The fixture now constructs synthetic signed policy for the genuine validated
+manifest identity. Its retained failed log hash is
+`767886129e288a0ce5bd20dba5925cfea6bb2361dbf68a5caf77fab3224bb3f5`.
+Component 18 passed **299 tests, zero skips/failures/errors, 18.842 seconds**.
+Its frozen source was
+`cb3dd1f5c9c7476ceebe85f0cca81af276bcc80cb12f253c2a9fc40367b91d16`
+(375 files), and its image was
+`sha256:cbd653c2147c0191c7ad1cca6568ac2a585c016a45205a2ccf981c92be806c5e`.
+All 375 files matched; source-proof and test log hashes are
+`7317317f888346ae6d74369c9743c97223ecb3b6003cf49841f9fa41e8490e82`
+and `94b27e563f606b0a66675c9fd424820c5fcf5207a70ca77d76610784b4ba5eb1`.
+It includes a real `WorkerHandler` with a deterministic blocking executor:
+stream loss during Step retains its simulated allocated cache until compute
+returns, then clears it and its runtime owner. This is lifecycle evidence,
+separate from the assigned-model numerical test. All component containers used
+the original bounded settings, were inspected after exit and removed, and had
+no OOM kill. Counts overlap previous inventories.
+
+Review still found untested protocol weaknesses after this passing inventory:
+per-fragment reassembly objects were outside payload accounting, CONTROL used
+an excessive size ceiling, and suspended decoder generators could replay an
+accepted frame. Corrections and new negative controls are required. Passing
+component 18 does not accept those paths or establish a socket work channel.
+
+## Separate-device OS resource enforcement component
+
+A task-scoped probe on the inventoried ZimaBlade used native Debian Python 3.9.2
+and the actual `CgroupV2Controller` source (SHA-256
+`c2884d035c0826621f0c968bef742a5b2fef0e9a46f5a5b17f77de60801c6f44`).
+The operator created an exclusive temporary cgroup capped at 128 MiB, 0.2 CPU
+and 32 PIDs, with bounded control and delegated execution children. The probe
+entered its control cgroup before dropping to UID 1000, then created its role
+group without root privileges. No existing workload or global setting changed.
+
+Read-back role limits were `cpu.max=10000 100000`, `memory.max=25165824` and
+`memory.swap.max=0`. The three-second CPU loop used **310,758 microseconds** of
+CPU over **3.098 seconds**, with **31 throttling events**. Its separate child
+attempting a 96 MiB allocation exited with SIGKILL and incremented the role's
+OOM-kill counter by one. Both children were owned by this probe. Its role,
+temporary task subtree and uploaded private sources were removed. The first
+attempt failed before role creation because the uploaded package lacked a
+transitive client import; that failed result and complete task cleanup remain
+recorded. The corrected attempt uploaded the actual dependency closure.
+
+This establishes kernel CPU/RAM enforcement for that isolated OS component.
+It does not validate the pinned CPython 3.12 execution backend, persistent pool
+delegation, combined role enforcement, disk/traffic limits or C2 readiness.
+The laptop and ZimaBlade remain sufficient to attempt the planned CPU scope.
+
 ## Remaining acceptance work
 
 The daemon still needs actual backend, assigned artifact ownership and readiness
 integration. The adapter's blocking file verification has a source-reviewed
 replacement using a lifetime artifact pin and live in-memory authority guard;
-its single-assignment native and numerical checks passed, while aggregate host
-ownership and supervisor handoff remain pending. Process supervision now has
-the passing component inventory above, with independent source review still
-required for further ownership concerns. These cases alone cannot establish a
-passing application or physical enforcement.
+its single-assignment and aggregate native/numerical checks passed, while actual
+supervisor handoff remains pending. Process supervision and the core gateway
+bridge have source review and the component inventory above. Actual transport
+and full application ownership still need acceptance; the separate OS probe
+does not establish combined application enforcement.
 
 C2 still requires actual shared CPU/RAM, disk/staging/log and traffic enforcement;
 authenticated enrollment and expiring loaded readiness; the trusted terminating
