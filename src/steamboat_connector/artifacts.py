@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import copy
+from contextlib import contextmanager
 import hashlib
 import math
 import os
@@ -35,6 +36,10 @@ class ArtifactInstallError(RuntimeError):
 
 class ArtifactQuotaError(ArtifactInstallError):
     pass
+
+
+class ArtifactInstallBusy(ArtifactInstallError):
+    """A pinned runtime currently owns immutable artifact-store contents."""
 
 
 class ArtifactRetriever(Protocol):
@@ -91,7 +96,8 @@ class LocalArtifactStoreRetriever:
 class ArtifactInstaller:
     def __init__(self, root, verifier, *, disk_ceiling_bytes, disk_headroom_bytes,
                  lock_timeout_seconds=5, install_timeout_seconds=300, uid=None,
-                 wall_clock=None, monotonic_clock=None, runtime_lock_path=None):
+                 wall_clock=None, monotonic_clock=None, runtime_lock_path=None,
+                 read_only=False):
         if not isinstance(verifier, CatalogVerifier):
             raise TypeError("a pinned catalog verifier is required")
         if (type(disk_ceiling_bytes) is not int or not 1 <= disk_ceiling_bytes <= (1 << 40)
@@ -115,16 +121,35 @@ class ArtifactInstaller:
         self.monotonic_clock = monotonic_clock or time.monotonic
         self.runtime_lock_path = (Path(runtime_lock_path) if runtime_lock_path is not None
                                   else None)
-        root_fd = open_private_directory(self.root, create=True, uid=self.uid)
+        if type(read_only) is not bool:
+            raise ValueError("read_only must be an explicit boolean")
+        self.read_only = read_only
+        root_fd = open_private_directory(self.root, create=not read_only, uid=self.uid)
         os.close(root_fd)
-        with self._locked():
-            state = self._load_state(create=True)
-            self._recover_reservations(state)
+        if read_only:
+            state = self._load_state(create=False)
             self._check_root_entries(state)
+        else:
+            with self._mutating():
+                with self._locked():
+                    state = self._load_state(create=True)
+                    self._recover_reservations(state)
+                    self._check_root_entries(state)
 
     def _locked(self):
         return FileLock(self.root / INSTALL_LOCK_FILENAME, uid=self.uid,
                         timeout=self.lock_timeout_seconds)
+
+    @contextmanager
+    def _mutating(self):
+        if self.read_only:
+            raise ArtifactInstallError("read-only artifact view cannot mutate its store")
+        from .artifact_pin import ArtifactPinBusy, artifact_store_mutation
+        try:
+            with artifact_store_mutation(self.root, uid=self.uid):
+                yield
+        except ArtifactPinBusy as error:
+            raise ArtifactInstallBusy("artifact store is pinned by a runtime") from error
 
     def _state_path(self):
         return self.root / INSTALL_STATE_FILENAME
@@ -238,6 +263,7 @@ class ArtifactInstaller:
             raise ArtifactInstallError("cannot persist artifact install state") from error
 
     def _check_root_entries(self, state):
+        from .artifact_pin import ArtifactPinError, _validate_store_pin_entry
         allowed = {INSTALL_STATE_FILENAME, INSTALL_LOCK_FILENAME}
         allowed.update(record["directory"] for record in state["installations"].values())
         for reservation in state["reservations"].values():
@@ -245,7 +271,15 @@ class ArtifactInstaller:
             allowed.add(reservation["final_directory"])
         root_fd = open_private_directory(self.root, uid=self.uid)
         try:
-            if set(os.listdir(root_fd)) - allowed:
+            names = set(os.listdir(root_fd))
+            pin_names = set()
+            for name in names - allowed:
+                try:
+                    if _validate_store_pin_entry(self.root, name, uid=self.uid):
+                        pin_names.add(name)
+                except ArtifactPinError as error:
+                    raise ArtifactInstallError("unsafe artifact pin entry") from error
+            if names - allowed - pin_names:
                 raise ArtifactInstallError("unrecognized artifact store entry; refusing unsafe cleanup")
         finally:
             os.close(root_fd)
@@ -330,7 +364,7 @@ class ArtifactInstaller:
         renamed_to_final = False
         ambiguous_final = False
         state_commit_started = False
-        with self._locked():
+        with self._mutating(), self._locked():
             if self.monotonic_clock() >= deadline:
                 raise ArtifactInstallError("artifact install deadline exceeded")
             catalog, assignment = self._verify_current_time(
@@ -544,7 +578,7 @@ class ArtifactInstaller:
     def deactivate(self, role, *, compute_stopped):
         if role not in {"host", "coordinator"} or type(compute_stopped) is not bool or not compute_stopped:
             raise ArtifactInstallError("role must be stopped before deactivation")
-        with self._locked():
+        with self._mutating(), self._locked():
             state = self._load_state()
             state["active"][role] = None
             self._write_state(state)
@@ -552,7 +586,7 @@ class ArtifactInstaller:
     def remove_installation(self, assignment_id, *, compute_stopped):
         if not valid_typed_id(assignment_id, "asg") or type(compute_stopped) is not bool or not compute_stopped:
             raise ArtifactInstallError("explicit stopped-compute confirmation is required for removal")
-        with self._locked():
+        with self._mutating(), self._locked():
             state = self._load_state()
             record = state["installations"].get(assignment_id)
             if record is None:

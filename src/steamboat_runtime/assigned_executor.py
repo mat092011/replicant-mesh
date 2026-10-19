@@ -2,10 +2,10 @@
 
 These adapters do not start a process or establish worker readiness. The owning
 supervisor must still enforce shared resource reservations and runtime policy.
-Live checks currently acquire the installer lock and hash the assigned files.
-WorkerHandler calls them from its event loop during cache admission and execution,
-so this adapter does not establish prompt cancellation responsiveness. Integration
-needs a nonblocking pinned assignment lease or async admission that retains ownership.
+The legacy unpinned path is blocking and intended only for tests/transition. The
+production builder requires a lifetime RuntimeArtifactPin and in-memory guard;
+the surrounding supervisor must retain pin ownership until child reaping and empty
+cgroup confirmation before release.
 """
 
 from .assigned_artifacts import AssignedArtifactError, AssignedArtifactView
@@ -41,9 +41,16 @@ def _validated_assignment(view):
 class AssignedStageExecutor:
     """StageExecutor-compatible adapter around one resident assigned shard."""
 
-    def __init__(self, view):
+    def __init__(self, view, *, guard=None, allow_unpinned_test_only=False):
+        if guard is None and allow_unpinned_test_only is not True:
+            raise AssignedArtifactError("production assigned execution requires a runtime pin guard")
+        if guard is not None:
+            from steamboat_connector.artifact_pin import RuntimeAssignmentGuard
+            if type(guard) is not RuntimeAssignmentGuard:
+                raise AssignedArtifactError("assigned execution requires an exact runtime pin guard")
         manifest, assignment, component = _validated_assignment(view)
         self.view = view
+        self.guard = guard
         self.manifest = manifest
         self.worker_name = component
         self.assignment_id = view.assignment_id
@@ -58,8 +65,26 @@ class AssignedStageExecutor:
                 or current_manifest["fingerprint"] != self.manifest_fingerprint
                 or current_assignment.document_sha256 != self.assignment_sha256):
             raise AssignedArtifactError("host assignment changed while its stage was loading")
+        if guard is not None:
+            if (guard.assignment_id != view.assignment_id
+                    or guard.account_id != view.account_id
+                    or guard.device_id != view.device_id
+                    or guard.role != view.role or guard.component != component
+                    or guard.manifest_fingerprint != self.manifest_fingerprint):
+                raise AssignedArtifactError("runtime pin guard scope differs from assigned stage")
+            guard.check()
 
     def _verify_live_assignment(self):
+        if self.guard is not None:
+            try:
+                self.guard.check()
+            except Exception as error:
+                raise AssignedArtifactError("active assigned runtime pin is invalid") from error
+            if (self.guard.assignment_id != self.assignment_id
+                    or self.guard.component != self.worker_name
+                    or self.guard.manifest_fingerprint != self.manifest_fingerprint):
+                raise AssignedArtifactError("runtime pin guard identity changed")
+            return
         manifest, assignment, component = _validated_assignment(self.view)
         if (component != self.worker_name
                 or manifest["fingerprint"] != self.manifest_fingerprint
@@ -68,7 +93,11 @@ class AssignedStageExecutor:
 
     def new_cache(self):
         self._verify_live_assignment()
-        cache = self.view.new_layer_cache()
+        if self.guard is None:
+            cache = self.view.new_layer_cache()
+        else:
+            from .model import LayerCache
+            cache = LayerCache(self.stage.start, self.stage.end)
         if (getattr(cache, "start", None), getattr(cache, "end", None)) != (
                 self.stage.start, self.stage.end):
             raise AssignedArtifactError("new cache does not match the resident assigned stage")
@@ -93,13 +122,39 @@ class AssignedStageExecutor:
 
 def build_assigned_worker_handler(view, *, boot_id=None, clock=None,
                                   max_tombstones=4096, enable_queue=False,
-                                  queue_capacity=None, on_supervision=None):
+                                  queue_capacity=None, on_supervision=None,
+                                  pin=None, guard=None,
+                                  allow_unpinned_test_only=False):
     """Build a WorkerHandler from one current host assignment.
 
     The function does not admit the worker to a gateway or claim readiness;
     those require the surrounding supervisor and its independent checks.
     """
-    executor = AssignedStageExecutor(view)
+    from steamboat_connector.artifact_pin import (RuntimeArtifactPin,
+                                                   RuntimeAssignmentGuard)
+    if pin is not None and type(pin) is not RuntimeArtifactPin:
+        raise AssignedArtifactError("worker pin must be the exact runtime artifact pin")
+    if guard is not None and type(guard) is not RuntimeAssignmentGuard:
+        raise AssignedArtifactError("worker guard must be an inherited runtime assignment guard")
+    if pin is not None and guard is not None:
+        raise AssignedArtifactError("provide either a parent pin or a validated child guard")
+    if pin is None and guard is None:
+        if allow_unpinned_test_only is not True:
+            raise AssignedArtifactError("production worker construction requires a runtime artifact pin")
+    elif pin is not None:
+        if clock is None:
+            raise AssignedArtifactError("pinned worker construction requires its core Clock")
+        if boot_id != pin.record.get("boot_id"):
+            raise AssignedArtifactError("worker boot id must match the runtime pin record")
+        try:
+            guard = pin.make_guard(child_clock=clock,
+                                   child_verifier=view.installer.verifier)
+        except Exception as error:
+            raise AssignedArtifactError("worker runtime pin guard could not be established") from error
+    elif guard is not None and boot_id != guard.pin.record.get("boot_id"):
+        raise AssignedArtifactError("worker boot id must match the inherited runtime pin")
+    executor = AssignedStageExecutor(view, guard=guard,
+                                     allow_unpinned_test_only=allow_unpinned_test_only)
     from .worker_state import WorkerHandler
 
     options = {

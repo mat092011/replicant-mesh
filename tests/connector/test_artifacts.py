@@ -1567,6 +1567,7 @@ class AssignedModelIntegrationTests(unittest.TestCase):
     def test_assigned_executor_worker_handlers_preserve_interleaved_session_logits(self):
         """Drive the real adapter, WorkerHandler and tensor wire codec on pinned weights."""
         from steamboat_connector.catalog import RUNTIME_LOCK_SHA256
+        from steamboat_connector.artifact_pin import RuntimeArtifactPin
         from steamboat_runtime.assigned_executor import build_assigned_worker_handler
         from steamboat_runtime.manifest import load_manifest
         from steamboat_runtime.model import PipelineModel
@@ -1640,7 +1641,9 @@ class AssignedModelIntegrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(dir=scratch) as temporary:
             handlers = []
+            pins = []
             exercise_started = False
+            handlers_stopped = False
             reference = PipelineModel(source)
             reference_sessions = {
                 "session-A": reference.open_session(16),
@@ -1664,8 +1667,17 @@ class AssignedModelIntegrationTests(unittest.TestCase):
                         account_id=_ACCOUNT, device_id=device_id, role="host")
                     view = installer.open_view(assignment_id, account_id=_ACCOUNT,
                         device_id=device_id, role="host", now=now)
-                    handlers.append(build_assigned_worker_handler(
-                        view, boot_id=f"{index:032x}"))
+                    pin = RuntimeArtifactPin.acquire(
+                        view, clock=verifier.clock, boot_id=f"{index:032x}")
+                    try:
+                        handler = build_assigned_worker_handler(
+                            view, boot_id=f"{index:032x}", clock=verifier.clock,
+                            pin=pin)
+                    except BaseException:
+                        pin.release()
+                        raise
+                    pins.append(pin)
+                    handlers.append(handler)
 
                 leases = {}
                 sequences = {(component, session): 0
@@ -1687,6 +1699,7 @@ class AssignedModelIntegrationTests(unittest.TestCase):
                     return await handler.handle(method, request)
 
                 async def exercise():
+                    nonlocal handlers_stopped
                     try:
                         for handler in handlers:
                             for session_id in reference_sessions:
@@ -1746,17 +1759,23 @@ class AssignedModelIntegrationTests(unittest.TestCase):
                             *(handler.shutdown() for handler in handlers),
                             return_exceptions=False)
                         self.assertTrue(all(result is True for result in shutdowns))
+                        handlers_stopped = True
 
                 exercise_started = True
                 asyncio.run(exercise())
             finally:
                 if handlers and not exercise_started:
                     async def shutdown_unstarted_handlers():
+                        nonlocal handlers_stopped
                         shutdowns = await asyncio.gather(
                             *(handler.shutdown() for handler in handlers),
                             return_exceptions=True)
                         self.assertTrue(all(result is True for result in shutdowns))
+                        handlers_stopped = True
                     asyncio.run(shutdown_unstarted_handlers())
+                if handlers_stopped:
+                    for pin in pins:
+                        pin.release()
                 for session in reference_sessions.values():
                     session.close()
 

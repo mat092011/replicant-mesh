@@ -56,10 +56,15 @@ def _view(*, role="host", component="worker-2", assignment_id=ASSIGNMENT_ID,
     return view
 
 
+def _legacy_executor(view):
+    return assigned_executor.AssignedStageExecutor(
+        view, allow_unpinned_test_only=True)
+
+
 class AssignedExecutorTests(unittest.TestCase):
     def test_executor_loads_one_active_assigned_stage_and_keeps_it_resident(self):
         view = _view()
-        executor = assigned_executor.AssignedStageExecutor(view)
+        executor = _legacy_executor(view)
         self.assertEqual(executor.worker_name, "worker-2")
         self.assertIs(executor.manifest, view.manifest)
         self.assertEqual(view.load_stage.call_count, 1)
@@ -80,23 +85,23 @@ class AssignedExecutorTests(unittest.TestCase):
     def test_coordinator_and_non_view_inputs_are_rejected_before_load(self):
         coordinator = _view(role="coordinator")
         with self.assertRaises(AssignedArtifactError):
-            assigned_executor.AssignedStageExecutor(coordinator)
+            _legacy_executor(coordinator)
         coordinator.load_stage.assert_not_called()
         with self.assertRaises(AssignedArtifactError):
-            assigned_executor.AssignedStageExecutor(SimpleNamespace(role="host"))
+            _legacy_executor(SimpleNamespace(role="host"))
 
     def test_inactive_or_mismatched_assignment_is_rejected(self):
         inactive = _view()
         inactive._locked_manifest.side_effect = AssignedArtifactError(
             "assignment is not active")
         with self.assertRaises(AssignedArtifactError):
-            assigned_executor.AssignedStageExecutor(inactive)
+            _legacy_executor(inactive)
         inactive.load_stage.assert_not_called()
 
         mismatched = _view()
         mismatched.assignment.payload["assignment_id"] = "asg_" + "9" * 32
         with self.assertRaises(AssignedArtifactError):
-            assigned_executor.AssignedStageExecutor(mismatched)
+            _legacy_executor(mismatched)
         mismatched.load_stage.assert_not_called()
 
     def test_assignment_change_during_load_is_rejected(self):
@@ -113,11 +118,11 @@ class AssignedExecutorTests(unittest.TestCase):
 
         view._locked_manifest.side_effect = changed_after_load
         with self.assertRaises(AssignedArtifactError):
-            assigned_executor.AssignedStageExecutor(view)
+            _legacy_executor(view)
 
     def test_deactivated_scope_and_wrong_cache_fail_before_compute(self):
         view = _view()
-        executor = assigned_executor.AssignedStageExecutor(view)
+        executor = _legacy_executor(view)
         view._locked_manifest.side_effect = AssignedArtifactError("assignment is inactive")
         with self.assertRaises(AssignedArtifactError):
             executor.new_cache()
@@ -144,7 +149,7 @@ class AssignedExecutorTests(unittest.TestCase):
             return view.manifest
 
         view._locked_manifest.side_effect = validate_scope
-        executor = assigned_executor.AssignedStageExecutor(view)
+        executor = _legacy_executor(view)
 
         def deactivate():
             nonlocal inactive
@@ -165,7 +170,8 @@ class AssignedExecutorTests(unittest.TestCase):
         with mock.patch.dict(sys.modules,
                 {"steamboat_runtime.worker_state": fake_worker_state}):
             result = assigned_executor.build_assigned_worker_handler(
-                view, boot_id="b" * 32, enable_queue=True, queue_capacity=2)
+                view, boot_id="b" * 32, enable_queue=True, queue_capacity=2,
+                allow_unpinned_test_only=True)
         self.assertIs(result, handler)
         args, options = factory.call_args
         self.assertIs(args[0], view.manifest)
@@ -174,6 +180,42 @@ class AssignedExecutorTests(unittest.TestCase):
         self.assertEqual(options["boot_id"], "b" * 32)
         self.assertTrue(options["enable_queue"])
         self.assertEqual(options["queue_capacity"], 2)
+
+    def test_production_handler_requires_runtime_pin(self):
+        with self.assertRaisesRegex(AssignedArtifactError, "requires a runtime artifact pin"):
+            assigned_executor.build_assigned_worker_handler(_view())
+
+    def test_pinned_guard_cache_and_execute_do_not_reenter_installer(self):
+        import time
+        from steamboat_connector.artifact_pin import RuntimeAssignmentGuard
+        from steamboat_security.clock import Clock
+
+        view = _view()
+        record = {"assignment_id": ASSIGNMENT_ID, "account_id": ACCOUNT_ID,
+                  "device_id": DEVICE_ID, "role": "host"}
+        pin = SimpleNamespace(record=record,
+                              assert_open_descriptors=mock.Mock(return_value=True))
+        guard = RuntimeAssignmentGuard(
+            pin, Clock(uncertainty_seconds=lambda: 0.0), object(), "test-domain",
+            0.0, time.monotonic() + 10000, time.monotonic() + 10000,
+            "worker-2", "f" * 64, ASSIGNMENT_ID, ACCOUNT_ID, DEVICE_ID, "host",
+            time.monotonic() + 10000, time.monotonic() + 10000)
+        with mock.patch("steamboat_runtime.protocol.clock.clock_identity",
+                        return_value="test-domain"):
+            executor = assigned_executor.AssignedStageExecutor(view, guard=guard)
+        view._locked_manifest.reset_mock()
+        view.new_layer_cache.reset_mock()
+        fake_model = SimpleNamespace(LayerCache=_Cache)
+        fake_torch = SimpleNamespace(inference_mode=nullcontext)
+        with mock.patch("steamboat_runtime.protocol.clock.clock_identity",
+                        return_value="test-domain"), mock.patch.dict(sys.modules, {
+                            "steamboat_runtime.model": fake_model, "torch": fake_torch}):
+            cache = executor.new_cache()
+            result = executor.execute(object(), cache, 0)
+        self.assertEqual(result, "stage-result")
+        view._locked_manifest.assert_not_called()
+        view.new_layer_cache.assert_not_called()
+        self.assertEqual(pin.assert_open_descriptors.call_count, 5)
 
 
 if __name__ == "__main__":
