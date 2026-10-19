@@ -272,6 +272,9 @@ class RuntimePinHandoffTests(unittest.TestCase):
         second = self._configured_group_pin()
         first_pin, first_verifier, first_metadata, first_catalog, first_assignment = first
         second_pin, second_verifier, second_metadata, second_catalog, second_assignment = second
+        release_entered = __import__("threading").Event()
+        allow_release = __import__("threading").Event()
+        first_pin.release.side_effect = lambda: (release_entered.set(), allow_release.wait(2))
         with (mock.patch.object(RuntimeArtifactGroupPin, "assert_open_descriptors",
                                 return_value=True),
               mock.patch.object(RuntimeArtifactGroupPin, "child_launch_metadata",
@@ -285,6 +288,13 @@ class RuntimePinHandoffTests(unittest.TestCase):
             self.assertTrue(self.backend.configure_pinned_role(
                 "host", {"test_mode": True}, first_pin,
                 catalog_verifier=first_verifier))
+            with mock.patch("steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS",
+                            0.05):
+                self.assertFalse(self.backend.release_configured_pin("host"))
+            self.assertTrue(release_entered.wait(0.2))
+            self.assertIn("host", self.backend._pin_release_blocked)
+            allow_release.set()
+            self.assertTrue(self.backend._pin_cleanups["host"].completed.wait(0.2))
             self.assertTrue(self.backend.release_configured_pin("host"))
             self.assertNotIn("host", self.backend._pin_release_blocked)
             self.assertTrue(self.backend.configure_pinned_role(
@@ -695,10 +705,11 @@ class RuntimePinNativeHandoffTests(unittest.TestCase):
             cgroup_root.mkdir()
             cgroup = FakeCgroup(cgroup_root)
             backend = ProcessRoleBackend(backend_root / "state", cgroup)
-            (backend_root / "state").mkdir()
+            state_root = backend_root / "state"
+            state_root.mkdir(mode=0o700)
+            self.assertEqual(stat.S_IMODE(state_root.lstat().st_mode), 0o700)
             self.assertTrue(backend.configure_pinned_role(
-                "host", {"test_mode": True}, pin, catalog_verifier=verifier),
-                msg=f"pinned role config failed: {backend._pin_configuration_failure!r}")
+                "host", {"test_mode": True}, pin, catalog_verifier=verifier))
             metadata = backend._pinned_roles["host"][2]
             repo_root = Path(__file__).resolve().parents[2]
             child_script = "\n".join((
