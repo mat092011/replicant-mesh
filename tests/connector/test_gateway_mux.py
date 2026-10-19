@@ -5,8 +5,11 @@ import unittest
 import time
 import copy
 import json
+import asyncio
+import threading
 
 from steamboat_connector import channel_wire as wire
+from steamboat_connector import gateway_mux as mux_impl
 from steamboat_connector.gateway_mux import GatewayChannelMultiplexer, GatewayMuxError
 from steamboat_connector.channel_rpc import _CONTROL_CAPTURE_BYTES, _RELAY_CAPTURE_BYTES
 from steamboat_connector.channel_heartbeat import PING, PONG, decode_heartbeat, encode_heartbeat
@@ -355,8 +358,12 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
         self.assertEqual(mux.pending_counts, (0, 0))
         self.assertEqual(mux.pending_capture_bytes, (0, 0))
         self.assertIn(message_id, mux._seen)
-        self._enqueue_open(message_id=message_id)
-        self._expect_mux_error("reused in this coordinator generation")
+        from steamboat_connector.channel_socket import ChannelBackpressure
+        with self.assertRaises(ChannelBackpressure):
+            self._enqueue_open(message_id=message_id)
+        with self.assertRaisesRegex(GatewayMuxError,
+                                    "reused in this coordinator generation"):
+            mux._reserve(delivered)
         self.assertEqual(mux.pending_counts, (0, 0))
 
     def test_exact_worker_boot_is_selected_from_request_and_unknown_boot_fails_closed(self):
@@ -500,6 +507,67 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
                 data_capture_reservation_bytes=9 * _RELAY_CAPTURE_BYTES,
                 control_capture_reservation_bytes=8 * _CONTROL_CAPTURE_BYTES)
         self.assertEqual(mux.pending_counts, (0, 0))
+
+    def test_run_cancellation_stops_and_releases_clean_cohort(self):
+        mux = self._mux()
+
+        async def cancel_service():
+            task = asyncio.create_task(mux.run())
+            await asyncio.sleep(0.01)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(cancel_service())
+        self.assertFalse(mux._accepting)
+        self.assertTrue(self.fx.coordinator_server_stream.closed)
+        self.assertTrue(all(stream.closed for stream in self.fx.worker_server_streams))
+        self.assertNotIn(mux, mux_impl._LIVE_MUXES)
+        self.assertNotIn(mux, mux_impl._RETAINED_MUXES)
+        self.assertTrue(mux._claims_finalized)
+
+    def test_stop_during_owned_pump_retains_claims_until_pump_exits(self):
+        mux = self._mux()
+        entered = threading.Event()
+        release = threading.Event()
+        errors = []
+        stream = self.fx.coordinator_server_stream
+        original_pump = stream.pump
+
+        def blocked_pump():
+            entered.set()
+            if not release.wait(1.0):
+                raise AssertionError("pump barrier timed out")
+            return original_pump()
+
+        stream.pump = blocked_pump
+
+        def pump_thread():
+            try:
+                mux.pump_once()
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=pump_thread, daemon=True)
+        thread.start()
+        self.assertTrue(entered.wait(1.0), "pump did not reach test barrier")
+        mux.stop()
+        self.assertFalse(mux._accepting)
+        self.assertIn(mux, mux_impl._RETAINED_MUXES)
+        for resource in mux._claim_resources:
+            claim = mux_impl._RESOURCE_CLAIMS.get(id(resource))
+            self.assertIsNotNone(claim)
+            self.assertIs(claim[0], resource)
+            self.assertIs(claim[1], mux)
+        release.set()
+        thread.join(1.0)
+        self.assertFalse(thread.is_alive(), "pump did not leave after stop")
+        self.assertTrue(errors)
+        self.assertTrue(all(stream.closed for stream in
+                            (self.fx.coordinator_server_stream,
+                             *self.fx.worker_server_streams)))
+        self.assertIn(mux, mux_impl._RETAINED_MUXES)
+        self.assertFalse(mux._claims_finalized)
 
 
 if __name__ == "__main__":

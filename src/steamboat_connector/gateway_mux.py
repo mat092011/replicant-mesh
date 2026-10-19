@@ -130,6 +130,7 @@ class GatewayChannelMultiplexer:
         self._close_once = set()
         self._stuck = []
         self._failure = None
+        self._claims_finalized = False
         claim_resources = (coordinator_stream, coordinator_writer,
                            *(item[0] for item in workers.values()),
                            *(worker_writers[key] for key in workers))
@@ -321,25 +322,50 @@ class GatewayChannelMultiplexer:
             raise
         finally:
             self._pump_lock.release()
+            if not self._accepting:
+                self._finalize_retirement()
 
     async def run(self):
-        while self._accepting:
-            self.pump_once()
-            await asyncio.sleep(_PUMP_INTERVAL)
+        try:
+            while self._accepting:
+                self.pump_once()
+                await asyncio.sleep(_PUMP_INTERVAL)
+        finally:
+            self.stop()
+
+    def _finalize_retirement(self):
+        """Release global claims only after the pump and close outcomes are known."""
+        if self._accepting or not self._pump_lock.acquire(blocking=False):
+            with _CLAIM_LOCK:
+                if not self._claims_finalized:
+                    _LIVE_MUXES.discard(self)
+                    _RETAINED_MUXES.add(self)
+            return
+        try:
+            clean = (len(self._close_once) == 1 + len(self._workers)
+                     and not self._stuck and not self._pending
+                     and not self._capture_by_id and self._failure is None)
+            with _CLAIM_LOCK:
+                if self._claims_finalized:
+                    return
+                _LIVE_MUXES.discard(self)
+                if clean:
+                    _RETAINED_MUXES.discard(self)
+                    for resource in self._claim_resources:
+                        marker = id(resource)
+                        claim = _RESOURCE_CLAIMS.get(marker)
+                        if claim is not None and claim[0] is resource and claim[1] is self:
+                            del _RESOURCE_CLAIMS[marker]
+                    self._claims_finalized = True
+                else:
+                    _RETAINED_MUXES.add(self)
+        finally:
+            self._pump_lock.release()
 
     def stop(self):
         """Close each captured stream at most once; retain uncertain pending state."""
         with self._stop_lock:
-            if not self._accepting and len(self._close_once) == 1 + len(self._workers):
-                return
             self._accepting = False
-            with _CLAIM_LOCK:
-                _LIVE_MUXES.discard(self)
-                for resource in self._claim_resources:
-                    marker = id(resource)
-                    claim = _RESOURCE_CLAIMS.get(marker)
-                    if claim is not None and claim[0] is resource and claim[1] is self:
-                        del _RESOURCE_CLAIMS[marker]
             cohort = (self.coordinator_stream,
                       *(item[0] for item in self._workers.values()))
             for stream in cohort:
@@ -350,8 +376,6 @@ class GatewayChannelMultiplexer:
                 try:
                     stream.close()
                 except BaseException as error:
-                    self._stuck.append((stream, error))
-            if self._pending or self._capture_by_id or self._stuck:
-                with _CLAIM_LOCK:
-                    _RETAINED_MUXES.add(self)
+                    self._stuck.append((stream, type(error).__name__))
+        self._finalize_retirement()
 
