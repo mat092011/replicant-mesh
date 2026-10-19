@@ -6,6 +6,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -354,6 +356,57 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         with patch.object(runtime_module, "safe_read", side_effect=delayed_read):
             with self.assertRaises(CredentialError):
                 binding.assert_live()
+        self.assertEqual(len(calls), 1)
+
+    def test_deadline_crossed_while_local_policy_current_waits_invalidates(self):
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        calls = []
+        binding.subscribe_teardown(calls.append)
+        original_current = binding._snapshot_store.current
+
+        def delayed_current(*args, **kwargs):
+            view = original_current(*args, **kwargs)
+            # Model a policy lock/durable-I/O wait after returning its view.
+            self.wall += 61
+            self.mono += 61
+            return view
+
+        with patch.object(binding._snapshot_store, "current", side_effect=delayed_current):
+            with self.assertRaisesRegex(CredentialError, "policy expired"):
+                binding.assert_live()
+        self.assertEqual(len(calls), 1)
+
+    def test_deadline_crossed_while_final_binding_lock_waits_invalidates(self):
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        calls = []
+        binding.subscribe_teardown(calls.append)
+        started = threading.Event()
+        finished = threading.Event()
+        failures = []
+
+        def check_live():
+            started.set()
+            try:
+                binding.assert_live()
+            except BaseException as exc:
+                failures.append(exc)
+            finally:
+                finished.set()
+
+        with binding._lock:
+            worker = threading.Thread(target=check_live)
+            worker.start()
+            self.assertTrue(started.wait(2))
+            time.sleep(0.02)
+            self.wall += 61
+            self.mono += 61
+        self.assertTrue(finished.wait(5))
+        worker.join(timeout=1)
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], CredentialError)
+        self.assertIn("policy expired", str(failures[0]))
         self.assertEqual(len(calls), 1)
 
     def test_second_selected_read_fault_is_sticky_after_fault_clears(self):

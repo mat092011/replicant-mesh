@@ -338,24 +338,37 @@ class C2HostRuntimeBinding:
             self._check_protected_files()
             self._check_selected_identity(selected, cohort)
             self._assert_selected_policy(selected, sample)
-            # Repeat selected and protected reads, then sample after all I/O so
-            # a deadline crossed during a slow read cannot escape this check.
+            # A local current() may wait on its store lock or durable commit. Do
+            # all such work before the final selected read, protected reads, and
+            # clock sample; the returned view is the one checked below.
+            local_view = None
+            if require_local_head:
+                local_view = self._snapshot_store.current()
             final_selected, final_cohort = _selected(self._root_store, self._clock)
             self._check_selected_identity(final_selected, final_cohort)
             self._check_protected_files()
-            final_sample = self._clock.sample()
-            self._check_deadlines(final_sample)
             if require_local_head:
-                local_view = self._snapshot_store._view
                 if (local_view is None or local_view.revision != final_selected.selector.policy_revision
                         or local_view.policy_digest != final_selected.selector.policy_digest):
                     raise _C2PolicyRefreshRequired(
                         "selected policy advanced; install the exact selected head before admission")
-                self._snapshot_store.current(sample=final_sample)
             with self._lock:
                 if self._invalid:
                     raise CredentialError(self._reason or "C2 binding was invalidated during liveness check")
+                # This is deliberately the last clock read. No filesystem or
+                # store lock is acquired after it, so its bounds cover all work
+                # above and the actual return decision.
+                final_sample = self._clock.sample()
                 self._check_deadlines(final_sample)
+                if require_local_head:
+                    if (final_sample.latest_wall >= local_view.expires_at
+                            or final_sample.monotonic >= local_view.deadline_monotonic):
+                        raise SnapshotError("authorization snapshot expired")
+                    record = local_view.credential(self._spec.serial)
+                    if record is None:
+                        raise CredentialError("C2 host is missing from current policy")
+                    self._snapshot_store.assert_credential_live(local_view, record, final_sample)
+                    _check_group_grants(local_view, final_sample, self._spec, self._scope)
                 return None
         except _C2PolicyRefreshRequired:
             with self._lock:
