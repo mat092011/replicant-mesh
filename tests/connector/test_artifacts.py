@@ -26,7 +26,7 @@ from steamboat_connector import catalog as catalog_module
 from steamboat_connector import artifacts as artifacts_module
 from steamboat_connector import storage as storage_module
 from steamboat_connector.artifacts import (INSTALL_METADATA_RESERVE_BYTES,
-                                           ArtifactInstallError, ArtifactInstaller,
+                                           ArtifactInstallBusy, ArtifactInstallError, ArtifactInstaller,
                                            ArtifactQuotaError, LocalArtifactStoreRetriever)
 from steamboat_connector.catalog import (ARTIFACT_FILENAMES, ASSIGNABLE_COMPONENTS,
                                         CHUNK_BYTES, CatalogError, CatalogVerifier,

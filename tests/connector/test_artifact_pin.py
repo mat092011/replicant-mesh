@@ -210,17 +210,19 @@ class ArtifactPinLockTests(unittest.TestCase):
             pass
 
     def test_stopped_boolean_does_not_bypass_store_pin(self):
+        from tests.connector.test_artifacts import _PUBLIC
+        from steamboat_connector.catalog import CatalogVerifier
+        installer = ArtifactInstaller(
+            self.root, CatalogVerifier(_PUBLIC),
+            disk_ceiling_bytes=1 << 30, disk_headroom_bytes=16 * 1024 * 1024)
+        state_path = self.root / "artifact-install-state.json"
+        before = state_path.read_bytes()
         global_fd = artifact_pin._lock(self.root, artifact_pin.GLOBAL_LOCK,
                                        self.uid, fcntl.LOCK_SH)
         self._register_fd(global_fd)
-        installer = object.__new__(ArtifactInstaller)
-        installer.root = self.root
-        installer.uid = self.uid
-        installer.read_only = False
-        installer._locked = mock.Mock(side_effect=AssertionError("installer lock must follow global EX"))
         with self.assertRaises(ArtifactInstallBusy):
             installer.deactivate("host", compute_stopped=True)
-        installer._locked.assert_not_called()
+        self.assertEqual(state_path.read_bytes(), before)
         self._close_fd(global_fd)
 
     def test_read_only_installer_opens_under_pin_but_normal_recovery_is_busy(self):
