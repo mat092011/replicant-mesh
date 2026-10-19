@@ -206,7 +206,7 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
 
                 coordinator = next(principal
                     for principal in fx.cohort_fixture.candidate.issuance_candidate.principals
-                    if principal.record["serial"] == worker_grant["actor_serial"])
+                    if principal.record.serial == worker_grant["actor_serial"])
                 coordinator_spec = next(spec
                     for spec in fx.cohort_fixture.candidate.new_launch_specs
                     if spec.identity == coordinator.identity)
