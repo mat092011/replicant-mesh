@@ -2,10 +2,12 @@
 import threading
 import time
 import unittest
+import queue
 from unittest.mock import patch
 
 from steamboat_connector.controller import ManagementController
 from steamboat_connector.errors import ConnectorError
+from steamboat_connector.resources import ResourceError
 from tests.connector.test_resources_controller import sample_policy
 
 
@@ -18,6 +20,10 @@ class IntentBackend:
         self.tokens = []
         self.spawned = 0
         self.stops = 0
+        self.stop_calls = 0
+        self.stop_entered = None
+        self.stop_release = None
+        self.stop_result = True
 
     def start(self, role, policy, *, cancel_event):
         self.tokens.append(cancel_event)
@@ -35,7 +41,11 @@ class IntentBackend:
         pass
 
     def stop(self, roles, grace_seconds):
-        return {role: True for role in roles}
+        self.stop_calls += 1
+        if self.stop_entered is not None:
+            self.stop_entered.set()
+            self.stop_release.wait(2)
+        return {role: self.stop_result for role in roles}
 
     def drain(self, roles, deadline, cancel_event):
         return {"drained": True, "reclaimed": True}
@@ -162,6 +172,118 @@ class ControllerStartStopTests(unittest.TestCase):
             controller._perform_start(operation, payload)
         self.assertTrue(controller.status()["paused_roles"]["consumer"])
         self.assertNotIn("consumer", controller._starts)
+
+    def test_stop_fences_and_dispatches_cleanup_when_operation_record_fails(self):
+        controller, backend = self.make_controller()
+        with patch.object(controller, "_record_operation",
+                          side_effect=OSError("storage unavailable")):
+            with self.assertRaises(OSError):
+                controller.handle("stop", {"roles": ["consumer"]})
+        self.assertEqual(backend.stops, 1)  # pre-ack request_stop hook
+        self.assertIn("consumer", controller._stop_fences)
+        queued_id, kind, roles = controller._urgent.get_nowait()
+        self.assertEqual(kind, "stop")
+        self.assertEqual(roles, ("consumer",))
+        controller.handle("role.enable", {"role": "consumer"})
+        with self.assertRaises(ConnectorError) as caught:
+            controller.handle("start", {"roles": ["consumer"]})
+        self.assertEqual(caught.exception.code, "BUSY")
+        controller._perform_stop(queued_id, roles, disable=True)
+
+    def test_failed_start_requires_actual_stop_proof_before_retry(self):
+        controller, backend = self.make_controller()
+        controller.handle("start", {"roles": ["consumer"]})
+        operation_id, payload = self.take_start(controller)
+        backend.start = lambda *args, **kwargs: False
+        backend.stop_result = False
+        result = controller._perform_start(operation_id, payload)
+        self.assertFalse(result["success"])
+        self.assertIn("consumer", controller._stop_fences)
+        controller.handle("role.enable", {"role": "consumer"})
+        with self.assertRaises(ConnectorError) as caught:
+            controller.handle("start", {"roles": ["consumer"]})
+        self.assertEqual(caught.exception.code, "BUSY")
+        backend.stop_result = True
+        cleanup_id = next(iter(controller._stop_tokens))
+        controller._perform_stop(cleanup_id, ("consumer",), disable=False)
+
+    def test_failed_drain_does_not_drop_cleanup_fence(self):
+        controller, backend = self.make_controller()
+        backend.drain = lambda roles, deadline, cancel: {
+            "drained": False, "reclaimed": False}
+        backend.stop_result = False
+        operation_id = "op_" + "a" * 32
+        deadline = time.monotonic()
+        cancel = threading.Event()
+        controller._drains["consumer"] = (operation_id, deadline, cancel)
+        result = controller._perform_drain(
+            operation_id, (("consumer",), deadline, cancel))
+        self.assertFalse(result["reclaimed"])
+        self.assertNotIn("consumer", controller._drains)
+        self.assertIn("consumer", controller._stop_fences)
+        backend.stop_result = True
+        cleanup_id = next(iter(controller._stop_tokens))
+        controller._perform_stop(cleanup_id, ("consumer",), disable=False)
+
+    def test_policy_hook_failure_still_queues_pre_fenced_cleanup(self):
+        controller, backend = self.make_controller()
+        policy = sample_policy()
+        controller.handle("policy.set", {"policy": policy})
+        controller.handle("role.enable", {"role": "host"})
+        with patch.object(controller.ledger, "configure",
+                          side_effect=ResourceError("policy hook failed")):
+            with self.assertRaises(ConnectorError):
+                controller.handle("policy.set", {"policy": sample_policy()})
+        self.assertIn("host", controller._stop_fences)
+        self.assertGreaterEqual(backend.stops, 1)
+        _op_id, kind, roles = controller._urgent.get_nowait()
+        self.assertEqual(kind, "policy_reduction")
+        self.assertEqual(roles, ("host",))
+
+    def test_worker_executes_cleanup_when_running_status_write_fails(self):
+        controller, backend = self.make_controller()
+        response = controller.handle("stop", {"roles": ["consumer"]})
+        operation_id = response["operation_id"]
+        work = queue.Queue()
+        work.put((operation_id, "stop", ("consumer",)))
+        work.put(None)
+        original_save = controller.store.save
+        fail_once = [True]
+
+        def fail_first_write(state):
+            if fail_once[0]:
+                fail_once[0] = False
+                raise OSError("transient running status failure")
+            return original_save(state)
+
+        with patch.object(controller.store, "save", side_effect=fail_first_write):
+            controller._worker_loop(work)
+        self.assertEqual(backend.stop_calls, 1)
+        stored = controller._find_operation(operation_id)
+        self.assertEqual(stored["status"], "succeeded")
+        self.assertEqual(stored["result"]["bookkeeping_warning"],
+                         "running_status_write_failed")
+
+    def test_shutdown_uses_one_retained_bounded_owner_and_reports_timeout(self):
+        controller, backend = self.make_controller()
+        entered, release = threading.Event(), threading.Event()
+        backend.stop_entered, backend.stop_release = entered, release
+        self.assertFalse(controller.shutdown(wait_seconds=0.01))
+        self.assertTrue(entered.wait(1))
+        self.assertIn("consumer", controller._stop_fences)
+        self.assertFalse(controller.shutdown(wait_seconds=0.01))
+        self.assertEqual(backend.stop_calls, 1)
+        release.set()
+        self.assertTrue(controller.shutdown(wait_seconds=1))
+        self.assertEqual(backend.stop_calls, 1)
+        self.assertNotIn("consumer", controller._stop_fences)
+
+    def test_shutdown_storage_failure_keeps_unconfirmed_fence(self):
+        controller, backend = self.make_controller()
+        with patch.object(controller, "_persist", side_effect=OSError("storage failed")):
+            self.assertFalse(controller.shutdown(wait_seconds=1))
+        self.assertEqual(backend.stop_calls, 1)
+        self.assertIn("consumer", controller._stop_fences)
 
 
 if __name__ == "__main__":

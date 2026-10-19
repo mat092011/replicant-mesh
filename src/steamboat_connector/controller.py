@@ -1,4 +1,5 @@
 import copy
+import math
 import os
 import platform
 import queue
@@ -69,6 +70,12 @@ class ManagementController:
         self._stop_fences = {}
         self._stop_tokens = {}
         self._threads = []
+        self._shutdown_started = False
+        self._shutdown_done = threading.Event()
+        self._shutdown_result = None
+        self._shutdown_persist_failed = False
+        self._shutdown_thread = None
+        self._shutdown_thread_started = False
         self._state = validate_state(self.store.load())
         self.boot_id = __import__("secrets").token_hex(16)
         self._recover_boot()
@@ -143,7 +150,8 @@ class ManagementController:
             raise ConnectorError("INVALID_ARGUMENT", "roles contains duplicates or an unknown role")
         return tuple(roles)
 
-    def _record_operation(self, action, *, status="queued", result=None):
+    def _record_operation(self, action, *, status="queued", result=None,
+                          operation_id=None):
         active = [item for item in self._state["operations"]
                   if item["status"] in ("queued", "running")]
         if len(active) >= 48:
@@ -154,7 +162,7 @@ class ManagementController:
             if removable is None:
                 raise ConnectorError("BUSY", "operation history is full")
             del self._state["operations"][removable]
-        operation = {"operation_id": new_id("op"), "action": action,
+        operation = {"operation_id": operation_id or new_id("op"), "action": action,
                      "status": status, "result": result or {}}
         self._state["operations"].append(operation)
         self._persist()
@@ -182,9 +190,12 @@ class ManagementController:
             queue_target.put_nowait((operation_id, kind, payload))
             return True
         except queue.Full:
-            self._stop_tokens.pop(operation_id, None)
-            self._operation_update(operation_id, "incomplete", {"reason": "lifecycle_queue_full",
-                                                                 "reclaimed": False})
+            try:
+                self._operation_update(operation_id, "incomplete",
+                                       {"reason": "lifecycle_queue_full",
+                                        "reclaimed": False})
+            except Exception:
+                pass
             return False
 
     def _resource_snapshot(self):
@@ -322,14 +333,18 @@ class ManagementController:
         self._payload(payload, {"role"})
         role = self._role(payload.get("role"))
         with self._lock:
+            operation_id = new_id("op")
             self._state["roles"][role] = False
             self._state["paused_roles"][role] = True
-            self._cancel_starts((role,))
-            operation = self._record_operation("role.disable", result={"role": role})
-            self._fence_stop((role,), operation["operation_id"])
-            self._notify_backend((role,), draining=False)
-        self._enqueue(self._urgent, operation["operation_id"], "stop", (role,))
-        return {"operation_id": operation["operation_id"], "role": role,
+            self._prepare_stop_intent((role,), operation_id)
+            try:
+                operation = self._record_operation("role.disable", result={"role": role},
+                                                   operation_id=operation_id)
+            except Exception:
+                self._enqueue(self._urgent, operation_id, "stop", (role,))
+                raise
+        self._enqueue(self._urgent, operation_id, "stop", (role,))
+        return {"operation_id": operation_id, "role": role,
                 "enabled": False, "admission": "disabled_immediately"}
 
     def _set_policy(self, payload):
@@ -340,37 +355,40 @@ class ManagementController:
             policy = validate_policy(payload["policy"])
         except ValueError as error:
             raise ConnectorError("INVALID_POLICY", str(error)) from error
+        operation_id = None
+        affected = ()
         with self._lock:
+            # Treat policy replacement as potentially reducing. Quiesce
+            # already-enabled compute roles before the ledger's fallible hook.
+            affected = tuple(role for role in ("host", "coordinator")
+                             if self._state["roles"][role] or role in self._starts)
+            if affected:
+                operation_id = new_id("op")
+                for role in affected:
+                    self._state["paused_roles"][role] = True
+                self._prepare_stop_intent(affected, operation_id)
             try:
                 ledger_state = self.ledger.configure(policy)
             except (ResourceError, StorageError) as error:
+                if operation_id is not None:
+                    self._enqueue(self._urgent, operation_id, "policy_reduction", affected)
                 raise ConnectorError("INVALID_POLICY", str(error)) from error
             self._state["policy"] = policy
-            affected = []
-            # A queued start captured the previous policy. It may never use
-            # that snapshot after the owner has replaced it.
-            for role in ("host", "coordinator"):
-                if role in self._starts:
-                    self._starts[role][1].set()
-                    self._state["paused_roles"][role] = True
-                    affected.append(role)
-            if ledger_state["blocked"]:
-                for role in ("host", "coordinator"):
-                    if self._state["roles"][role]:
-                        self._state["paused_roles"][role] = True
-                        if role not in affected:
-                            affected.append(role)
-            self._persist()
-            operation = self._record_operation("policy.set", status=("queued" if affected else "succeeded"),
-                                               result={"resource_ledger_blocked": ledger_state["blocked"],
-                                                       "roles_paused": affected})
-            if affected:
-                self._fence_stop(affected, operation["operation_id"])
-                self._notify_backend(tuple(affected), draining=False)
+            operation_id = operation_id or new_id("op")
+            try:
+                self._record_operation("policy.set",
+                    status=("queued" if affected else "succeeded"),
+                    result={"resource_ledger_blocked": ledger_state["blocked"],
+                            "roles_paused": list(affected)},
+                    operation_id=operation_id)
+            except Exception:
+                if affected:
+                    self._enqueue(self._urgent, operation_id,
+                                  "policy_reduction", affected)
+                raise
         if affected:
-            self._enqueue(self._urgent, operation["operation_id"], "policy_reduction",
-                          tuple(affected))
-        return {"operation_id": operation["operation_id"],
+            self._enqueue(self._urgent, operation_id, "policy_reduction", affected)
+        return {"operation_id": operation_id,
                 "resource_ledger_blocked": ledger_state["blocked"],
                 "roles_paused": affected, "policy": policy}
 
@@ -443,19 +461,24 @@ class ManagementController:
                 existing = self._find_operation(operation_id)
                 return {"operation_id": operation_id, "state": existing["status"],
                         "deadline_extended": False, "already_draining": sorted(already)}
-            operation = self._record_operation("drain", result={"roles": list(new_roles),
-                                                                 "deadline_seconds": deadline_seconds})
+            operation_id = new_id("op")
             deadline = self.clock() + deadline_seconds
             cancel_event = threading.Event()
             for role in new_roles:
-                self._drains[role] = (operation["operation_id"], deadline, cancel_event)
-            self._state["drain"] = {"operation_id": operation["operation_id"],
+                self._drains[role] = (operation_id, deadline, cancel_event)
+            self._state["drain"] = {"operation_id": operation_id,
                                     "roles": list(new_roles),
                                     "deadline_seconds": deadline_seconds}
-            self._persist()
-        self._enqueue(self._normal, operation["operation_id"], "drain",
+            try:
+                self._record_operation("drain", result={"roles": list(new_roles),
+                    "deadline_seconds": deadline_seconds}, operation_id=operation_id)
+            except Exception:
+                self._enqueue(self._normal, operation_id, "drain",
+                              (new_roles, deadline, cancel_event))
+                raise
+        self._enqueue(self._normal, operation_id, "drain",
                       (new_roles, deadline, cancel_event))
-        return {"operation_id": operation["operation_id"], "state": "draining",
+        return {"operation_id": operation_id, "state": "draining",
                 "deadline_seconds": deadline_seconds, "deadline_extended": False,
                 "already_draining": sorted(already)}
 
@@ -463,19 +486,23 @@ class ManagementController:
         self._payload(payload, {"roles"})
         with self._lock:
             roles = self._roles(payload)
+            operation_id = new_id("op")
             for role in roles:
                 self._state["roles"][role] = False
                 self._state["paused_roles"][role] = True
                 drain = self._drains.get(role)
                 if drain is not None:
                     drain[2].set()
-            self._cancel_starts(roles)
-            operation = self._record_operation("stop", result={"roles": list(roles),
-                                                                 "reclaimed": False})
-            self._fence_stop(roles, operation["operation_id"])
-            self._notify_backend(roles, draining=False)
-        self._enqueue(self._urgent, operation["operation_id"], "stop", roles)
-        return {"operation_id": operation["operation_id"], "state": "stop_intent_recorded",
+            self._prepare_stop_intent(roles, operation_id)
+            try:
+                self._record_operation("stop", result={"roles": list(roles),
+                                                        "reclaimed": False},
+                                       operation_id=operation_id)
+            except Exception:
+                self._enqueue(self._urgent, operation_id, "stop", roles)
+                raise
+        self._enqueue(self._urgent, operation_id, "stop", roles)
+        return {"operation_id": operation_id, "state": "stop_intent_recorded",
                 "admission": "disabled_immediately", "reclaimed": False}
 
     def _remove(self, payload):
@@ -484,6 +511,7 @@ class ManagementController:
         if type(delete_owned_data) is not bool:
             raise ConnectorError("INVALID_ARGUMENT", "delete_owned_data must be boolean")
         with self._lock:
+            operation_id = new_id("op")
             for role in ROLE_NAMES:
                 self._state["roles"][role] = False
                 self._state["paused_roles"][role] = True
@@ -492,15 +520,19 @@ class ManagementController:
                     drain[2].set()
             self._state["removed"] = True
             self._state["revocation_pending"] = True
-            self._cancel_starts(ROLE_NAMES)
-            operation = self._record_operation("remove", result={
-                "delete_owned_data": delete_owned_data,
-                "revocation_status": "pending_offline", "reclaimed": False})
-            self._fence_stop(ROLE_NAMES, operation["operation_id"])
-            self._notify_backend(ROLE_NAMES, draining=False)
-        self._enqueue(self._urgent, operation["operation_id"], "remove",
+            self._prepare_stop_intent(ROLE_NAMES, operation_id)
+            try:
+                self._record_operation("remove", result={
+                    "delete_owned_data": delete_owned_data,
+                    "revocation_status": "pending_offline", "reclaimed": False},
+                    operation_id=operation_id)
+            except Exception:
+                self._enqueue(self._urgent, operation_id, "remove",
+                              (ROLE_NAMES, delete_owned_data))
+                raise
+        self._enqueue(self._urgent, operation_id, "remove",
                       (ROLE_NAMES, delete_owned_data))
-        return {"operation_id": operation["operation_id"], "state": "removal_pending",
+        return {"operation_id": operation_id, "state": "removal_pending",
                 "revocation_status": "pending_offline", "reclaimed": False}
 
     def _operation_status(self, payload):
@@ -548,8 +580,13 @@ class ManagementController:
             if item is None:
                 return
             operation_id, kind, payload = item
-            self._operation_update(operation_id, "running", {})
+            running_write_failed = False
             try:
+                try:
+                    self._operation_update(operation_id, "running", {})
+                except Exception:
+                    # Storage/history is ancillary to owning actual compute.
+                    running_write_failed = True
                 if kind == "start":
                     result = self._perform_start(operation_id, payload)
                 elif kind == "drain":
@@ -565,13 +602,23 @@ class ManagementController:
                 successful = result.get("success", result.get(
                     "drained", result.get("reclaimed", True)))
                 status = "succeeded" if successful is True else "incomplete"
-                self._operation_update(operation_id, status, result)
+                if running_write_failed:
+                    result = dict(result)
+                    result["bookkeeping_warning"] = "running_status_write_failed"
+                try:
+                    self._operation_update(operation_id, status, result)
+                except Exception:
+                    # One bounded write attempt only. Keep ownership fences;
+                    # status may remain queued/running until storage recovers.
+                    pass
             except Exception:
-                self._operation_update(operation_id, "incomplete",
-                                       {"reason": "lifecycle_operation_failed", "reclaimed": False})
+                try:
+                    self._operation_update(operation_id, "incomplete",
+                                           {"reason": "lifecycle_operation_failed",
+                                            "reclaimed": False})
+                except Exception:
+                    pass
             finally:
-                with self._lock:
-                    self._stop_tokens.pop(operation_id, None)
                 work_queue.task_done()
 
     def _cancel_starts(self, roles):
@@ -597,9 +644,21 @@ class ManagementController:
         self._stop_fences.update(tokens)
         self._stop_tokens[operation_id] = tokens
 
+    def _prepare_stop_intent(self, roles, operation_id):
+        """Fence admission and request termination before any fallible storage."""
+        self._fence_stop(roles, operation_id)
+        self._cancel_starts(roles)
+        for role in roles:
+            drain = self._drains.get(role)
+            if drain is not None:
+                drain[2].set()
+        self._notify_backend(roles, draining=False)
+
     def _perform_start(self, operation_id, payload):
         roles, policy, tokens = payload
         started = []
+        attempted = []
+        successful_start = False
         try:
             for role in roles:
                 token = tokens[role]
@@ -614,6 +673,7 @@ class ManagementController:
                             "success": False, "reason": "start_cancelled"}
                 # Stop may run between the check above and this call. The
                 # backend must observe the same already-owned cancellation token.
+                attempted.append(role)
                 ready = self.backend.start(role, policy, cancel_event=token)
                 with self._lock:
                     if not ready or token.is_set():
@@ -622,6 +682,7 @@ class ManagementController:
                         return {"roles_started": started, "blocked_role": role,
                                 "success": False, "reason": "role_backend_not_ready"}
                 started.append(role)
+            successful_start = True
             return {"roles_started": started, "success": True}
         except Exception:
             with self._lock:
@@ -631,10 +692,30 @@ class ManagementController:
                 self._persist()
             raise
         finally:
+            if not successful_start and attempted:
+                self._cleanup_unconfirmed(attempted)
             with self._lock:
                 for role, token in tokens.items():
                     if self._starts.get(role) == (operation_id, token):
                         del self._starts[role]
+
+    def _cleanup_unconfirmed(self, roles, *, drain_operation_id=None):
+        """Establish a stop fence before reclaiming any unconfirmed start/drain."""
+        with self._lock:
+            needed = tuple(role for role in roles
+                           if role not in self._stop_fences
+                           and (role not in self._drains
+                                or self._drains[role][0] == drain_operation_id))
+            if not needed:
+                return {role: False for role in roles}
+            cleanup_id = new_id("op")
+            self._prepare_stop_intent(needed, cleanup_id)
+        try:
+            outcome = self._perform_stop(cleanup_id, needed, disable=False)
+            result = outcome["reclaimed_by_role"]
+        except Exception:
+            result = {role: False for role in needed}
+        return {role: result.get(role, False) for role in roles}
 
     def _perform_drain(self, operation_id, payload):
         roles, deadline, cancel_event = payload
@@ -645,13 +726,28 @@ class ManagementController:
             if not drained and not cancel_event.is_set():
                 cancel_event.wait(max(0.0, deadline - self.clock()))
             if not drained and not cancel_event.is_set() and self.clock() >= deadline:
-                stopped = self._backend_stop(roles)
+                stopped = self._cleanup_unconfirmed(
+                    roles, drain_operation_id=operation_id)
                 reclaimed = all(stopped.get(role, False) for role in roles)
                 return {"drained": False, "success": reclaimed, "deadline_stop": True,
                         "reclaimed": reclaimed, "roles": list(roles)}
-            return {"drained": drained, "success": drained and reclaimed,
-                    "deadline_stop": False, "reclaimed": reclaimed,
+            if drained and reclaimed:
+                return {"drained": True, "success": True,
+                        "deadline_stop": False, "reclaimed": True,
+                        "roles": list(roles)}
+            if cancel_event.is_set():
+                return {"drained": drained, "success": False,
+                        "deadline_stop": False, "reclaimed": False,
+                        "roles": list(roles)}
+            stopped = self._cleanup_unconfirmed(
+                roles, drain_operation_id=operation_id)
+            stopped_all = all(stopped.get(role, False) for role in roles)
+            return {"drained": drained, "success": stopped_all,
+                    "deadline_stop": False, "reclaimed": stopped_all,
                     "roles": list(roles)}
+        except Exception:
+            self._cleanup_unconfirmed(roles, drain_operation_id=operation_id)
+            raise
         finally:
             with self._lock:
                 for role in roles:
@@ -680,10 +776,18 @@ class ManagementController:
                 except (ResourceError, StorageError):
                     reclaimed_map[role] = False
         with self._lock:
-            tokens = self._stop_tokens.pop(operation_id, {})
+            tokens = self._stop_tokens.get(operation_id, {})
+            unresolved = {}
             for role, reclaimed in reclaimed_map.items():
                 if reclaimed and self._stop_fences.get(role) is tokens.get(role):
                     self._stop_fences.pop(role, None)
+                elif (not reclaimed and role in tokens
+                      and self._stop_fences.get(role) is tokens[role]):
+                    unresolved[role] = tokens[role]
+            if unresolved:
+                self._stop_tokens[operation_id] = unresolved
+            else:
+                self._stop_tokens.pop(operation_id, None)
         return {"roles": list(roles), "reclaimed_by_role": reclaimed_map,
                 "reclaimed": all(reclaimed_map.values()),
                 "success": all(reclaimed_map.values()),
@@ -831,31 +935,87 @@ class ManagementController:
                     affected.append(role)
             if not affected:
                 return False
-            operation = self._record_operation("stop", result={
-                "roles": affected, "reason": "required_telemetry_unavailable",
-                "reclaimed": False})
-            self._cancel_starts(affected)
-            self._fence_stop(affected, operation["operation_id"])
-            self._notify_backend(tuple(affected), draining=False)
-        self._enqueue(self._urgent, operation["operation_id"], "policy_reduction",
-                      tuple(affected))
+            operation_id = new_id("op")
+            self._prepare_stop_intent(tuple(affected), operation_id)
+            try:
+                self._record_operation("stop", result={
+                    "roles": affected, "reason": "required_telemetry_unavailable",
+                    "reclaimed": False}, operation_id=operation_id)
+            except Exception:
+                self._enqueue(self._urgent, operation_id, "policy_reduction",
+                              tuple(affected))
+                raise
+        self._enqueue(self._urgent, operation_id, "policy_reduction", tuple(affected))
         return True
 
     def shutdown(self, *, wait_seconds=1.0):
+        if (type(wait_seconds) not in (int, float) or not math.isfinite(wait_seconds)
+                or wait_seconds < 0):
+            return False
+        wait_seconds = min(float(wait_seconds), 15.0)
         with self._lock:
-            self._closing.set()
-            self._cancel_starts(ROLE_NAMES)
-            self._notify_backend(ROLE_NAMES, draining=False)
-            for role, enabled in self._state["roles"].items():
-                if enabled:
-                    self._state["paused_roles"][role] = True
-            self._persist()
-        self._closing.set()
-        for work_queue in (self._urgent, self._normal):
-            try:
-                work_queue.put_nowait(None)
-            except queue.Full:
-                pass
-        deadline = self.clock() + wait_seconds
+            if not self._shutdown_started:
+                self._shutdown_started = True
+                self._closing.set()
+                operation_id = new_id("op")
+                for role, enabled in self._state["roles"].items():
+                    if enabled:
+                        self._state["paused_roles"][role] = True
+                self._prepare_stop_intent(ROLE_NAMES, operation_id)
+                for drain in self._drains.values():
+                    drain[2].set()
+                try:
+                    self._persist()
+                except Exception:
+                    self._shutdown_persist_failed = True
+                self._shutdown_tokens = self._stop_tokens.get(operation_id, {})
+                self._shutdown_operation_id = operation_id
+                try:
+                    owner = threading.Thread(target=self._shutdown_cleanup_owner,
+                        name="connector-shutdown-cleanup", daemon=True)
+                    self._shutdown_thread = owner
+                    owner.start()
+                    self._shutdown_thread_started = True
+                except Exception:
+                    self._shutdown_result = {role: False for role in ROLE_NAMES}
+                    self._shutdown_done.set()
+            else:
+                owner = getattr(self, "_shutdown_thread", None)
+            owner = self._shutdown_thread
+        deadline = time.monotonic() + wait_seconds
+        if (owner is not None and owner is not threading.current_thread()
+                and self._shutdown_thread_started):
+            owner.join(max(0.0, deadline - time.monotonic()))
         for thread in self._threads:
-            thread.join(max(0.0, deadline - self.clock()))
+            if thread is not threading.current_thread():
+                thread.join(max(0.0, deadline - time.monotonic()))
+        completed = self._shutdown_done.is_set()
+        workers_stopped = all(not thread.is_alive() for thread in self._threads)
+        return bool(completed and workers_stopped and self._shutdown_result
+                    and all(self._shutdown_result.values())
+                    and not self._shutdown_persist_failed)
+
+    def _shutdown_cleanup_owner(self):
+        """One retained daemon owner performs final bounded stop/release proof."""
+        result = {role: False for role in ROLE_NAMES}
+        try:
+            result = self._backend_stop(ROLE_NAMES)
+            for role, reclaimed in tuple(result.items()):
+                if not reclaimed:
+                    continue
+                try:
+                    self.ledger.release(role, reclaimed=True)
+                except (ResourceError, StorageError):
+                    result[role] = False
+            if not self._shutdown_persist_failed:
+                with self._lock:
+                    for role, reclaimed in result.items():
+                        token = self._shutdown_tokens.get(role)
+                        if reclaimed and self._stop_fences.get(role) is token:
+                            self._stop_fences.pop(role, None)
+                    self._stop_tokens.pop(self._shutdown_operation_id, None)
+        except Exception:
+            result = {role: False for role in ROLE_NAMES}
+        finally:
+            self._shutdown_result = result
+            self._shutdown_done.set()
