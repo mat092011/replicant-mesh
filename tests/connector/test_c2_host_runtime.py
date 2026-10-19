@@ -451,7 +451,7 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                 bridge = runtime._bridges["worker-1"]
                 handler = runtime._handlers["worker-1"]
                 lease = runtime._lease
-                runtime._close_lock.acquire()
+                await runtime._close_lock.acquire()
                 started = asyncio.get_running_loop().time()
                 try:
                     with self.assertRaisesRegex(C2HostRuntimeError,
@@ -500,6 +500,7 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
 
                 pulse = asyncio.create_task(heartbeat())
                 started = asyncio.get_running_loop().time()
+                task = None
                 try:
                     close_task = asyncio.create_task(runtime.close(0.75))
                     while runtime._lease_exit_task is None and not close_task.done():
@@ -509,6 +510,18 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaisesRegex(C2HostRuntimeError,
                             "cleanup is uncertain"):
                         await close_task
+                    task = runtime._lease_exit_task
+                    self.assertIsNotNone(task)
+                    self.assertFalse(task.done(),
+                        "lease retirement completed while the child-owner lock was held")
+                    self.assertEqual(runtime._state, "faulted")
+                    self.assertIs(runtime._lease, lease)
+                    self.assertIsNotNone(runtime._binding)
+                    self.assertIsNotNone(runtime._child_pins)
+                    self.assertIsNotNone(runtime._installer)
+                    self.assertEqual(child_pins._state, "open")
+                    self.assertGreater(ticks, 1,
+                        "event loop stalled during lease retirement")
                 finally:
                     release.set()
                     holder.join(2.0)
@@ -517,16 +530,7 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                 elapsed = asyncio.get_running_loop().time() - started
                 self.assertLess(elapsed, 1.25)
                 self.assertGreater(ticks, 1, "event loop stalled during lease retirement")
-                task = runtime._lease_exit_task
                 self.assertIsNotNone(task)
-                self.assertFalse(task.done())
-                self.assertEqual(runtime._state, "faulted")
-                self.assertIs(runtime._lease, lease)
-                self.assertIsNotNone(runtime._binding)
-                self.assertIsNotNone(runtime._child_pins)
-                self.assertIsNotNone(runtime._installer)
-                self.assertEqual(child_pins._state, "open")
-
                 self.assertFalse(holder.is_alive())
                 self.assertTrue(await asyncio.wait_for(asyncio.shield(task), 2.0))
                 with self.assertRaisesRegex(C2HostRuntimeError, "cleanup is uncertain"):
