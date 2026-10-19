@@ -38,6 +38,7 @@ from steamboat_security.channel_certificates import (
 _RETAINED_UNCERTAIN_FIXTURES = []
 _RETENTION_LOCK = threading.Lock()
 _MAX_RETAINED_FIXTURES = 8
+_MISSING = object()
 
 
 def _reserve_retention_slot():
@@ -158,55 +159,80 @@ class C2HostProcessFixture:
         self._retention_slot["fixture"] = self
         self._cleanup_confirmed = False
         self._closed = False
-        from steamboat_runtime.manifest import load_manifest
-        from steamboat_runtime.protocol.clock import clock_identity
-        from steamboat_security.channel_policy import canonical_json as policy_json
-        from steamboat_security.root_transition_storage import RootGenerationStore
-        from steamboat_connector.channel_policy_store import PersistentChannelPolicyStore
-        from steamboat_connector.traffic_budget import TrafficBudget
-        from tests.connector.test_artifacts import _PUBLIC
-        from tests.security import test_root_c2_runtime as c2_runtime_tests
-        self._c2_runtime_tests = c2_runtime_tests
-        self.artifacts_dir = Path(artifacts_dir).resolve(strict=True)
-        self._temp = tempfile.TemporaryDirectory(prefix="c2-host-process-",
-            dir=scratch_dir)
-        self.root = Path(self._temp.name)
-        os.chmod(self.root, 0o700)
         self._stack = ExitStack()
-        self._stack.callback(self._cleanup_owners)
-        listeners = []
-        for _ in range(2):
-            listener = _listener()
-            listeners.append(listener)
-            self._stack.callback(listener.close)
-        self.listeners = tuple(listeners)
+        self._temp = None
+        self.root = None
+        self.listeners = ()
+        self._listener_close_states = {}
+        self._gateway_owns_listeners = False
+        self.gateway = self.startup = self.backend = self.cgroup = None
+        self._partial_startup = None
+        self._startup_construction_failed = False
+        self.policy_owner = self.traffic = self.clock = None
         self.gateway_ca = self.gateway_ca_key = None
         self.gateway_cert = self.gateway_key = self.gateway_x509 = None
-        from cryptography.hazmat.primitives.asymmetric import ec
-        self.policy_key = ec.generate_private_key(ec.SECP256R1())
-        self.policy_private_pem = _pem_private(self.policy_key)
-        self.policy_public_pem = _pem_public(self.policy_key)
-        self.policy_owner = self.traffic = self.gateway = self.startup = None
-        self.backend = self.cgroup = None
-        self.clock = None
-        self.model_fingerprint = load_manifest(self.artifacts_dir)["fingerprint"]
-        self.catalog_public_key_hex = _PUBLIC.hex()
-        self._runtime_case = None
+        # Establish cleanup coverage before imports, manifest reads, directory
+        # creation, listener allocation, or any selected-root construction.
+        self._stack.callback(self._cleanup_owners)
         try:
+            from steamboat_runtime.manifest import load_manifest
+            from steamboat_runtime.protocol.clock import clock_identity
+            from tests.connector.test_artifacts import _PUBLIC
+            from tests.security import test_root_c2_runtime as c2_runtime_tests
+            self._c2_runtime_tests = c2_runtime_tests
+            self.artifacts_dir = Path(artifacts_dir).resolve(strict=True)
+            self._temp = tempfile.TemporaryDirectory(prefix="c2-host-process-",
+                dir=scratch_dir)
+            self.root = Path(self._temp.name)
+            os.chmod(self.root, 0o700)
+            listeners = []
+            for _ in range(2):
+                listener = _listener()
+                listeners.append(listener)
+                self._listener_close_states[id(listener)] = [listener, "open"]
+                self._stack.callback(self._close_untransferred_listener, listener)
+            self.listeners = tuple(listeners)
+            from cryptography.hazmat.primitives.asymmetric import ec
+            self.policy_key = ec.generate_private_key(ec.SECP256R1())
+            self.policy_private_pem = _pem_private(self.policy_key)
+            self.policy_public_pem = _pem_public(self.policy_key)
+            self.model_fingerprint = load_manifest(self.artifacts_dir)["fingerprint"]
+            self.catalog_public_key_hex = _PUBLIC.hex()
+            self._runtime_case = None
             self._prepare_fixture(c2_runtime_tests, _PUBLIC, clock_identity)
         except BaseException:
             self.close()
             raise
 
+    def _close_untransferred_listener(self, listener):
+        if self._gateway_owns_listeners:
+            return
+        record = self._listener_close_states.get(id(listener))
+        if record is None or record[0] is not listener or record[1] != "open":
+            return
+        record[1] = "closing"
+        try:
+            listener.close()
+            record[1] = "closed" if listener.fileno() == -1 else "uncertain"
+        except BaseException:
+            record[1] = "uncertain"
+
     def _prepare_fixture(self, runtime_tests, catalog_key, clock_identity):
         from tests.connector.c2_startup_fixture import C2StartupFixture
+        startup_type = C2StartupFixture
+        original_selected_build = startup_type._build_selected_root
         original_clock = runtime_tests.Clock
         original_private = runtime_tests.C2RuntimeStoreIntegrationTests._private
         original_build = runtime_tests.C2RuntimeStoreIntegrationTests._build
 
+        def capture_startup_pin_root(startup):
+            self._partial_startup = startup
+            self._actual_pin_root = startup.pin_root
+            return original_selected_build(startup)
+
         def native_clock(*, wall, monotonic, uncertainty_seconds=None, **kwargs):
-            # Fixture wall time remains signed/test-controlled; monotonic is the
-            # actual Linux clock required by the inherited ClockBridge checks.
+            # Signed fixture time advances with the actual Linux monotonic
+            # source required by inherited ClockBridge checks.
             initial_wall = float(wall())
             initial_mono = time.monotonic()
             return original_clock(wall=lambda: initial_wall + time.monotonic() - initial_mono,
@@ -225,14 +251,60 @@ class C2HostProcessFixture:
             if path.name == "runtime.json" and self._runtime_case is not None:
                 data = self._make_runtime_settings(self._runtime_case, catalog_key,
                                                    clock_identity)
+            elif path.name == "header.json" and self._runtime_case is not None:
+                from steamboat_security.codec import canonical_json
+                header = json.loads(data.decode("utf-8", "strict"))
+                runtime_bytes = (path.parent / "runtime.json").read_bytes()
+                header["runtime_configuration_sha256"] = hashlib.sha256(
+                    runtime_bytes).hexdigest()
+                data = canonical_json(header)
             return original_private(path, data)
 
-        with (unittest_mock_patch(runtime_tests, "Clock", native_clock),
-              unittest_mock_patch(runtime_tests.C2RuntimeStoreIntegrationTests,
-                                  "_build", build),
-              unittest_mock_patch(runtime_tests.C2RuntimeStoreIntegrationTests,
-                                  "_private", staticmethod(write_private))):
-            self.startup = C2StartupFixture(self.artifacts_dir, self.root)
+        import tests.security.test_root_transition_issuance as issuance_fixture
+        baseline = int(time.time())
+        original_mutable_init = issuance_fixture.MutableClock.__init__
+        issuance_class = issuance_fixture.RootTransitionIssuanceTests
+        class_fields = ("old_ca", "old_ca_key", "new_ca", "new_ca_key",
+            "old_snapshot_key", "new_snapshot_key", "old_snapshot_public",
+            "new_snapshot_public", "clock_source", "account", "roles",
+            "intent_document", "payload", "intent")
+        prior_class_state = {name: getattr(issuance_class, name, _MISSING)
+                             for name in class_fields}
+
+        def current_mutable_clock(clock, wall=None):
+            return original_mutable_init(clock, wall=baseline if wall is None else wall)
+
+        try:
+            with (unittest_mock_patch(startup_type, "_build_selected_root",
+                                      capture_startup_pin_root),
+                  unittest_mock_patch(issuance_fixture, "NOW", baseline),
+                  unittest_mock_patch(issuance_fixture.MutableClock, "__init__",
+                                      current_mutable_clock),
+                  unittest_mock_patch(runtime_tests, "Clock", native_clock),
+                  unittest_mock_patch(runtime_tests.C2RuntimeStoreIntegrationTests,
+                                      "_build", build),
+                  unittest_mock_patch(runtime_tests.C2RuntimeStoreIntegrationTests,
+                                      "_private", staticmethod(write_private))):
+                try:
+                    self.startup = C2StartupFixture(self.artifacts_dir, self.root)
+                except BaseException:
+                    self._startup_construction_failed = True
+                    raise
+        finally:
+            for name, value in prior_class_state.items():
+                if value is _MISSING:
+                    try:
+                        delattr(issuance_class, name)
+                    except AttributeError:
+                        pass
+                else:
+                    setattr(issuance_class, name, value)
+        if Path(self._actual_pin_root).resolve() != self.startup.pin_root.resolve():
+            raise RuntimeError("captured runtime artifact root differs from selected pin root")
+        runtime_bytes = (self.startup.selected_store.protected / "runtime.json").read_bytes()
+        header = json.loads(self.startup.selected_store.header_path.read_bytes())
+        if header["runtime_configuration_sha256"] != hashlib.sha256(runtime_bytes).hexdigest():
+            raise RuntimeError("selected header does not bind the exact runtime configuration")
         self.clock = self.startup.clock
         self.selected_spec = self.startup.selected_host
         self.binding = self.startup.binding
@@ -307,7 +379,7 @@ class C2HostProcessFixture:
         owner.close()
         from steamboat_security.codec import canonical_json
         settings = {"schema_version": 1, "profile": "native_posix_c2_host_runtime_v1",
-            "artifact_root": str(Path(case.root).parent / "artifact-store"),
+            "artifact_root": str(self._actual_pin_root),
             "catalog_public_key_hex": catalog_key.hex(),
             "component_allocations": {"worker-1": {"sessions": 1,
                 "kv_bytes": 32768, "cache_positions": 32, "queued_calls": 0}},
@@ -358,7 +430,7 @@ class C2HostProcessFixture:
         spec = self.selected_spec
         target = (spec.device_id, component["worker_boot_id"],
                   component["assignment_id"], self.model_fingerprint)
-        return GatewayService(worker_listener=self.listeners[0],
+        service = GatewayService(worker_listener=self.listeners[0],
             coordinator_listener=self.listeners[1], expected_workers=((spec.device_id,
                 component["worker_boot_id"]),), coordinator_boot_id="c" * 32,
             tenant_account_id=spec.account_id, gateway_id="gw-c2-host",
@@ -371,6 +443,8 @@ class C2HostProcessFixture:
             policy_store=self.policy_owner.core_store, clock=self.clock,
             traffic_budget=self.traffic, gateway_traffic_boot_id="c" * 32,
             communication_memory_ceiling_bytes=required_communication_memory_bytes(1))
+        self._gateway_owns_listeners = True
+        return service
 
     def configure_backend(self):
         from steamboat_connector.c2_child_config import build_c2_child_config
@@ -381,11 +455,16 @@ class C2HostProcessFixture:
         supervisor_root.mkdir(mode=0o700)
         self.backend = ProcessRoleBackend(supervisor_root, self.cgroup)
         self.backend.bind_authority_clock(self.clock)
-        config = build_c2_child_config(role="host", selected_root=str(self.root_store.root),
+        config = build_c2_child_config(role="host",
+            selected_root=str(self.startup.selected_store.root),
             protected_root=str(self.startup.selected_store.protected),
             configuration_path=str(self.startup.selected_store.header_path),
             launch_spec=self.selected_spec,
             operator_verification_key_pem=self.startup.operator_verification_key_pem)
+        if (Path(config.selected_root).resolve() != self.startup.selected_store.root.resolve()
+                or Path(config.protected_root).resolve()
+                != self.startup.selected_store.protected.resolve()):
+            raise RuntimeError("child configuration differs from the verified selected roots")
         if not self.backend.configure_pinned_role("host", config, self.pin,
                                                   catalog_verifier=self.verifier):
             raise RuntimeError("actual selected host pin could not be configured")
@@ -421,15 +500,23 @@ class C2HostProcessFixture:
         return policy
 
     def _cleanup_owners(self):
+        gateway_reclaimed = (self._gateway_owns_listeners or all(
+            record[1] == "closed" for record in self._listener_close_states.values()))
+        if self.gateway is not None:
+            self.gateway.stop()
+            gateway_reclaimed = self.gateway_reclamation_confirmed()
         reclaimed = True
         if self.backend is not None:
             result = self.backend.stop(("host",), 15.0)
             reclaimed = (result.get("host") is True
                          and "host" not in self.backend._owned)
-            if reclaimed and "host" in self.backend._pinned_roles:
-                reclaimed = self.backend.release_configured_pin("host") is True
-        if self.gateway is not None:
-            self.gateway.stop()
+        if not gateway_reclaimed:
+            return
+        if self._startup_construction_failed:
+            return
+        if (reclaimed and self.backend is not None
+                and "host" in self.backend._pinned_roles):
+            reclaimed = self.backend.release_configured_pin("host") is True
         if not reclaimed:
             # Keep every downstream descriptor/lease reachable when process
             # reclamation is uncertain; test teardown must not manufacture a
@@ -443,13 +530,40 @@ class C2HostProcessFixture:
             self.startup.close()
         self._cleanup_confirmed = True
 
+    def gateway_reclamation_confirmed(self):
+        if self.gateway is None:
+            return True
+        from steamboat_connector import gateway_service as gateway_module
+        from steamboat_connector.channel_socket import ChannelSocket
+        stream_closes_confirmed = True
+        for _registration, stream, _pending in self.gateway._workers.values():
+            driver = stream if type(stream) is ChannelSocket else getattr(stream, "_driver", None)
+            tls = None if driver is None else getattr(driver, "_tls", None)
+            if (driver is None or driver.socket_close_status != "closed"
+                    or tls is None or tls.cleanup_status != "removed"
+                    or tls.cleanup_uncertain):
+                stream_closes_confirmed = False
+                break
+        return (
+            self.gateway._resources_closed is True
+            and not self.gateway._stuck
+            and stream_closes_confirmed
+            and all(id(listener) in self.gateway._listeners_closed
+                    for listener in self.listeners)
+            and all(item.close_complete for item in self.gateway._accepted)
+            and self.gateway not in gateway_module._LIVE_SERVICES
+            and self.gateway not in gateway_module._RETAINED_SERVICES
+            and all(gateway_module._LISTENER_OWNERS.get(id(listener), (None,))[0]
+                    is not listener for listener in self.listeners))
+
     def close(self):
         if self._closed:
             return
         self._closed = True
         self._stack.close()
         if self._cleanup_confirmed:
-            self._temp.cleanup()
+            if self._temp is not None:
+                self._temp.cleanup()
             _release_retention_slot(self._retention_slot)
 
     def __enter__(self):

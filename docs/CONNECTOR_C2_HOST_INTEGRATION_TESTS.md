@@ -22,11 +22,13 @@ purpose and distinct ports. The host endpoint is numeric loopback and the
 operator-issued gateway certificate has a matching IP subject alternative
 name. No DNS remapping or TLS verification bypass is used.
 
-The fixture preserves the selected root's test-controlled wall time and uses
-the actual Linux monotonic clock for the exact `Clock` passed to the store,
-artifact verifier, traffic ledger and supervisor. This allows the inherited
-ClockBridge to compare against the kernel clock. Its uncertainty callback is a
-test fixture setting; this does not establish trusted wall-clock accuracy.
+The fixture rebases the genuine signed test authorities to the current wall
+time before construction, then gives the selected fixture Clock an advancing
+wall value driven by the actual Linux monotonic clock. That same exact Clock is
+passed to the stores, artifact verifier, traffic ledger, gateway and supervisor,
+so the inherited ClockBridge can compare against the kernel clock and OpenSSL
+sees currently valid certificates. This establishes neither trusted wall-clock
+accuracy nor an external time authority.
 
 `LifecycleCgroupStandIn` supplies only the filesystem events that the
 supervisor uses to verify child-tree lifecycle and removal. It does not apply
@@ -39,7 +41,9 @@ claim physically enforced resource quotas.
 The fixture reserves one of eight process-local retention slots before it
 acquires test resources. If process reclamation or owner cleanup is uncertain,
 teardown retains the fixture and its temporary directory instead of allowing
-the test framework to erase ownership evidence. The cgroup stand-in is only a
+the test framework to erase ownership evidence. Actual gateway close state and
+retained-owner registries must also show confirmed cleanup before the fixture
+releases selected-root or artifact-pin owners. The cgroup stand-in is only a
 lifecycle test seam; it does not provide physical process containment.
 
 Run the focused native case with:

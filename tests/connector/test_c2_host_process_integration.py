@@ -52,6 +52,15 @@ class C2HostProcessIntegrationTests(unittest.IsolatedAsyncioTestCase):
             # coordinator process is part of this one-role test.
             self.assertFalse(fixture.gateway.route_connected)
 
+            stop_pump.set()
+            pump.cancel()
+            try:
+                await pump
+            except asyncio.CancelledError:
+                pass
+            fixture.gateway.stop()
+            self.assertTrue(fixture.gateway_reclamation_confirmed(),
+                "gateway sockets, TLS credentials and retained owners must be confirmed closed before pin release")
             stopped = await asyncio.to_thread(
                 fixture.backend.stop, ("host",), 15.0)
             self.assertIs(stopped.get("host"), True)
@@ -68,6 +77,8 @@ class C2HostProcessIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 await pump
             except asyncio.CancelledError:
                 pass
+            # Idempotent proof/cleanup on failure paths; successful paths stop
+            # the gateway before backend pin release above.
             fixture.gateway.stop()
 
 
