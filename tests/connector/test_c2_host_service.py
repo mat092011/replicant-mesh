@@ -39,6 +39,28 @@ def _policy(*, communication=0, capture=0):
 
 
 class C2HostServiceContractTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix" and sys.platform.startswith("linux"),
+                         "real SIGTERM delivery requires Linux")
+    def test_real_sigterm_fences_service_while_loop_is_stopped(self):
+        code = "\n".join((
+            "import asyncio, os, signal, sys",
+            "sys.path.insert(0, " + repr(str(ROOT / "src")) + ")",
+            "from steamboat_connector.c2_host_service import C2HostService",
+            "service = C2HostService('/protected/host-runtime.json')",
+            "loop = asyncio.new_event_loop()",
+            "service._loop = loop",
+            "service._stop_event = asyncio.Event()",
+            "service._install_signal_handlers()",
+            "os.kill(os.getpid(), signal.SIGTERM)",
+            "assert service._stop_requested.is_set()",
+            "assert not service.ready",
+            "service._restore_sigterm_handler()",
+            "loop.close()",
+            "service._runner.close()",
+        ))
+        subprocess.run([sys.executable, "-I", "-c", code], check=True,
+                       capture_output=True, text=True, timeout=10)
+
     def test_import_and_fixed_role_entrypoint_do_not_load_torch(self):
         code = (
             "import sys; sys.path.insert(0, " + repr(str(ROOT / "src")) + "); "

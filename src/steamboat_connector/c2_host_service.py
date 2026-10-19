@@ -603,7 +603,7 @@ class C2HostService:
                 pass
             self._previous_sigterm_handler = None
 
-    def request_stop(self):
+    def request_stop(self, *_signal_args):
         """Fence the event loop promptly; bounded owner cleanup runs in-loop."""
         self._stop_requested.set()
         if self._lifecycle_lock.acquire(blocking=False):
