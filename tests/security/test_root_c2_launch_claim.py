@@ -198,12 +198,15 @@ class C2ClaimFixture(unittest.TestCase):
             generation_sha256=self.cohort.generation_sha256,
             new_role_launch_specs=self.cohort.new_specs,
             new_host_group_scopes=self.cohort.new_groups)
+        original_close = os.close
+        replacement_fd = os.open(os.devnull, os.O_RDONLY)
         store = C2LaunchClaimStore(root, expected_uid=os.geteuid())
         root_fd = store._fd
+        self.assertNotEqual(root_fd, replacement_fd)
         fsync_entered, fsync_release = threading.Event(), threading.Event()
         close_started, close_waiting, close_done = threading.Event(), threading.Event(), threading.Event()
         results, failures, reused = [], [], []
-        original_fsync, original_close = os.fsync, os.close
+        original_fsync = os.fsync
 
         def blocked_fsync(fd):
             if fd == root_fd and not fsync_entered.is_set():
@@ -219,7 +222,7 @@ class C2ClaimFixture(unittest.TestCase):
             close_started.set()
             try:
                 store.close()
-                reused.append(os.open(os.devnull, os.O_RDONLY))
+                reused.append(os.dup2(replacement_fd, root_fd))
             except BaseException as error: failures.append(error)
             finally: close_done.set()
 
@@ -261,6 +264,7 @@ class C2ClaimFixture(unittest.TestCase):
             if closer.is_alive(): closer.join(5)
             store.close()
             if reused: original_close(reused[0])
+            original_close(replacement_fd)
 
     @unittest.skipUnless(os.name == "posix", "native POSIX store")
     def test_malformed_public_specs_and_duplicate_principal_reject(self):
