@@ -141,6 +141,13 @@ class BootstrapContext:
             self._uses -= 1
             return self.deadline_monotonic
 
+    def _check_available(self, owner, now: float) -> float:
+        """Check route-mint eligibility without consuming a Describe use."""
+        with self._lock:
+            if self._owner is not owner or self._uses <= 0 or now >= self.deadline_monotonic:
+                raise ScopeError("Worker Describe bootstrap capability is unavailable")
+            return self.deadline_monotonic
+
 
 class ConsumerRequestContext:
     """Adapter-minted correlation/deadline capability for consumer client calls.

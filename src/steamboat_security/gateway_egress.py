@@ -17,13 +17,18 @@ from .authorization import LocalIdentity, _verify_pinned_credential
 from .certificates import certificate_sha256
 from .channel_certificates import verify_channel_certificate
 from .channel_policy import ChannelPolicyStore
-from .channel_tls import OwnedWorkerTLS, is_owned_worker_tls
+from .channel_tls import OwnedWorkerTLS, OwnedWorkerTLSError, is_owned_worker_tls
 from .errors import ScopeError, SessionError
 from .outbound import OutboundAuthorizer
 
 
 class GatewayEgressError(ScopeError):
     """The authenticated coordinator-to-gateway route is unavailable."""
+
+    def __init__(self, message, *, cleanup_status=None, credential_directory=None):
+        super().__init__(message)
+        self.cleanup_status = cleanup_status
+        self.credential_directory = credential_directory
 
 
 _GUARD_TOKEN = object()
@@ -123,13 +128,29 @@ class GatewayCoordinatorEgress:
         self._worker_policy = self._view.worker(
             authorizer.target.device_id, authorizer.target.boot_id)
         self._validate_initial_policy()
+        self._coordinator_identity = self._capture_coordinator_identity()
+        self._configured_coordinator_certificate_pem = bytes(
+            authorizer.local_identity.certificate_pem)
         host_dns, host_ip = _endpoint_names(self._gateway_policy["endpoint_host"])
-        self._tls = OwnedWorkerTLS.connect(
-            worker_certificate_pem=authorizer.local_identity.certificate_pem,
-            worker_private_key_pem=coordinator_private_key_pem,
-            gateway_ca_pem=gateway_ca_pem,
-            endpoint_host=self._gateway_policy["endpoint_host"],
-            endpoint_port=self._gateway_policy["endpoint_port"], clock=self.clock)
+        try:
+            self._tls = OwnedWorkerTLS.connect(
+                worker_certificate_pem=self._configured_coordinator_certificate_pem,
+                worker_private_key_pem=coordinator_private_key_pem,
+                gateway_ca_pem=gateway_ca_pem,
+                endpoint_host=self._gateway_policy["endpoint_host"],
+                endpoint_port=self._gateway_policy["endpoint_port"], clock=self.clock)
+        except OwnedWorkerTLSError as error:
+            if error.cleanup_status == "uncertain":
+                raise GatewayEgressError(
+                    "gateway TLS credential cleanup is uncertain",
+                    cleanup_status=error.cleanup_status,
+                    credential_directory=error.credential_directory) from error
+            raise
+        if self._tls.cleanup_uncertain:
+            raise GatewayEgressError(
+                "gateway TLS credential cleanup is uncertain",
+                cleanup_status=self._tls.cleanup_status,
+                credential_directory=self._tls.credential_directory)
         self._host_dns, self._host_ip = host_dns, host_ip
         self._gateway_ca_pem = gateway_ca_pem
         self._gateway_verified = False
@@ -142,7 +163,8 @@ class GatewayCoordinatorEgress:
                 "authorizer", "policy_store", "logical_host_certificate_pem",
                 "gateway_id", "clock", "_generation", "_view",
                 "_gateway_policy", "_worker_policy", "_host_dns", "_host_ip",
-                "_gateway_ca_pem", "_tls"}:
+                "_gateway_ca_pem", "_tls", "_coordinator_identity",
+                "_configured_coordinator_certificate_pem"}:
             raise AttributeError("gateway egress authority and transport are immutable")
         object.__setattr__(self, name, value)
 
@@ -209,7 +231,7 @@ class GatewayCoordinatorEgress:
 
     def take_encrypted(self, maximum=16 * 1024):
         with self._lock:
-            self._assert_transport_live_locked(check_policy=False)
+            self._assert_transport_live_locked()
             try:
                 return self._tls.take_encrypted(maximum)
             except Exception:
@@ -218,7 +240,7 @@ class GatewayCoordinatorEgress:
 
     def feed_encrypted(self, data):
         with self._lock:
-            self._assert_transport_live_locked(check_policy=False)
+            self._assert_transport_live_locked()
             try:
                 self._tls.feed_encrypted(data)
             except Exception:
@@ -253,7 +275,13 @@ class GatewayCoordinatorEgress:
                 self._fault_locked()
                 raise
 
-    def _assert_transport_live_locked(self, *, check_policy=True):
+    def _capture_coordinator_identity(self):
+        identity = self.authorizer.local_identity
+        return (identity.certificate_pem, identity.boot_id, identity.model_id,
+                identity.assignment_id, identity.admission_epoch,
+                identity.root_generation_sha256)
+
+    def _assert_transport_live_locked(self):
         if self._closed or self._faulted or not is_owned_worker_tls(self._tls):
             raise GatewayEgressError("gateway egress generation is closed or faulted")
         try:
@@ -266,23 +294,30 @@ class GatewayCoordinatorEgress:
             if isinstance(error, GatewayEgressError):
                 raise
             raise GatewayEgressError("gateway TLS owner is no longer live") from error
-        if check_policy and self._gateway_verified:
-            try:
-                view, sample = self.policy_store.current_with_sample()
-                if (view.revision != self._view.revision
-                        or view.policy_digest != self._view.policy_digest):
-                    raise GatewayEgressError("channel policy changed; reconnect required")
-                if view.deadline_monotonic < self._view.deadline_monotonic:
-                    # Preserve ChannelPolicyStore's conservative uncertainty
-                    # clipping locally; never widen a generation's original cap.
-                    object.__setattr__(self, "_view", view)
-                if sample.monotonic >= self._view.deadline_monotonic:
-                    raise GatewayEgressError("channel policy generation has expired")
-            except Exception as error:
-                self._fault_locked()
-                if isinstance(error, GatewayEgressError):
-                    raise
-                raise GatewayEgressError("channel policy is no longer live") from error
+        # Policy identity and its monotonic cap govern the connection from
+        # creation through teardown, including queued TLS handshake bytes.
+        try:
+            if self._capture_coordinator_identity() != self._coordinator_identity:
+                raise GatewayEgressError(
+                    "coordinator identity changed; reconnect required")
+            if self._tls.handshake_complete:
+                configured = self._tls.configured_local_certificate_pem
+                if configured != self._configured_coordinator_certificate_pem:
+                    raise GatewayEgressError(
+                        "TLS client credential changed; reconnect required")
+            view, sample = self.policy_store.current_with_sample()
+            if (view.revision != self._view.revision
+                    or view.policy_digest != self._view.policy_digest):
+                raise GatewayEgressError("channel policy changed; reconnect required")
+            if view.deadline_monotonic < self._view.deadline_monotonic:
+                object.__setattr__(self, "_view", view)
+            if sample.monotonic >= self._view.deadline_monotonic:
+                raise GatewayEgressError("channel policy generation has expired")
+        except Exception as error:
+            self._fault_locked()
+            if isinstance(error, GatewayEgressError):
+                raise
+            raise GatewayEgressError("channel policy or coordinator identity is no longer live") from error
 
     def _fault_locked(self):
         self._faulted = True
@@ -307,6 +342,7 @@ class GatewayCoordinatorEgress:
     def mint_route_guard(self, *, method, trusted_request_context):
         """Authorize the exact coordinator/worker route for one C1 worker call."""
         from .codec import WORKER_METHODS
+        from .outbound import BootstrapContext
         with self._lock:
             self._assert_transport_live_locked()
             if not self._gateway_verified:
@@ -314,13 +350,25 @@ class GatewayCoordinatorEgress:
             if method not in WORKER_METHODS:
                 raise GatewayEgressError("route method is not an exact worker method")
             adapter = self.authorizer
-            context_values, _authorization, context_deadline = adapter._worker_context_values(
-                trusted_request_context)
+            if type(trusted_request_context) is BootstrapContext:
+                trusted_request_context._check_available(
+                    adapter._capability_owner, self.clock.sample().monotonic)
+            context_deadline = adapter._assert_context_for_auth(
+                trusted_request_context, "steamboat.v1.Worker", method)
+            if type(trusted_request_context) is BootstrapContext:
+                # The eventual C1 admission consumes this finite capability;
+                # route minting only validates it and must not spend a use.
+                context_values = {"tenant_account_id": None}
+            else:
+                context_values, _authorization, _hard_deadline = adapter._worker_context_shape(
+                    trusted_request_context)
             sample = self.clock.sample()
             c1_view = adapter.snapshot_store.current(sample=sample)
             local = _verify_pinned_credential(
                 adapter.snapshot_store, adapter.local_identity.certificate_pem,
                 c1_view, sample)
+            if type(trusted_request_context) is BootstrapContext:
+                context_values["tenant_account_id"] = local.account_id
             target = _verify_pinned_credential(
                 adapter.snapshot_store, self.logical_host_certificate_pem,
                 c1_view, sample)

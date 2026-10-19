@@ -6,6 +6,7 @@ import ssl
 import tempfile
 import time
 import unittest
+from unittest import mock
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +27,9 @@ from steamboat_security.channel_certificates import (issue_channel_certificate,
 from steamboat_security.channel_policy import ChannelPolicyStore, sign_channel_policy
 from steamboat_security.gateway_egress import (GatewayCoordinatorEgress,
     GatewayEgressError, GatewayRouteGuard)
-from steamboat_security.outbound import OutboundAuthorizer, OutboundTarget
+from steamboat_security.outbound import (BootstrapContext, OutboundAuthorizer,
+    OutboundTarget)
+from steamboat_security.channel_tls import OwnedWorkerTLSError
 from steamboat_security.errors import BindingError, CredentialError, ScopeError, SessionError
 from steamboat_security.codec import WORKER_SERVICE
 
@@ -62,7 +65,7 @@ class GatewayEgressTests(unittest.TestCase):
                 cert, account_id=account, device_id=device, role=role,
                 credential_epoch=1)
             self.fx.records[name] = entry["record"]
-        self.time_source = identity_tests.FakeTime(wall=now, monotonic=100.0)
+        self.time_source = identity_tests.FakeTime(wall=now, monotonic=time.monotonic())
         self.clock = self.time_source.clock()
         from steamboat_security.snapshot import SnapshotStore
         from steamboat_security.snapshot import sign_snapshot
@@ -126,7 +129,7 @@ class GatewayEgressTests(unittest.TestCase):
                 "worker_boot_id": identity_tests.BOOT_HOST,
                 "assignment_id": identity_tests.ASSIGNMENT,
                 "model_id": identity_tests.MODEL,
-                "methods": ["Describe", "OpenSession", "Step"],
+                "methods": ["CloseSession", "Describe", "OpenSession", "Step"],
             }],
         }
         self._install_policy()
@@ -140,7 +143,8 @@ class GatewayEgressTests(unittest.TestCase):
             local_identity=local, snapshot_store=self.snapshot_store,
             clock=self.clock, target=target,
             worker_request_type=outbound_tests.ParsedWorkerRequest,
-            trusted_request_context_type=TrustedRequestContext)
+            trusted_request_context_type=TrustedRequestContext,
+            allow_bootstrap_describe=True)
         self.context = self._make_context()
         self.server, self.client_temp = self._make_server()
         self.egress = GatewayCoordinatorEgress.connect(
@@ -159,7 +163,7 @@ class GatewayEgressTests(unittest.TestCase):
         self.policy_store.install(sign_channel_policy(
             self.policy_payload, _private_pem(self.policy_key)))
 
-    def _make_context(self):
+    def _make_context(self, *, hard_lifetime=3600):
         authorizer, _ = self.fx.coordinator_authorizer(
             time_source=self.time_source, store=self.snapshot_store)
         request_id = "req_" + "1" * 32
@@ -180,7 +184,7 @@ class GatewayEgressTests(unittest.TestCase):
             session_id="ses_" + "2" * 32, route_id="route_" + "3" * 32,
             coordinator_boot_id=identity_tests.BOOT_COORDINATOR,
             route_epoch=1, attempt=1, authorization=authorization,
-            hard_monotonic_deadline=time.monotonic() + 3600)
+            hard_monotonic_deadline=time.monotonic() + hard_lifetime)
 
     def _make_server(self, certificate=None, private_key=None):
         paths = []
@@ -396,6 +400,93 @@ class GatewayEgressTests(unittest.TestCase):
         with self.assertRaises(GatewayEgressError):
             self.egress.mint_route_guard(
                 method="OpenSession", trusted_request_context=self.context)
+
+    def test_established_cipher_io_rechecks_policy_and_expires_connection(self):
+        self.egress.write_plaintext(b"queued authenticated application bytes")
+        payload = dict(self.policy_payload)
+        payload["revision"] = 2
+        payload["expires_at"] = identity_tests.NOW + 290
+        self.policy_store.install(sign_channel_policy(payload, _private_pem(self.policy_key)))
+        with self.assertRaises(GatewayEgressError):
+            self.egress.take_encrypted()
+        self.assertTrue(self.egress._faulted)
+
+    def test_terminal_cleanup_grace_is_method_limited_and_bootstrap_is_not_double_spent(self):
+        self.context = self._make_context(hard_lifetime=0.05)
+        first = self.egress.mint_route_guard(
+            method="OpenSession", trusted_request_context=self.context)
+        first.assert_live()
+        time.sleep(0.06)
+        self.time_source.advance(1.1)
+        with self.assertRaises(SessionError):
+            self.egress.mint_route_guard(
+                method="Step", trusted_request_context=self.context)
+        terminal = self.egress.mint_route_guard(
+            method="CloseSession", trusted_request_context=self.context)
+        payload = outbound_tests.ParsedWorkerRequest(
+            protocol_version=1, manifest_fingerprint=identity_tests.MODEL,
+            worker_boot_id=identity_tests.BOOT_HOST, session_id=self.context.session_id,
+            timeout_ms=5_000, lease_token="lease_0123456789")
+        auth = self.adapter.authorize_gateway_outbound(
+            WORKER_SERVICE, "CloseSession", payload, self.context,
+            gateway_route=terminal)
+        auth.close()
+        unobserved = self._make_context(hard_lifetime=0.05)
+        time.sleep(0.06)
+        with self.assertRaises(SessionError):
+            self.egress.mint_route_guard(
+                method="CloseSession", trusted_request_context=unobserved)
+
+        bootstrap = self.adapter.create_bootstrap_context(max_describes=1)
+        guard = self.egress.mint_route_guard(
+            method="Describe", trusted_request_context=bootstrap)
+        self.assertEqual(bootstrap._uses, 1)
+        describe = outbound_tests.ParsedWorkerRequest(
+            protocol_version=1, timeout_ms=5_000)
+        auth = self.adapter.authorize_gateway_outbound(
+            WORKER_SERVICE, "Describe", describe, bootstrap, gateway_route=guard)
+        auth.close()
+        self.assertEqual(bootstrap._uses, 0)
+        with self.assertRaises((GatewayEgressError, ScopeError)):
+            self.egress.mint_route_guard(
+                method="Describe", trusted_request_context=bootstrap)
+
+    def test_coordinator_identity_rotation_retires_old_tls_generation(self):
+        self.adapter.local_identity = replace(
+            self.adapter.local_identity, boot_id="d" * 32)
+        with self.assertRaises(GatewayEgressError):
+            self.egress.mint_route_guard(
+                method="OpenSession", trusted_request_context=self.context)
+        self.assertTrue(self.egress._faulted)
+
+    def test_uncertain_tls_credential_cleanup_is_visible_to_caller(self):
+        with mock.patch("steamboat_security.gateway_egress.OwnedWorkerTLS.connect",
+                        side_effect=OwnedWorkerTLSError(
+                            "uncertain", cleanup_status="uncertain",
+                            credential_directory="C:/private/tls-owner")):
+            with self.assertRaises(GatewayEgressError) as caught:
+                GatewayCoordinatorEgress.connect(
+                    authorizer=self.adapter, policy_store=self.policy_store,
+                    logical_host_certificate_pem=self.fx.credentials["host"]["certificate"],
+                    gateway_id="gw-east", gateway_ca_pem=self.gateway_ca,
+                    coordinator_private_key_pem=self.fx.credentials["coordinator"]["key"])
+        self.assertEqual(caught.exception.cleanup_status, "uncertain")
+        self.assertEqual(caught.exception.credential_directory, "C:/private/tls-owner")
+
+        uncertain_owner = mock.Mock(
+            cleanup_uncertain=True, cleanup_status="uncertain",
+            credential_directory="C:/private/retained-tls-owner")
+        with mock.patch("steamboat_security.gateway_egress.OwnedWorkerTLS.connect",
+                        return_value=uncertain_owner):
+            with self.assertRaises(GatewayEgressError) as caught:
+                GatewayCoordinatorEgress.connect(
+                    authorizer=self.adapter, policy_store=self.policy_store,
+                    logical_host_certificate_pem=self.fx.credentials["host"]["certificate"],
+                    gateway_id="gw-east", gateway_ca_pem=self.gateway_ca,
+                    coordinator_private_key_pem=self.fx.credentials["coordinator"]["key"])
+        self.assertEqual(caught.exception.cleanup_status, "uncertain")
+        self.assertEqual(caught.exception.credential_directory,
+                         "C:/private/retained-tls-owner")
 
 
 if __name__ == "__main__":
