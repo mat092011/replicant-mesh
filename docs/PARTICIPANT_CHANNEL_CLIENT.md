@@ -33,6 +33,10 @@ The generation uses a monotonic, nonzero 128-bit message-ID allocator and
 retires before integer wrap. It never retries uncertain mutations. Caller
 cancellation and request-scoped authorization expiry fail and retire only that
 operation, allowing independent calls to continue on the same live stream.
+Dispatched abandoned IDs retain a bounded exact method/lane/generation
+tombstone so one matching late response can be discarded without completing
+authorization; the generation fences at 1,024 such IDs instead of evicting a
+tombstone. Completed, unsent, and unknown IDs remain protocol faults.
 Channel, transport, or generation loss fences all pending calls, which retain
 their authorization/capture ownership until local cleanup finishes.
 `close()` is bounded and reports `SecureTaskPending` while tasks still own work.
