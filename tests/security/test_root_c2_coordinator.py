@@ -34,9 +34,8 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
         self.fx = object.__new__(runtime_fixture.C2RuntimeStoreIntegrationTests)
         # The inherited fixture selects one of its clock-lifetime profiles by
         # test method name during setup; provide the valid long-lived case.
-        self.fx._testMethodName = "test_real_binding_guards_three_components_and_durably_advances_policy"
+        self.fx._testMethodName = "test_channel_wall_expiry_rejects_clock_drift_even_before_monotonic_deadline"
         self.fx.setUp()
-        self.fx._build(group_ttl=300)
         self._add_coordinator_header()
 
     def tearDown(self):
@@ -101,10 +100,14 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
 
     def _load(self):
         store = RootGenerationStore(self.fx.root, expected_uid=os.geteuid())
-        binding = load_c2_personal_coordinator_binding(root_store=store, clock=self.fx.clock,
-            expected_launch_spec=self.fx.coordinator_spec,
-            configuration_path=self.fx.coordinator_header_path,
-            configuration_root=self.fx.protected, expected_uid=os.geteuid())
+        try:
+            binding = load_c2_personal_coordinator_binding(root_store=store, clock=self.fx.clock,
+                expected_launch_spec=self.fx.coordinator_spec,
+                configuration_path=self.fx.coordinator_header_path,
+                configuration_root=self.fx.protected, expected_uid=os.geteuid())
+        except BaseException:
+            store.close()
+            raise
         return store, binding
 
     def test_real_selected_coordinator_guard_and_same_head_cas_reconcile(self):
