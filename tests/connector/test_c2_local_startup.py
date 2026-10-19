@@ -13,11 +13,12 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from steamboat_connector.c2_child_config import parse_c2_child_config
 from steamboat_connector.c2_local_startup import C2LocalStartup, C2LocalStartupError
 from steamboat_connector.owner_consent import OwnerConsentSnapshot
 from steamboat_connector.owner_consent import OwnerConsentStore, provision_owner_consent
 from steamboat_security.root_c2_local_claim import C2LocalClaimStore
-from steamboat_security.errors import BindingError
+from steamboat_security.errors import BindingError, CredentialError, SnapshotError
 from steamboat_connector.process_supervisor import ProcessRoleBackend
 from steamboat_connector.c2_local_startup import C2LocalLaunchReference, closed_role_config
 
@@ -160,6 +161,10 @@ class C2LocalStartupNativeTests(unittest.TestCase):
         ready_checks = []
 
         def popen(args, **kwargs):
+            child_config = parse_c2_child_config(backend._configured_role("host"))
+            self.assertEqual(child_config.launch_spec, fx.selected_host)
+            self.assertEqual(child_config.operator_verification_key_pem,
+                             fx.operator_verification_key_pem)
             publication_checks.append((len(list(claims._path.glob("claim-*.json")))
                 if hasattr(claims, "_path") else len(list(Path(os.readlink(f"/proc/self/fd/{claims._fd}")).glob("claim-*.json"))),
                 self._locked(root_lock), self._locked(owner_lock)))
@@ -243,6 +248,38 @@ class C2LocalStartupNativeTests(unittest.TestCase):
                     popen.assert_not_called()
                 self.assertEqual(len(list(Path(os.readlink(
                     f"/proc/self/fd/{claims._fd}")).glob("claim-*.json"))), 1)
+
+    def test_wrong_operator_key_or_launch_config_fails_before_epoch_claim_or_popen(self):
+        from dataclasses import replace
+        from cryptography.hazmat.primitives import serialization
+        from steamboat_security.certificates import generate_private_key_pem
+        for mutation in ("wrong-key", "wrong-config"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                    prefix="c2-local-startup-reject-") as scratch:
+                os.chmod(scratch, 0o700)
+                with self.resources(scratch) as (fx, owner, claims, backend,
+                                                   _cgroup, startup):
+                    original = startup._references["host"]
+                    if mutation == "wrong-key":
+                        private = serialization.load_pem_private_key(
+                            generate_private_key_pem(), password=None)
+                        wrong_key = private.public_key().public_bytes(
+                            serialization.Encoding.PEM,
+                            serialization.PublicFormat.SubjectPublicKeyInfo)
+                        startup._references["host"] = replace(
+                            original, operator_verification_key_pem=wrong_key)
+                    else:
+                        startup._references["host"] = replace(original,
+                            configuration_path=str(fx.selected_header_path) + ".changed")
+                    before_epoch = owner.snapshot().epoch
+                    import steamboat_connector.process_supervisor as process_supervisor
+                    with mock.patch.object(process_supervisor.subprocess, "Popen") as popen:
+                        with self.assertRaises((CredentialError, SnapshotError)):
+                            startup.start(("host",), cancel_event=threading.Event())
+                    popen.assert_not_called()
+                    self.assertEqual(owner.snapshot().epoch, before_epoch)
+                    claims_root = Path(os.readlink(f"/proc/self/fd/{claims._fd}"))
+                    self.assertEqual(list(claims_root.glob("claim-*.json")), [])
 
     def test_stale_ready_failure_cleans_only_captured_generation(self):
         from tests.connector.test_process_supervisor import FakeProcess, sample_policy

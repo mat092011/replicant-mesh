@@ -11,10 +11,13 @@ launch candidates.
 The operator supplies immutable local launch references. Startup first loads
 and checks the selected host/coordinator runtime bindings, including protected
 headers, before acquiring the selected-root shared transaction lock. The
-backend must already have an artifact pin and an exact closed
-`c2-local-compute-v1` role configuration. That profile binds the selected root,
-protected configuration root/header path, local principal, selected launch
-role, boot, generation, header digest, and launch nonce. The backend's
+backend must already have an artifact pin and the exact closed
+`c2-local-compute-v2` role configuration built by the fixed-child config
+module. It carries the complete canonical selected `RoleLaunchSpec`, selected
+root and protected header references, plus the host's bounded canonical
+operator public key (the coordinator field is null). The child loader uses
+that declaration to reopen the real selected RootGenerationStore and rerun
+the C2 binding checks. The backend's
 `spawn_owned_start` additionally hashes the role config actually read after it
 owns the start intent, closing the config-replacement race before Popen.
 Before claiming, the adapter verifies that the live artifact pin uses the same

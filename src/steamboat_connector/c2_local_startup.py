@@ -12,6 +12,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from steamboat_connector.c2_child_config import build_c2_child_config
 from steamboat_connector.owner_consent import OwnerConsentSnapshot, OwnerConsentStore
 from steamboat_connector.process_supervisor import ProcessRoleBackend
 from steamboat_connector.validation import json_bytes
@@ -24,7 +25,6 @@ from steamboat_security.root_c2_runtime import load_c2_host_runtime_binding
 from steamboat_security.root_transition_launch import RoleLaunchSpec, parse_role_launch_spec, role_launch_document
 from steamboat_security.root_transition_storage import RootGenerationStore
 
-_PROFILE = "c2-local-compute-v1"
 _SELECTED_ROLE = {"host": "host", "coordinator": "personal_coordinator"}
 
 
@@ -51,21 +51,18 @@ class C2LocalStartupResult:
 
 def closed_role_config(reference: C2LocalLaunchReference, *, selected_root: str,
                        role: str) -> dict:
-    """Exact closed config required in the already artifact-pinned backend."""
+    """Build the reviewed closed v2 child config for a selected role."""
+    if type(reference) is not C2LocalLaunchReference:
+        raise TypeError("C2 role config requires an exact launch reference")
     spec = parse_role_launch_spec(role_launch_document(reference.launch_spec))
     if role not in _SELECTED_ROLE or spec.role != _SELECTED_ROLE[role]:
         raise CredentialError("C2 role config does not match the selected local role")
-    return {
-        "version": 1, "profile": _PROFILE, "role": role,
-        "selected_root": str(Path(selected_root).resolve()),
-        "protected_root": str(Path(reference.configuration_root).resolve()),
-        "configuration_path": str(Path(reference.configuration_path).resolve()),
-        "account_id": spec.account_id, "device_id": spec.device_id,
-        "selected_role": spec.role, "boot_id": spec.boot_id,
-        "generation_sha256": spec.generation_sha256,
-        "configuration_sha256": spec.configuration_sha256,
-        "launch_nonce": spec.launch_nonce,
-    }
+    return build_c2_child_config(role=role,
+        selected_root=str(Path(selected_root).resolve()),
+        protected_root=str(Path(reference.configuration_root).resolve()),
+        configuration_path=str(Path(reference.configuration_path).resolve()),
+        launch_spec=spec,
+        operator_verification_key_pem=reference.operator_verification_key_pem)
 
 
 class C2LocalStartup:
