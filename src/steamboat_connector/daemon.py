@@ -274,10 +274,12 @@ class DaemonServer:
         stop_event = stop_event or self._stop
         try:
             while not stop_event.is_set():
+                # A busy or saturated listener must not defer policy checks
+                # indefinitely by preventing accept() from ever timing out.
+                self.controller.check_telemetry()
                 try:
                     connection, _ = self.listener.accept()
                 except socket.timeout:
-                    self.controller.check_telemetry()
                     continue
                 except OSError:
                     if stop_event.is_set():
