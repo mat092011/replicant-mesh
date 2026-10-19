@@ -4,6 +4,7 @@ import base64
 import copy
 import hashlib
 import json
+import threading
 import unittest
 from dataclasses import replace
 from unittest.mock import patch
@@ -294,6 +295,53 @@ class GatewayDelegationTests(unittest.TestCase):
         self.clock._uncertainty = broken_clock
         with self.assertRaises(SecurityError):
             verified.assert_live(self.verifier)
+
+    def test_concurrent_clock_fault_wins_over_inflight_liveness_success(self):
+        verified = self.verify()
+        original = self.policy_store.current_with_sample
+        accepted = threading.Event()
+        release = threading.Event()
+        calls = 0
+        call_lock = threading.Lock()
+
+        def interleaved_current():
+            nonlocal calls
+            with call_lock:
+                calls += 1
+                call = calls
+            if call == 1:
+                result = original()
+                accepted.set()
+                self.assertTrue(release.wait(2))
+                return result
+            self.clock._uncertainty = lambda: (_ for _ in ()).throw(
+                RuntimeError("clock source unavailable"))
+            return original()
+
+        self.policy_store.current_with_sample = interleaved_current
+        results = []
+        first = threading.Thread(target=lambda: results.append(
+            self._capture_liveness(verified, self.verifier)))
+        first.start()
+        self.assertTrue(accepted.wait(2))
+        second = threading.Thread(target=lambda: results.append(
+            self._capture_liveness(verified, self.verifier)))
+        second.start()
+        second.join(2)
+        release.set()
+        first.join(2)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(results.count(True), 0)
+        self.assertEqual(results.count(False), 2)
+        self.assertEqual(verified.deadline_monotonic, float("-inf"))
+
+    @staticmethod
+    def _capture_liveness(verified, verifier):
+        try:
+            return verified.assert_live(verifier)
+        except Exception:
+            return False
         self.assertLess(verified.deadline_monotonic, prior_deadline)
         self.assertEqual(verified.deadline_monotonic, float("-inf"))
         self.clock._uncertainty = lambda: 0.0

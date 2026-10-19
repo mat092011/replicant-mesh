@@ -454,6 +454,9 @@ class GatewayDelegationVerifier:
                 raise DelegationError("delegation no longer has a conservative live interval")
             with verified._fence.lock:
                 verified._fence.deadline = min(verified._fence.deadline, end)
+                if verified._fence.faulted:
+                    raise DelegationError(
+                        "delegation liveness fault is permanently latched")
                 if sample.monotonic >= verified._fence.deadline:
                     raise DelegationError("delegation has expired")
             return True
