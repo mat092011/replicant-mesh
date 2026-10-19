@@ -75,16 +75,26 @@ def _lock(root, filename, uid, mode, *, nonblocking=True):
         try:
             fcntl.flock(descriptor, flags)
         except BlockingIOError as error:
-            os.close(descriptor)
+            consumed = descriptor
             descriptor = None
+            try:
+                os.close(consumed)
+            except OSError as close_error:
+                failure = ArtifactPinError("contended runtime lock descriptor cleanup failed")
+                failure.pin_owner = _uncertain_lock_owner(consumed)
+                raise failure from close_error
             raise ArtifactPinBusy("artifact store or runtime role is pinned") from error
         return descriptor
     except BaseException:
         if descriptor is not None:
+            consumed = descriptor
+            descriptor = None
             try:
-                os.close(descriptor)
-            except OSError:
-                pass
+                os.close(consumed)
+            except OSError as close_error:
+                failure = ArtifactPinError("runtime lock descriptor cleanup failed")
+                failure.pin_owner = _uncertain_lock_owner(consumed)
+                raise failure from close_error
         raise
 
 
@@ -130,6 +140,9 @@ def _close_inherited_descriptors(descriptors):
         closed.add(fd)
         try:
             os.set_inheritable(fd, False)
+        except (OSError, TypeError, ValueError) as error:
+            errors.append(error)
+        try:
             os.close(fd)
         except (OSError, TypeError, ValueError) as error:
             errors.append(error)
@@ -285,6 +298,8 @@ class InheritedArtifactPin:
         self._global_identity = global_identity
         self._role_identity = role_identity
         self._close_state = "open"
+        self._close_lock = Lock()
+        self._uncertain_descriptors = {}
 
     @staticmethod
     def _identity(fd):
@@ -293,34 +308,88 @@ class InheritedArtifactPin:
                 info.st_nlink, info.st_size)
 
     def assert_open_descriptors(self):
-        if self._close_state != "open":
-            raise ArtifactPinError("child runtime pin descriptors are unavailable")
-        try:
-            current = (self._identity(self.global_fd), self._identity(self.role_fd))
-        except (OSError, TypeError, ValueError) as error:
-            raise ArtifactPinError("child runtime pin descriptor was closed") from error
-        if current != (self._global_identity, self._role_identity):
-            raise ArtifactPinError("child runtime pin descriptor identity changed")
-        return True
+        with self._close_lock:
+            if self._close_state != "open":
+                raise ArtifactPinError("child runtime pin descriptors are unavailable")
+            try:
+                current = (self._identity(self.global_fd), self._identity(self.role_fd))
+            except (OSError, TypeError, ValueError) as error:
+                raise ArtifactPinError("child runtime pin descriptor was closed") from error
+            if current != (self._global_identity, self._role_identity):
+                raise ArtifactPinError("child runtime pin descriptor identity changed")
+            return True
 
     def close(self):
-        if self._close_state == "closed":
-            return
-        if self._close_state == "faulted":
-            raise ArtifactPinError("child runtime pin descriptor cleanup is faulted")
-        self._close_state = "closing"
-        errors = []
-        for field_name in ("role_fd", "global_fd"):
-            descriptor = getattr(self, field_name)
-            try:
-                os.close(descriptor)
-            except OSError as error:
-                errors.append(error)
-            else:
+        with self._close_lock:
+            if self._close_state == "closed":
+                return
+            if self._close_state == "faulted":
+                raise ArtifactPinError("child runtime pin descriptor cleanup is faulted")
+            self._close_state = "closing"
+            errors = []
+            for field_name in ("role_fd", "global_fd"):
+                descriptor = getattr(self, field_name)
+                if descriptor is None:
+                    continue
+                # Consume ownership before close(2); an error leaves the FD
+                # state ambiguous, so this number must never be retried.
                 setattr(self, field_name, None)
-        self._close_state = "faulted" if errors else "closed"
-        if errors:
-            raise ArtifactPinError("child runtime pin descriptor cleanup failed") from errors[0]
+                try:
+                    os.close(descriptor)
+                except OSError as error:
+                    self._uncertain_descriptors[field_name] = descriptor
+                    errors.append(error)
+            self._close_state = "faulted" if errors else "closed"
+            if errors:
+                raise ArtifactPinError("child runtime pin descriptor cleanup failed") from errors[0]
+
+
+class PartialArtifactPinOwner:
+    """Fault-reporting owner for locks acquired before pin publication failed."""
+
+    def __init__(self, global_fd, role_fd):
+        self.global_fd = global_fd
+        self.role_fd = role_fd
+        self._state = "open"
+        self._lock = Lock()
+        self._close_outcomes = {
+            "role_fd": "open" if role_fd is not None else "absent",
+            "global_fd": "open" if global_fd is not None else "absent",
+        }
+        self._uncertain_descriptors = {}
+
+    def close_after_failed_acquire(self):
+        with self._lock:
+            if self._state == "closed":
+                return
+            if self._state == "faulted":
+                raise ArtifactPinError("partial runtime pin cleanup is faulted")
+            self._state = "closing"
+            errors = []
+            for name in ("role_fd", "global_fd"):
+                descriptor = getattr(self, name)
+                if descriptor is None:
+                    continue
+                try:
+                    os.close(descriptor)
+                except OSError as error:
+                    self._close_outcomes[name] = "unknown"
+                    self._uncertain_descriptors[name] = descriptor
+                    errors.append(error)
+                else:
+                    setattr(self, name, None)
+                    self._close_outcomes[name] = "closed"
+            self._state = "faulted" if errors else "closed"
+            if errors:
+                raise ArtifactPinError("partial runtime pin cleanup failed") from errors[0]
+
+
+def _uncertain_lock_owner(descriptor):
+    owner = PartialArtifactPinOwner(descriptor, None)
+    owner._state = "faulted"
+    owner._close_outcomes["global_fd"] = "unknown"
+    owner._uncertain_descriptors["global_fd"] = descriptor
+    return owner
 
 
 class RuntimeArtifactPin:
@@ -411,13 +480,15 @@ class RuntimeArtifactPin:
                        catalog_deadline=catalog_deadline,
                        assignment_deadline=assignment_deadline,
                        captured_mono=sample.monotonic, clock_domain=domain, clock=clock)
-        except BaseException:
-            for descriptor in (role_fd, global_fd):
-                if descriptor is not None:
-                    try:
-                        os.close(descriptor)
-                    except OSError:
-                        pass
+        except BaseException as error:
+            owner = PartialArtifactPinOwner(global_fd, role_fd)
+            try:
+                owner.close_after_failed_acquire()
+            except ArtifactPinError as cleanup_error:
+                # Keep the object reachable from the raised exception. It
+                # records ambiguous close outcomes and forbids FD-number retry.
+                cleanup_error.pin_owner = owner
+                raise cleanup_error from error
             raise
 
     @staticmethod
@@ -640,6 +711,10 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
         if (sample.monotonic < captured_mono
                 or sample.monotonic >= min(catalog_deadline, assignment_deadline)):
             raise ArtifactPinError("inherited pin validity expired")
+        # The supervisor may have explicitly passed these descriptors across
+        # exec. They must not leak into any subsequent child process.
+        for fd in raw:
+            os.set_inheritable(fd, False)
         payload = assignment.payload
         inherited_pin = InheritedArtifactPin(
             global_fd=global_fd, role_fd=role_fd, root=root_path, uid=uid,
