@@ -279,6 +279,9 @@ class GatewayRuntimeNativeHandlerTests(unittest.IsolatedAsyncioTestCase):
         from steamboat_runtime.worker_state import WorkerHandler
         from steamboat_security.authorization import Authorizer
 
+        manifest = load_manifest(os.environ["STEAMBOAT_ASSIGNED_TEST_SOURCE"])
+        self.enterContext(mock.patch.object(
+            gateway_tests.ingress_tests.delegation_tests, "MODEL", manifest["fingerprint"]))
         auth_fixture = gateway_tests.GatewayAuthorizationTests(
             methodName="test_gateway_open_step_close_share_c1_and_ingress_session_ownership")
         auth_fixture.setUp()
@@ -317,11 +320,9 @@ class GatewayRuntimeNativeHandlerTests(unittest.IsolatedAsyncioTestCase):
                 cache.position = position + hidden.shape[1]
                 return hidden.clone()
 
-        manifest = load_manifest(os.environ["STEAMBOAT_ASSIGNED_TEST_SOURCE"])
         # The test uses a genuine validated artifact manifest and WorkerHandler,
-        # while aligning this handler's advertised model identity to the signed
-        # gateway fixture so the test isolates ownership, not artifact policy.
-        manifest["fingerprint"] = worker["model_id"]
+        # with signed synthetic policy targeting that manifest's real fingerprint.
+        # The deterministic executor isolates lifecycle ownership, not numerics.
         started, release = threading.Event(), threading.Event()
         executor = Executor(*manifest["components"]["worker-1"]["layer_range"],
                             started, release)
