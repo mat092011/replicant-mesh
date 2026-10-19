@@ -25,7 +25,10 @@ MAX_CONTROL_BUNDLE_BYTES = (BUNDLE_HEADER_BYTES + MAX_ENVELOPE_BYTES
                             + MAX_BINDING_BYTES + MAX_CONTROL_PROTOBUF_BYTES)
 MAX_WIRE_FRAME_BYTES = FRAGMENT_HEADER_BYTES + MAX_FRAGMENT_BYTES
 MAX_FEED_BYTES = 64 * 1024
-_METADATA_RESERVATION_BYTES = 4096
+# Python iterator/view/allocator bookkeeping is bounded independently of the
+# caller's feed bytes. Keep enough fixed headroom for the measured worst case
+# (many tiny accepted fragments) as well as maximum-size feed/final-copy paths.
+_METADATA_RESERVATION_BYTES = 64 * 1024
 _ZERO_BLOCK = bytes(4096)
 
 START = 1
@@ -192,7 +195,10 @@ class FragmentDecoder:
     fragment count cannot create per-fragment objects or geometric-growth
     headroom. ``reservation_bound_bytes`` includes both buffers, the maximum
     frame buffer, at most 64 KiB of input pinned while the feed iterator is
-    active, one yielded payload copy, and a fixed 4 KiB metadata allowance.
+    active, one yielded payload copy, and a fixed 64 KiB Python metadata and
+    temporary-object allowance. The fixed reserve covers interpreter objects
+    whose count is bounded by the decoder state and one feed call; callers must
+    still separately reserve retained decoded messages and pending queues.
     Split larger socket reads into <=64 KiB feed calls. Caller-retained
     messages and pending queues need separate reservations.
     """
@@ -215,7 +221,7 @@ class FragmentDecoder:
 
     @property
     def reservation_bound_bytes(self):
-        """Decoder backing buffers, one output message, and fixed metadata."""
+        """Backing buffers, one output, bounded feed and 64 KiB fixed overhead."""
         return (2 * self.reassembly_capacity + MAX_WIRE_FRAME_BYTES
                 + MAX_FEED_BYTES
                 + min(self.reassembly_capacity, MAX_BUNDLE_BYTES)

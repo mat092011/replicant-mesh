@@ -168,6 +168,54 @@ class ChannelWireTests(unittest.TestCase):
         finally:
             tracemalloc.stop()
 
+    def test_review_regression_many_tiny_fragments_at_large_capacity(self):
+        # Reproduces the prior 483,637-byte peak against a 477,941-byte bound.
+        capacity = 130_623
+        tracemalloc.start()
+        try:
+            decoder = wire.FragmentDecoder(GENERATION,
+                                           reassembly_capacity=capacity)
+            _, baseline = tracemalloc.get_traced_memory()
+            tracemalloc.reset_peak()
+            for index in range(65_536):
+                flags = wire.START if index == 0 else 0
+                if index == 65_535:
+                    flags |= wire.END
+                frame = _frame(wire.DATA, flags, index + 1, DATA_ID, index, b"x")
+                messages = list(decoder.feed(frame))
+                if index == 65_535:
+                    self.assertEqual(len(messages), 1)
+                    self.assertEqual(len(messages[0].payload), 65_536)
+            _, peak = tracemalloc.get_traced_memory()
+            self.assertLessEqual(peak - baseline, decoder.reservation_bound_bytes)
+        finally:
+            tracemalloc.stop()
+
+    def test_maximum_payload_split_frames_stays_within_advertised_reservation(self):
+        payload = b"m" * wire.MAX_BUNDLE_BYTES
+        decoder = wire.FragmentDecoder(GENERATION,
+                                       reassembly_capacity=wire.MAX_BUNDLE_BYTES)
+        tracemalloc.start()
+        try:
+            _, baseline = tracemalloc.get_traced_memory()
+            tracemalloc.reset_peak()
+            iterator = wire.iter_fragments(
+                payload, kind=wire.DATA, generation=GENERATION,
+                message_id=DATA_ID, fragment_payload_bytes=wire.MAX_FRAGMENT_BYTES)
+            completed = None
+            for frame in iterator:
+                output = list(decoder.feed(frame))
+                if output:
+                    self.assertIsNone(completed)
+                    completed = output[0]
+            decoder.finish()
+            self.assertIsNotNone(completed)
+            self.assertEqual(len(completed.payload), wire.MAX_BUNDLE_BYTES)
+            _, peak = tracemalloc.get_traced_memory()
+            self.assertLessEqual(peak - baseline, decoder.reservation_bound_bytes)
+        finally:
+            tracemalloc.stop()
+
     def test_control_bundle_uses_tightest_combined_control_limit(self):
         payload = wire.encode_bundle(
             "CancelSession", wire.REQUEST,
