@@ -642,6 +642,20 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertEqual(len(holder), 1)
         self.assertNotEqual((Path(self.temp.name) / "host-runtime.json").read_bytes(), original)
 
+    def test_owned_start_rejects_changed_captured_role_config_before_popen(self):
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as spawn:
+            self.assertIsNone(self.backend.spawn_owned_start(
+                "host", sample_policy(), expected_role_config_sha256="0" * 64))
+            spawn.assert_not_called()
+        self.assertEqual(self.cgroup.groups, [])
+
+    def test_owned_start_rejects_malformed_expected_role_config_digest(self):
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as spawn:
+            self.assertIsNone(self.backend.spawn_owned_start(
+                "host", sample_policy(), expected_role_config_sha256="bad"))
+            spawn.assert_not_called()
+        self.assertEqual(self.cgroup.groups, [])
+
     def test_stop_cancels_queued_start_before_any_spawn(self):
         entered = threading.Event()
         release = threading.Event()

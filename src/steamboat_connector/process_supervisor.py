@@ -660,11 +660,17 @@ class ProcessRoleBackend:
             watchdog.wake.set()
 
     def spawn_owned_start(self, role, policy, *, cancel_event=None,
-                          before_popen_check=None):
+                          before_popen_check=None, expected_role_config_sha256=None):
         if (cancel_event is not None
                 and not callable(getattr(cancel_event, "is_set", None))):
             return None
         if before_popen_check is not None and not callable(before_popen_check):
+            return None
+        if (expected_role_config_sha256 is not None
+                and (type(expected_role_config_sha256) is not str
+                     or len(expected_role_config_sha256) != 64
+                     or any(c not in "0123456789abcdef"
+                            for c in expected_role_config_sha256))):
             return None
         if cancel_event is not None and cancel_event.is_set():
             return None
@@ -731,6 +737,10 @@ class ProcessRoleBackend:
                 document = read_private_json(self._config_path(role),
                                              maximum_size=ROLE_CONFIG_MAX_BYTES)
             except (OSError, StorageError):
+                return None
+            if (expected_role_config_sha256 is not None
+                    and hashlib.sha256(json_bytes(document.get("config"))).hexdigest()
+                    != expected_role_config_sha256):
                 return None
             if (type(document) is not dict
                     or ("artifact_pin" in document) != (pin_metadata is not None)
