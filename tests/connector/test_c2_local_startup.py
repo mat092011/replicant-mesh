@@ -119,12 +119,13 @@ class C2LocalStartupNativeTests(unittest.TestCase):
     """Real stores/pin with FakePopen/FakeCG; software lifecycle evidence only."""
 
     @contextmanager
-    def resources(self, scratch, *, claim_fault=None):
+    def resources(self, scratch, *, claim_fault=None, pin_variant=None):
         from tests.connector.c2_startup_fixture import c2_startup_fixture
         from tests.connector.test_process_supervisor import FakeCgroup, sample_policy
         from steamboat_connector.c2_local_startup import C2LocalStartup
 
-        with c2_startup_fixture(_ARTIFACTS, scratch) as fx:
+        with c2_startup_fixture(_ARTIFACTS, scratch,
+                                pin_variant=pin_variant) as fx:
             spec = fx.selected_host
             owner_root = Path(scratch) / "owner"
             claim_root = Path(scratch) / "claims"
@@ -233,6 +234,13 @@ class C2LocalStartupNativeTests(unittest.TestCase):
             with self.resources(scratch) as resources:
                 fx, owner, claims, backend, cgroup, startup = resources
                 result, published, ready, retry_error = self._start_with_fakes(*resources, retry=True)
+                import hashlib
+                self.assertEqual(fx.selected_scope["catalog_sha256"],
+                                 fx.pin.record["catalog_sha256"])
+                self.assertEqual(fx.selected_scope["catalog_public_key_sha256"],
+                                 hashlib.sha256(fx.verifier.public_key).hexdigest())
+                self.assertEqual(fx.selected_scope["components"][0]["assignment_sha256"],
+                                 fx.pin.record["assignments"][0]["assignment_sha256"])
                 self.assertEqual(len(published), 1)
                 claim_count, root_lock_free, owner_lock_free = published[0]
                 self.assertEqual(claim_count, 1)
@@ -314,6 +322,58 @@ class C2LocalStartupNativeTests(unittest.TestCase):
                     popen.assert_not_called()
                     self.assertEqual(owner.snapshot().epoch, before_epoch)
                     claims_root = Path(os.readlink(f"/proc/self/fd/{claims._fd}"))
+                    self.assertEqual(list(claims_root.glob("claim-*.json")), [])
+
+    def test_actual_catalog_key_and_assignment_digests_match_selected_scope_before_owner_claim(self):
+        import hashlib
+        from steamboat_connector.storage import atomic_write_private, read_private_json
+        from steamboat_connector.validation import json_bytes
+
+        variants = (
+            ("catalog_digest", "host artifact catalog digest differs from selected scope"),
+            ("assignment_digest", "host artifact assignment digest differs from selected scope"),
+            ("catalog_key", "host artifact catalog public key differs from selected scope"),
+            ("extra_component", "host artifact pin component set differs from selected scope"),
+        )
+        for variant, expected_error in variants:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory(
+                    prefix="c2-local-pin-scope-") as scratch:
+                os.chmod(scratch, 0o700)
+                with self.resources(scratch, pin_variant=variant) as (
+                        fx, owner, claims, backend, _cgroup, startup):
+                    scope_component = fx.selected_scope["components"][0]
+                    entry = fx.pin.record["assignments"][0]
+                    self.assertEqual(entry["assignment_id"], scope_component["assignment_id"])
+                    self.assertEqual(entry["component"], scope_component["component"])
+                    self.assertEqual(entry["worker_boot_id"], scope_component["worker_boot_id"])
+                    if variant == "catalog_digest":
+                        self.assertEqual(hashlib.sha256(fx.verifier.public_key).hexdigest(),
+                                         fx.selected_scope["catalog_public_key_sha256"])
+                        self.assertNotEqual(fx.pin.record["catalog_sha256"],
+                                            fx.selected_scope["catalog_sha256"])
+                    elif variant == "assignment_digest":
+                        self.assertEqual(fx.pin.record["catalog_sha256"],
+                                         fx.selected_scope["catalog_sha256"])
+                        self.assertNotEqual(entry["assignment_sha256"],
+                                            scope_component["assignment_sha256"])
+                    else:
+                        self.assertNotEqual(hashlib.sha256(fx.verifier.public_key).hexdigest(),
+                                            fx.selected_scope["catalog_public_key_sha256"])
+
+                    # Make the later backend-config comparison fail too. The
+                    # selected signed artifact error must be reported first.
+                    path = backend._config_path("host")
+                    document = read_private_json(path, uid=os.geteuid())
+                    document["config"] = {"deliberate_later_mismatch": True}
+                    atomic_write_private(path, json_bytes(document), uid=os.geteuid())
+                    before_epoch = owner.snapshot().epoch
+                    claims_root = Path(os.readlink(f"/proc/self/fd/{claims._fd}"))
+                    import steamboat_connector.process_supervisor as process_supervisor
+                    with mock.patch.object(process_supervisor.subprocess, "Popen") as popen:
+                        with self.assertRaisesRegex(CredentialError, expected_error):
+                            startup.start(("host",), cancel_event=threading.Event())
+                    popen.assert_not_called()
+                    self.assertEqual(owner.snapshot().epoch, before_epoch)
                     self.assertEqual(list(claims_root.glob("claim-*.json")), [])
 
     def test_stale_ready_failure_cleans_only_captured_generation(self):

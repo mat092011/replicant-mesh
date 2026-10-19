@@ -26,7 +26,8 @@ from steamboat_connector.catalog import (ARTIFACT_FILENAMES, RUNTIME_LOCK_SHA256
 from steamboat_runtime.manifest import (MODEL_ID, MODEL_REVISION, SOURCE_HASHES,
                                         load_manifest)
 
-from tests.connector.test_artifacts import _ACCOUNT, _PUBLIC, _assignment_bundle, _sign_document
+from tests.connector.test_artifacts import (_ACCOUNT, _PUBLIC, _PRIVATE,
+    _OTHER_PUBLIC, _OTHER_PRIVATE, _assignment_bundle, _sign_document)
 from tests.security.test_root_c2_runtime import C2RuntimeStoreIntegrationTests
 
 
@@ -56,12 +57,16 @@ class _SourceRetriever:
 class C2StartupFixture:
     """Owns a signed selected C2 binding and one exact signed worker pin."""
 
-    def __init__(self, artifacts_dir, scratch_dir):
+    def __init__(self, artifacts_dir, scratch_dir, *, pin_variant=None):
         if os.name != "posix" or not sys_platform_linux():
             raise RuntimeError("native C2 startup fixture requires Linux POSIX storage")
         self.artifacts_dir = Path(artifacts_dir).resolve(strict=True)
         self.scratch_dir = Path(scratch_dir).resolve(strict=True)
         self._closed = False
+        if pin_variant not in (None, "catalog_digest", "assignment_digest",
+                               "catalog_key", "extra_component"):
+            raise ValueError("unknown C2 startup pin variant")
+        self.pin_variant = pin_variant
         self.pin = None
         self.root_store = None
         self.installer = None
@@ -96,8 +101,10 @@ class C2StartupFixture:
         group = json.loads(selected.artifacts["activation_manifest.json"])
         group_scope = group["new_host_group_scopes"][0]
         group_scope["model_id"] = fingerprint
+        self.available_components = list(group_scope["components"])
         group_scope["components"] = [group_scope["components"][0]]
         chosen = group_scope["components"][0]
+        self._prepare_selected_artifacts(fingerprint, group_scope, selected)
         active = json.loads(selected.active)["payload"]
         active["grants"] = [grant for grant in active["grants"]
             if grant["target_boot_id"] == chosen["worker_boot_id"]
@@ -184,9 +191,10 @@ class C2StartupFixture:
             configuration_root=selected.protected, expected_uid=os.geteuid(),
             operator_verification_key_pem=selected.operator_public)
 
-    def _build_artifact_pin(self):
+    def _prepare_selected_artifacts(self, fingerprint, scope, selected):
+        """Create the exact signed catalog and assignment before signing C2 scope."""
         manifest = load_manifest(self.artifacts_dir)
-        now = int(self.selected_store.wall)
+        now = int(selected.wall)
         file_entries = {}
         for filename in ARTIFACT_FILENAMES:
             path = self.artifacts_dir / filename
@@ -210,21 +218,69 @@ class C2StartupFixture:
             "runtime": {"os": "linux", "architecture": "amd64", "python": "3.12.15",
                 "torch": "2.14.1+cpu", "transformers": "5.19.0", "grpcio": "1.84.0",
                 "protobuf": "7.36.2", "lock_sha256": RUNTIME_LOCK_SHA256},
-            "manifest": {"filename": "modelmanifest.json", "fingerprint": manifest["fingerprint"],
+            "manifest": {"filename": "modelmanifest.json", "fingerprint": fingerprint,
                 **file_entries["modelmanifest.json"]}, "components": components,
             "files": file_entries}
         catalog_bytes = _sign_document(catalog_payload, "catalog")
-        self.verifier = CatalogVerifier(_PUBLIC, clock=self.clock)
-        catalog = self.verifier.verify_catalog(catalog_bytes, now=now)
+        verifier = CatalogVerifier(_PUBLIC, clock=self.clock)
+        catalog = verifier.verify_catalog(catalog_bytes, now=now)
+        chosen = scope["components"][0]
+        self.assignment_id = chosen["assignment_id"]
+        self.worker_boot_id = chosen["worker_boot_id"]
+        self.component = chosen["component"]
+        assignment_bytes, assignment = _assignment_bundle(verifier, catalog,
+            role="host", component=chosen["component"], now=now,
+            assignment_id=chosen["assignment_id"],
+            account_id=scope["account_id"], device_id=scope["device_id"])
+        scope["catalog_sha256"] = catalog.document_sha256
+        scope["catalog_public_key_sha256"] = hashlib.sha256(verifier.public_key).hexdigest()
+        chosen["assignment_sha256"] = assignment.document_sha256
+        self.selected_verifier = verifier
+        self.selected_catalog = catalog
+        self.selected_catalog_bytes = catalog_bytes
+        self.selected_assignment = assignment
+        self.selected_assignment_bytes = assignment_bytes
+        self.selected_catalog_key_hash = hashlib.sha256(verifier.public_key).hexdigest()
+        self.selected_assignment_sha256 = assignment.document_sha256
+
+    def _build_artifact_pin(self):
+        manifest = load_manifest(self.artifacts_dir)
+        now = int(self.selected_store.wall)
+        catalog_bytes = self.selected_catalog_bytes
+        assignment_bytes = self.selected_assignment_bytes
+        self.verifier = self.selected_verifier
+        catalog = self.selected_catalog
+        assignment = self.selected_assignment
+        if self.pin_variant == "catalog_digest":
+            catalog_bytes = _sign_document(catalog.payload, "catalog", _PRIVATE)
+            catalog = self.verifier.verify_catalog(catalog_bytes, now=now)
+            assignment_bytes, assignment = _assignment_bundle(self.verifier, catalog,
+                role="host", component="worker-1", now=now,
+                assignment_id=self.assignment_id,
+                account_id=self.selected_host.account_id,
+                device_id=self.selected_host.device_id)
+        elif self.pin_variant == "assignment_digest":
+            assignment_bytes = _sign_document(self.selected_assignment.payload,
+                                               "assignment", _PRIVATE)
+            assignment = self.verifier.verify_assignment(assignment_bytes, catalog,
+                account_id=self.selected_host.account_id,
+                device_id=self.selected_host.device_id, role="host", now=now)
+        elif self.pin_variant == "catalog_key":
+            self.verifier = CatalogVerifier(_OTHER_PUBLIC, clock=self.clock)
+            catalog_bytes = _sign_document(self.selected_catalog.payload,
+                                           "catalog", _OTHER_PRIVATE)
+            catalog = self.verifier.verify_catalog(catalog_bytes, now=now)
+            assignment_bytes, assignment = _assignment_bundle(self.verifier, catalog,
+                role="host", component="worker-1", now=now,
+                assignment_id=self.assignment_id,
+                account_id=self.selected_host.account_id,
+                device_id=self.selected_host.device_id, private_key=_OTHER_PRIVATE)
         component = "worker-1"
         selected_component = next(item for item in self.binding.components
                                   if item.component == component)
         self.assignment_id = selected_component.assignment_id
         self.worker_boot_id = selected_component.identity.boot_id
         self.component = component
-        assignment_bytes, assignment = _assignment_bundle(self.verifier, catalog,
-            role="host", component=component, now=now, assignment_id=self.assignment_id,
-            account_id=self.selected_host.account_id, device_id=self.selected_host.device_id)
         self.assignment = assignment
         self.host_policy = next(grant for grant in json.loads(self.selected_store.active)["payload"]["grants"]
                                 if grant["assignment_id"] == self.assignment_id)
@@ -240,8 +296,25 @@ class C2StartupFixture:
         view = self.installer.open_view(self.assignment_id,
             account_id=self.selected_host.account_id, device_id=self.selected_host.device_id,
             role="host", now=now)
+        views = [view]
         self.worker_boot_ids = {component: self.worker_boot_id}
-        self.pin = RuntimeArtifactGroupPin.acquire([view], clock=self.clock,
+        if self.pin_variant == "extra_component":
+            extra = next(item for item in self.available_components
+                         if item["component"] == "worker-2")
+            extra_bytes, self.extra_assignment = _assignment_bundle(self.verifier, catalog,
+                role="host", component=extra["component"], now=now,
+                assignment_id=extra["assignment_id"],
+                account_id=self.selected_host.account_id,
+                device_id=self.selected_host.device_id,
+                private_key=_PRIVATE)
+            self.installer.install(catalog_bytes, extra_bytes,
+                _SourceRetriever(self.artifacts_dir), account_id=self.selected_host.account_id,
+                device_id=self.selected_host.device_id, role="host")
+            views.append(self.installer.open_view(extra["assignment_id"],
+                account_id=self.selected_host.account_id, device_id=self.selected_host.device_id,
+                role="host", now=now))
+            self.worker_boot_ids[extra["component"]] = extra["worker_boot_id"]
+        self.pin = RuntimeArtifactGroupPin.acquire(views, clock=self.clock,
             runtime_boot_id=self.selected_host.boot_id,
             worker_boot_ids=self.worker_boot_ids)
         pin_entry = next(entry for entry in self.pin.record["assignments"]
@@ -290,10 +363,10 @@ def sys_platform_linux():
     return sys.platform.startswith("linux")
 
 
-def c2_startup_fixture(artifacts_dir="/artifacts", scratch_dir=None):
+def c2_startup_fixture(artifacts_dir="/artifacts", scratch_dir=None, *, pin_variant=None):
     """Construct a C2 startup fixture; caller owns it with a `with` block."""
     if scratch_dir is None:
         scratch_dir = os.environ.get("STEAMBOAT_ASSIGNED_TEST_SCRATCH")
     if not scratch_dir:
         raise ValueError("scratch_dir or STEAMBOAT_ASSIGNED_TEST_SCRATCH is required")
-    return C2StartupFixture(artifacts_dir, scratch_dir)
+    return C2StartupFixture(artifacts_dir, scratch_dir, pin_variant=pin_variant)

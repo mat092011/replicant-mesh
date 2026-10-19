@@ -254,13 +254,16 @@ class C2LocalStartup:
         return tuple(sorted(_SELECTED_ROLE[role] for role in snapshot.enabled_roles))
 
     def _assert_pin_matches(self, role, binding, spec):
+        import hashlib
         from steamboat_connector.aggregate_artifact_pin import RuntimeArtifactGroupPin
         from steamboat_connector.artifact_pin import RuntimeArtifactPin
+        from steamboat_connector.storage import read_private_json
+        from steamboat_connector.process_supervisor import ROLE_CONFIG_MAX_BYTES
         with self._backend._lock:
             entry = self._backend._pinned_roles.get(role)
         if type(entry) is not tuple or len(entry) != 3:
             raise CredentialError("role has no exact pinned runtime authority")
-        pin, verifier, _metadata = entry
+        pin, verifier, metadata = entry
         if ((role == "host" and type(pin) is not RuntimeArtifactGroupPin)
                 or (role == "coordinator" and type(pin) is not RuntimeArtifactPin)):
             raise CredentialError("role is not backed by its exact native artifact pin type")
@@ -276,12 +279,34 @@ class C2LocalStartup:
             raise CredentialError("artifact pin principal/role differs from local launch")
         pin.assert_open_descriptors()
         catalog = verifier.verify_catalog(pin.signed_catalog)
+        if (type(metadata) is not dict
+                or metadata.get("record") != dict(record)):
+            raise CredentialError("stored artifact pin metadata differs from the live pin record")
+        document = read_private_json(self._backend._config_path(role),
+            maximum_size=ROLE_CONFIG_MAX_BYTES, uid=self._uid)
+        if (type(document) is not dict
+                or document.get("artifact_pin") != metadata):
+            raise CredentialError("stored role config pin metadata differs from live authority")
         if role == "host":
             scope = binding.scope
             if record.get("runtime_boot_id") != spec.boot_id:
                 raise CredentialError("host artifact pin runtime boot differs from selected parent boot")
-            pinned = []
-            for assignment_id, authority in pin._authorities.items():
+            if (record.get("model_id") != catalog.payload["model"]["model_id"]
+                    or catalog.payload["manifest"]["fingerprint"] != scope.model_id):
+                raise CredentialError("host artifact catalog model differs from selected scope")
+            if hashlib.sha256(verifier.public_key).hexdigest() != scope.catalog_public_key_sha256:
+                raise CredentialError("host artifact catalog public key differs from selected scope")
+            if (catalog.document_sha256 != record.get("catalog_sha256")
+                    or catalog.document_sha256 != scope.catalog_sha256):
+                raise CredentialError("host artifact catalog digest differs from selected scope")
+            selected = {component.assignment_id: component
+                        for component in scope.components}
+            if (not selected or len(selected) != len(scope.components)
+                    or set(pin._authorities) != set(selected)):
+                raise CredentialError("host artifact pin component set differs from selected scope")
+            expected_entries = []
+            for assignment_id, component_scope in selected.items():
+                authority = pin._authorities[assignment_id]
                 assignment = verifier.verify_assignment(authority.assignment_bytes, catalog,
                     account_id=self._account, device_id=self._device, role="host")
                 payload = assignment.payload
@@ -290,21 +315,33 @@ class C2LocalStartup:
                         or payload.get("component") != authority.component
                         or payload.get("account_id") != self._account
                         or payload.get("device_id") != self._device
-                        or payload.get("role") != "host"):
+                        or payload.get("role") != "host"
+                        or hashlib.sha256(authority.assignment_bytes).hexdigest()
+                           != authority.assignment_sha256
+                        or assignment.document_sha256 != authority.assignment_sha256):
                     raise CredentialError("host pin signed manifest fingerprint differs from selected model")
-                pinned.append((authority.component, assignment_id, authority.worker_boot_id))
-            expected = [(item.component, item.assignment_id, item.worker_boot_id)
-                        for item in scope.components]
-            if sorted(pinned) != sorted(expected):
-                raise CredentialError("host artifact pin child tuple differs from selected host scope")
+                if (authority.component != component_scope.component
+                        or authority.worker_boot_id != component_scope.worker_boot_id):
+                    raise CredentialError("host artifact pin child tuple differs from selected host scope")
+                if authority.assignment_sha256 != component_scope.assignment_sha256:
+                    raise CredentialError("host artifact assignment digest differs from selected scope")
+                expected_entries.append({"component": component_scope.component,
+                    "assignment_id": component_scope.assignment_id,
+                    "assignment_sha256": component_scope.assignment_sha256,
+                    "worker_boot_id": component_scope.worker_boot_id})
+            if record.get("assignments") != expected_entries:
+                raise CredentialError("host artifact pin record differs from complete selected component scope")
         else:
             if record.get("boot_id") != spec.boot_id:
                 raise CredentialError("coordinator artifact pin boot differs from selected role boot")
+            if catalog.document_sha256 != record.get("catalog_sha256"):
+                raise CredentialError("coordinator catalog digest differs from its live artifact pin")
             assignment = verifier.verify_assignment(pin.signed_assignment, catalog,
                 account_id=self._account, device_id=self._device, role="coordinator")
             payload = assignment.payload
             if (payload.get("manifest_fingerprint") != binding._model_id
                     or payload.get("assignment_id") != record.get("assignment_id")
+                    or assignment.document_sha256 != record.get("assignment_sha256")
                     or payload.get("component") != "coordinator"
                     or payload.get("account_id") != self._account
                     or payload.get("device_id") != self._device

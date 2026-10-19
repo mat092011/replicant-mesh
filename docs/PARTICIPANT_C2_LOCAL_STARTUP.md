@@ -23,8 +23,21 @@ owns the start intent, closing the config-replacement race before Popen.
 Before claiming, the adapter verifies that the live artifact pin uses the same
 `Clock`, principal, and selected parent boot. It compares signed assignment
 manifest fingerprints and component/assignment/child-boot tuples against the
-selected C2 binding. Under the Root SH callback it also rechecks protected
-header and credential material before writing the local claim.
+selected C2 binding. For the host group, it also matches the selected catalog
+digest and SHA-256 of the catalog's raw uncompressed P-256 public key, and
+checks every signed assignment document digest against the selected component
+hash. The pin record must contain exactly the selected component/assignment/
+digest/boot tuples, and the backend's stored pin metadata must equal the live
+record both in memory and in its protected role configuration. These checks run
+before owner epoch advancement, claim creation, or Popen. Under the Root SH
+callback it also rechecks protected header and credential material before
+writing the local claim.
+
+The personal-coordinator selected profile does not yet contain catalog digest,
+catalog-key, or assignment-document-digest anchors. Coordinator startup checks
+its verified documents against its own live pin and the selected model,
+principal, assignment ID, component, role, and boot, but cannot claim the same
+selected-scope digest binding as the host group until that profile is extended.
 
 For each attempt, owner consent is durably advanced first and held through
 selected raw-head validation, local single-use claim, and publication of every
