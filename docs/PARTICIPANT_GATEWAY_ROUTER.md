@@ -1,11 +1,15 @@
 # C2 gateway producer component
 
 `steamboat_connector.gateway_router.GatewayRouter` owns an in-process registry of
-at most eight authenticated worker HELLO generations and a writer initialized at
-global fragment sequence 2 for each. Registrations are identity-only; they do not
+at most eight socket-driven `ChannelStream` worker generations. Registration
+accepts only a live stream committed through actual TLS, HELLO and ACK on its
+`ChannelSocket`; the router adopts that stream's own writer at global fragment
+sequence 2 and never creates a second writer. Aggregate stream reservations are
+bounded by the router reservation. Registrations are identity-only; they do not
 signal loaded readiness. Slots are keyed by exact device and worker boot, while
 removal also checks the exact registration object so a delayed close cannot
-remove a replacement.
+remove a replacement. The stream predicate and exact stream-owned writer are
+rechecked at route admission and dispatch.
 
 `submit` accepts the actual coordinator HELLO registration, worker HELLO
 registration, owner-minted C1 coordinator route guard, method, C1 metadata and
@@ -43,7 +47,8 @@ rechecks the route before releasing the exact operation, request, method and
 message entry. Cleanup responses use wire kind 7. Uncertain transport progress
 must retire the stream; this producer does not retry or adopt sessions.
 
-This is a producer/registry and heartbeat codec component only. It does not
-provide socket pumping, worker execution readiness, aggregate traffic metering,
-reconnect orchestration, a timer/receiver, or real-route evidence. C2 and
-CT-12/CT-13 remain open.
+This is a producer/registry and heartbeat codec component. The tests use loopback
+TCP through `ChannelSocket` and `ChannelStream`, with separate fixed coordinator
+and worker TLS purposes under one policy and clock. It does not provide worker
+execution readiness, reconnect orchestration, a heartbeat timer/receiver, or
+real-route evidence. C2 and CT-12/CT-13 remain open.

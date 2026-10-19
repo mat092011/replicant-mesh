@@ -4,22 +4,28 @@ import unittest
 import base64
 import hashlib
 import json
-import ssl
+import select
+import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from cryptography import x509
 
 from steamboat_security.sessions import SessionBindings
 from steamboat_connector.gateway_router import GatewayRouter, GatewayRouterError
-from steamboat_connector.channel_writer import ChannelFragmentWriter, writer_reservation_overhead_bytes
+from steamboat_connector.channel_writer import writer_reservation_overhead_bytes
 from steamboat_connector.channel_heartbeat import (
     HeartbeatError, PING, PONG, decode_heartbeat, encode_heartbeat,
 )
 from steamboat_connector import channel_wire as wire
 from steamboat_connector.channel_hello import WorkerHelloClient, WorkerHelloServer
+from steamboat_connector.channel_socket import ChannelSocket
+from steamboat_connector.channel_stream import (
+    ChannelStream, is_registered_worker_channel_stream,
+)
 from steamboat_connector.channel_wire import MAX_BUNDLE_BYTES, MAX_CONTROL_BUNDLE_BYTES
 from steamboat_security.gateway_ingress import GatewayWorkerIngress
 from tests.security import test_gateway_tls as gateway_tls_tests
@@ -27,47 +33,37 @@ from tests.security import test_gateway_tls as gateway_tls_tests
 
 class GatewayRouterRegistrationTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = gateway_tls_tests.GatewayServerTLSOwnerTests()
+        self.fixture = GatewayRouterTwoHopTests(
+            methodName="test_submit_binds_real_two_hops_hello_generation_and_core_c1")
         self.fixture.setUp()
-        self.ingress = GatewayWorkerIngress.from_tls(
-            self.fixture.client, verifier=self.fixture.fixture.fixture.verifier,
-            sessions=SessionBindings(clock=self.fixture.fixture.fixture.clock), gateway_id="gw-east")
-        self.client = WorkerHelloClient(self.ingress, self.fixture.client,
-                                        reassembly_capacity=MAX_BUNDLE_BYTES)
-        self.server = WorkerHelloServer.from_tls(
-            self.fixture.server, reassembly_capacity=MAX_BUNDLE_BYTES)
-        self.server.accept_hello(self.client.hello_frame)
-        fx = self.fixture.fixture.fixture
         self.router = GatewayRouter(
-            gateway_id="gw-east", gateway_certificate_pem=fx.gateway_pem,
-            gateway_private_key_pem=fx.gateway_key, clock=fx.clock,
-            communication_reservation_bytes=8_000_000)
+            gateway_id=self.fixture.router.gateway_id,
+            gateway_certificate_pem=self.fixture.base.gateway_cert,
+            gateway_private_key_pem=self.fixture.base.gateway_key,
+            clock=self.fixture.base.clock,
+            communication_reservation_bytes=self.fixture.worker_server_stream.reservation_bound_bytes)
+        self.stream = self.fixture.worker_server_stream
+        self.cap = self.stream.registration
 
     def tearDown(self):
-        self.fixture.tearDown()
-
-    def _writer(self, cap):
-        return ChannelFragmentWriter(
-            bytes.fromhex(cap.identity[3]),
-            communication_reservation_bytes=(writer_reservation_overhead_bytes()
-                + 256_000 + 8 * MAX_CONTROL_BUNDLE_BYTES), initial_sequence=2)
+        self.fixture.doCleanups()
 
     def test_registry_accepts_only_owner_minted_live_hello_and_removes_exact_slot(self):
-        cap = self.server.registration
-        identity = self.router.register_worker(cap, self._writer(cap))
-        self.assertEqual(identity, cap.identity)
+        identity = self.router.register_worker(self.stream)
+        self.assertEqual(identity, self.cap.identity)
         with self.assertRaises(GatewayRouterError):
-            self.router.register_worker(cap, self._writer(cap))
-        self.assertTrue(self.router.remove_worker(cap))
-        self.assertFalse(self.router.remove_worker(cap))
+            self.router.register_worker(self.cap)
+        self.assertTrue(self.router.remove_worker(self.cap))
+        self.assertFalse(self.router.remove_worker(self.cap))
         with self.assertRaises(GatewayRouterError):
-            self.router.register_worker(object(), self._writer(self.server.registration))
+            self.router.register_worker(object())
 
     def test_writer_starts_after_hello_and_is_retired_on_exact_close(self):
-        cap = self.server.registration
-        self.router.register_worker(cap, self._writer(cap))
+        cap = self.cap
+        self.router.register_worker(self.stream)
         slot = next(iter(self.router._workers.values()))
         self.assertEqual(slot.writer.expected_generation.hex(), cap.identity[3])
+        self.assertIs(slot.writer, self.stream.writer)
         self.assertEqual(slot.writer.accounting.next_fragment_sequence, 2)
         self.assertTrue(self.router.remove_worker(cap))
         self.assertTrue(slot.writer.accounting.retired)
@@ -87,8 +83,8 @@ class GatewayRouterRegistrationTests(unittest.TestCase):
                     decode_heartbeat(payload)
 
     def test_ping_shares_control_sequence_and_accepts_one_exact_pong(self):
-        cap = self.server.registration
-        self.router.register_worker(cap, self._writer(cap))
+        cap = self.cap
+        self.router.register_worker(self.stream)
         slot = next(iter(self.router._workers.values()))
         self.assertTrue(self.router.enqueue_heartbeat(worker=cap))
         self.assertEqual(slot.control_sequence, 2)
@@ -101,8 +97,8 @@ class GatewayRouterRegistrationTests(unittest.TestCase):
                 worker=cap, payload=encode_heartbeat(PONG, 1))
 
     def test_full_writer_queue_does_not_consume_heartbeat_control_sequence(self):
-        cap = self.server.registration
-        self.router.register_worker(cap, self._writer(cap))
+        cap = self.cap
+        self.router.register_worker(self.stream)
         slot = next(iter(self.router._workers.values()))
         bundle = wire.encode_bundle(
             "CancelSession", wire.REQUEST, fragment_kind=wire.CONTROL,
@@ -116,20 +112,24 @@ class GatewayRouterRegistrationTests(unittest.TestCase):
         self.assertIsNone(slot.heartbeat_outstanding)
 
     def test_closed_capability_cannot_remove_or_replace_a_new_slot(self):
-        cap = self.server.registration
-        self.router.register_worker(cap, self._writer(cap))
-        self.fixture.server.close()
+        cap = self.cap
+        self.router.register_worker(self.stream)
+        self.stream.close()
         self.assertTrue(self.router.remove_worker(cap))
         self.assertEqual(self.router._workers, {})
 
 
 from steamboat_connector.channel_hello import CoordinatorHelloClient, CoordinatorHelloServer
+from steamboat_connector.channel_socket import ChannelSocket
+from steamboat_connector.channel_stream import (
+    TLS_OWNER_MIN_RESERVATION_BYTES, ChannelStream,
+    is_registered_worker_channel_stream,
+)
 from steamboat_security.channel_tls import OwnedWorkerTLS
 from steamboat_connector.channel_writer import writer_reservation_overhead_bytes
 from steamboat_connector.channel_wire import (
     BUNDLE_RESPONSE, CONTROL, CONTROL_RESPONSE, DATA, REQUEST, RESPONSE,
-    FragmentDecoder, decode_bundle, encode_bundle,
-    MAX_FRAGMENT_BYTES,
+    decode_bundle, encode_bundle,
 )
 from steamboat_security.authorization import Authorizer, LocalIdentity
 from steamboat_security.certificates import (
@@ -141,20 +141,19 @@ from steamboat_security.channel_certificates import (
 from steamboat_security.channel_policy import sign_channel_policy
 from steamboat_security.gateway_coordinator_tls import OwnedGatewayCoordinatorTLS
 from steamboat_security.gateway_delegation import (
-    DOMAIN as DELEGATION_DOMAIN, DelegationError, GatewayDelegationVerifier,
-    sign_gateway_delegation,
+    DelegationError, GatewayDelegationVerifier, sign_gateway_delegation,
 )
 from steamboat_security.gateway_egress import GatewayCoordinatorEgress
 from steamboat_security.gateway_ingress import GatewayWorkerIngress
 from steamboat_security.gateway_tls import OwnedGatewayWorkerTLS
 from steamboat_security.sessions import SessionBindings
+from tests.connector.test_traffic_budget import _memory_budget, _policy
 from steamboat_security.codec import (
     METADATA_KEY, WORKER_SERVICE, WORKER_METHODS, encode_binding,
 )
 from steamboat_security.ids import new_id
 from tests.security import test_gateway_authorization as core_gateway_tests
 from tests.security import test_gateway_egress as egress_tests
-from tests.security import test_gateway_ingress as ingress_tests
 from tests.security import test_gateway_tls as gateway_tls_tests
 
 class GatewayRouterTwoHopTests(unittest.TestCase):
@@ -170,9 +169,9 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
         # last and only inspects paths created by this fixture.
         self.addCleanup(self._assert_base_tempfiles_removed)
         self.addCleanup(self.base.doCleanups)
+        self.addCleanup(self._restore_base_fixture)
         self.base.setUp()
         self._base_temp_paths = tuple(Path(path) for path in self.base.client_temp[2])
-        self.addCleanup(self.base.tearDown)
         self.fx = self.base.fx
         self.host = self.fx.credentials["host"]
         self.actor = self.fx.credentials["coordinator"]
@@ -183,10 +182,21 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
         self.assignment_id = egress_tests.identity_tests.ASSIGNMENT
         self.model_id = egress_tests.identity_tests.MODEL
         self.coordinator_boot_id = egress_tests.identity_tests.BOOT_COORDINATOR
+        self.meter_budget, self.meter_store, _meter_clock = _memory_budget(
+            policy=_policy(global_total=20_000_000, role_total=6_000_000,
+                           send_rate=20_000_000, role_send_rate=6_000_000,
+                           cleanup_total=4_000_000, cleanup_rate=4_000_000,
+                           role_cleanup_rate=1_000_000),
+            clock=SimpleNamespace(clock=self.base.clock))
+        self.socket_host_boot = "a" * 32
+        self.socket_gateway_boot = "b" * 32
+        self.meter_budget.bind_role("host", self.socket_host_boot)
+        self.meter_budget.bind_role("coordinator", self.socket_gateway_boot)
 
         # Both C2 endpoints use this one policy-pinned gateway certificate.
         self.base.egress.close()
         channel_key = generate_private_key_pem()
+        self.worker_channel_key = channel_key
         worker_identity = {
             "account_id": self.host_record["account_id"],
             "device_id": self.host_record["device_id"],
@@ -228,27 +238,19 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             logical_host_certificate_pem=self.host["certificate"],
             gateway_id="gw-east", gateway_ca_pem=self.base.gateway_ca,
             coordinator_private_key_pem=self.actor["key"])
-        self.addCleanup(self.coordinator_egress.close)
-        for _ in range(40):
-            outbound = self.coordinator_egress.take_encrypted()
-            if outbound:
-                self.coordinator_server.feed_encrypted(outbound)
-            outbound = self.coordinator_server.take_encrypted()
-            if outbound:
-                self.coordinator_egress.feed_encrypted(outbound)
-            if self.coordinator_egress.handshake_complete and self.coordinator_server.handshake_complete:
-                break
-        else:
-            self.fail("combined coordinator TLS handshake did not complete")
+        self.coordinator_driver, self.coordinator_server_driver, coordinator_sockets = (
+            self._socket_drivers(self.coordinator_egress, self.coordinator_server))
+        self._drive_tls_handshake(
+            (self.coordinator_driver, self.coordinator_server_driver),
+            (self.coordinator_egress, self.coordinator_server), coordinator_sockets)
         self.coordinator_client_hello = CoordinatorHelloClient(
             self.coordinator_egress, reassembly_capacity=MAX_BUNDLE_BYTES)
         self.coordinator_server_hello = CoordinatorHelloServer.from_tls(
             self.coordinator_server, reassembly_capacity=MAX_BUNDLE_BYTES)
-        self.coordinator_hello_ack = self.coordinator_server_hello.feed_hello(
-            self.coordinator_client_hello.hello_frame)
-        self.coordinator_server_hello.send_ack(self.coordinator_hello_ack)
-        self.coordinator_egress.feed_encrypted(self.coordinator_server.take_encrypted())
-        self.assertIsNotNone(self.coordinator_client_hello.read_ack())
+        self.coordinator_client_stream, self.coordinator_server_stream = self._start_streams(
+            self.coordinator_driver, self.coordinator_server_driver,
+            self.coordinator_client_hello, self.coordinator_server_hello)
+        self.assertIsNotNone(self.coordinator_server_stream.registration)
         self.coordinator_registration = self.coordinator_server_hello.registration
 
         self.worker_client_tls = OwnedWorkerTLS.connect(
@@ -263,19 +265,11 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             cohort_ca_pem=self.base.gateway_ca,
             policy_store=self.base.policy_store, clock=self.base.clock,
             gateway_id="gw-east")
-        self.addCleanup(self.worker_client_tls.close)
-        self.addCleanup(self.worker_server_tls.close)
-        for _ in range(40):
-            outbound = self.worker_client_tls.take_encrypted()
-            if outbound:
-                self.worker_server_tls.feed_encrypted(outbound)
-            outbound = self.worker_server_tls.take_encrypted()
-            if outbound:
-                self.worker_client_tls.feed_encrypted(outbound)
-            if self.worker_client_tls.handshake_complete and self.worker_server_tls.handshake_complete:
-                break
-        else:
-            self.fail("combined worker TLS handshake did not complete")
+        self.worker_client_driver, self.worker_server_driver, worker_sockets = (
+            self._socket_drivers(self.worker_client_tls, self.worker_server_tls))
+        self._drive_tls_handshake(
+            (self.worker_client_driver, self.worker_server_driver),
+            (self.worker_client_tls, self.worker_server_tls), worker_sockets)
 
         self.worker_sessions = SessionBindings(clock=self.base.clock)
         self.worker_verifier = GatewayDelegationVerifier(
@@ -292,30 +286,124 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             reassembly_capacity=MAX_BUNDLE_BYTES)
         self.worker_server_hello = WorkerHelloServer.from_tls(
             self.worker_server_tls, reassembly_capacity=MAX_BUNDLE_BYTES)
-        self.worker_client_hello.send_hello()
-        self.worker_server_tls.feed_encrypted(self.worker_client_tls.take_encrypted())
-        worker_ack = self.worker_server_hello.read_hello()
-        self.worker_server_hello.send_ack(worker_ack)
-        self.worker_client_tls.feed_encrypted(self.worker_server_tls.take_encrypted())
-        self.assertIsNotNone(self.worker_client_hello.read_ack())
+        self.worker_client_stream, self.worker_server_stream = self._start_streams(
+            self.worker_client_driver, self.worker_server_driver,
+            self.worker_client_hello, self.worker_server_hello)
+        self.assertTrue(is_registered_worker_channel_stream(self.worker_server_stream))
         self.worker_registration = self.worker_server_hello.registration
-
-        self.writer = ChannelFragmentWriter(
-            bytes.fromhex(self.worker_registration.identity[3]),
-            communication_reservation_bytes=(writer_reservation_overhead_bytes()
-                + 256_000 + 8 * MAX_CONTROL_BUNDLE_BYTES), initial_sequence=2,
-            fragment_payload_bytes=8192)
+        self.writer = self.worker_server_stream.writer
         self.router = GatewayRouter(
             gateway_id="gw-east", gateway_certificate_pem=self.base.gateway_cert,
             gateway_private_key_pem=self.base.gateway_key, clock=self.base.clock,
-            communication_reservation_bytes=self.writer.communication_reservation_bytes)
-        self.router.register_worker(self.worker_registration, self.writer)
+            communication_reservation_bytes=8 * self.worker_server_stream.reservation_bound_bytes)
+        self.router.register_worker(self.worker_server_stream)
         self.gateway_route_authorizer = Authorizer(
             local_identity=LocalIdentity(self.host["certificate"], self.worker_boot_id,
                                          self.model_id, self.assignment_id),
             snapshot_store=self.base.snapshot_store, clock=self.base.clock,
             session_bindings=self.worker_sessions,
             worker_request_type=core_gateway_tests.PortableParsedRequest)
+
+    @staticmethod
+    def _connected_pair():
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_sock.connect(listener.getsockname())
+        server_sock, _ = listener.accept()
+        listener.close()
+        return client_sock, server_sock
+
+    def _socket_drivers(self, client_tls, server_tls):
+        client_sock, server_sock = self._connected_pair()
+        self.addCleanup(client_sock.close)
+        self.addCleanup(server_sock.close)
+        client_driver = ChannelSocket(
+            client_sock, client_tls, self.meter_budget, role="host",
+            boot_id=self.socket_host_boot)
+        self.addCleanup(client_driver.close)
+        server_driver = ChannelSocket(
+            server_sock, server_tls, self.meter_budget, role="coordinator",
+            boot_id=self.socket_gateway_boot)
+        self.addCleanup(server_driver.close)
+        return client_driver, server_driver, (client_sock, server_sock)
+
+    def _drive_tls_handshake(self, drivers, owners, sockets, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for driver in drivers:
+                driver.pump()
+            if all(owner.handshake_complete for owner in owners) and all(
+                    not driver.pending_plaintext_bytes
+                    and not driver.pending_ciphertext_bytes
+                    and not driver._tls.pending_encrypted_bytes for driver in drivers):
+                return
+            select.select(list(sockets), list(sockets), [], 0.001)
+        self.fail("socket-driven TLS handshake exceeded its bounded deadline")
+
+    def _start_streams(self, client_driver, server_driver, client_hello, server_hello):
+        common = dict(
+            writer_reservation_bytes=(writer_reservation_overhead_bytes()
+                + wire.MAX_BUNDLE_BYTES + 8 * MAX_CONTROL_BUNDLE_BYTES),
+            decoded_byte_capacity=MAX_BUNDLE_BYTES,
+            tls_owner_reservation_bytes=TLS_OWNER_MIN_RESERVATION_BYTES)
+        client_stream = ChannelStream(client_driver, client_hello, **common)
+        self.addCleanup(client_stream.close)
+        server_stream = ChannelStream(server_driver, server_hello, **common)
+        self.addCleanup(server_stream.close)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            client_stream.pump()
+            server_stream.pump()
+            if (client_stream.transport_bootstrap_complete
+                    and server_stream.transport_bootstrap_complete):
+                return client_stream, server_stream
+            time.sleep(0.001)
+        self.fail("socket-driven TLS/HELLO bootstrap exceeded its bounded deadline")
+
+    def _receive_worker_message(self, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.worker_server_stream.pump()
+            self.worker_client_stream.pump()
+            message = self.worker_client_stream.pop_message()
+            if message is not None:
+                return message
+            time.sleep(0.001)
+        self.fail("worker route message was not delivered within one second")
+
+    def _new_worker_stream(self):
+        client_tls = OwnedWorkerTLS.connect(
+            worker_certificate_pem=self.worker_channel_pem,
+            worker_private_key_pem=self.worker_channel_key,
+            gateway_ca_pem=self.base.gateway_ca,
+            endpoint_host="worker.gateway.example", endpoint_port=443,
+            clock=self.base.clock)
+        server_tls = OwnedGatewayWorkerTLS.accept(
+            gateway_certificate_pem=self.base.gateway_cert,
+            gateway_private_key_pem=self.base.gateway_key,
+            cohort_ca_pem=self.base.gateway_ca, policy_store=self.base.policy_store,
+            clock=self.base.clock, gateway_id="gw-east")
+        client_driver, server_driver, sockets = self._socket_drivers(client_tls, server_tls)
+        self._drive_tls_handshake((client_driver, server_driver),
+                                  (client_tls, server_tls), sockets)
+        sessions = SessionBindings(clock=self.base.clock)
+        verifier = GatewayDelegationVerifier(
+            self.base.policy_store, clock=self.base.clock,
+            gateway_ca_pem=self.base.gateway_ca, participant_ca_pem=self.fx.ca_pem,
+            local_identity=LocalIdentity(self.host["certificate"], self.worker_boot_id,
+                                         self.model_id, self.assignment_id),
+            endpoint_host="worker.gateway.example", endpoint_port=443)
+        ingress = GatewayWorkerIngress.from_tls(
+            client_tls, verifier=verifier, sessions=sessions, gateway_id="gw-east")
+        hello_client = WorkerHelloClient(ingress, client_tls,
+                                         reassembly_capacity=MAX_BUNDLE_BYTES)
+        hello_server = WorkerHelloServer.from_tls(
+            server_tls, reassembly_capacity=MAX_BUNDLE_BYTES)
+        client_stream, server_stream = self._start_streams(
+            client_driver, server_driver, hello_client, hello_server)
+        return client_stream, server_stream
 
     def _binding_metadata(self, method, *, operation_id, request_id, session_id,
                           route_id="route_" + "9" * 32):
@@ -359,12 +447,9 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             request_bytes=raw_request, message_id=message_id))
         envelope = None
         # OpenSession fits one C2 fragment, decoded using the actual HELLO decoder.
-        frame = self.writer.next_frame()
-        self.assertIsNotNone(frame)
-        messages = list(self.worker_server_hello.decoder.feed(frame))
-        self.writer.frame_sent(frame)
-        self.assertEqual(len(messages), 1)
-        bundle = decode_bundle(messages[0].payload, fragment_kind=DATA)
+        message = self._receive_worker_message()
+        self.assertEqual(message.kind, DATA)
+        bundle = decode_bundle(message.payload, fragment_kind=DATA)
         envelope = bundle.envelope
         self.assertEqual(bundle.binding, binding)
         c1 = self.gateway_route_authorizer.authorize_gateway(
@@ -401,6 +486,24 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
         return fields, metadata, binding, lane, kind, route_guard
 
     def test_submit_binds_real_two_hops_hello_generation_and_core_c1(self):
+        self.assertEqual((self.coordinator_egress._tls.endpoint_host,
+                          self.coordinator_egress._tls.endpoint_port),
+                         ("coordinator.gateway.example", 444))
+        self.assertEqual((self.worker_client_tls.endpoint_host,
+                          self.worker_client_tls.endpoint_port),
+                         ("worker.gateway.example", 443))
+        self.assertTrue(self.coordinator_client_stream.transport_bootstrap_complete)
+        self.assertTrue(self.coordinator_server_stream.transport_bootstrap_complete)
+        self.assertIs(self.coordinator_server_stream.registration,
+                      self.coordinator_registration)
+        self.assertTrue(self.worker_client_stream.transport_bootstrap_complete)
+        self.assertTrue(self.worker_server_stream.transport_bootstrap_complete)
+        self.assertIs(self.worker_server_stream.registration,
+                      self.worker_registration)
+        self.assertGreater(sum(self.coordinator_driver.socket_byte_counts), 0)
+        self.assertGreater(sum(self.coordinator_server_driver.socket_byte_counts), 0)
+        self.assertGreater(sum(self.worker_client_driver.socket_byte_counts), 0)
+        self.assertGreater(sum(self.worker_server_driver.socket_byte_counts), 0)
         (fields, request_id, session_id, operation_id, metadata, binding,
          raw_request, guard, envelope, message_id) = self._open_request()
         decoded = json.loads(envelope.decode("utf-8"))["payload"]
@@ -451,11 +554,9 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
                     worker=self.worker_registration, route_guard=guard,
                     method="Describe", metadata=metadata, request_bytes=raw,
                     message_id=message_id))
-                frame = self.writer.next_frame()
-                messages = list(self.worker_server_hello.decoder.feed(frame))
-                self.writer.frame_sent(frame)
-                self.assertEqual(len(messages), 1)
-                bundle = decode_bundle(messages[0].payload, fragment_kind=DATA)
+                message = self._receive_worker_message()
+                self.assertEqual(message.kind, DATA)
+                bundle = decode_bundle(message.payload, fragment_kind=DATA)
                 self.assertEqual(bundle.binding, binding)
                 auth = self.gateway_route_authorizer.authorize_gateway(
                     WORKER_SERVICE, "Describe", request, metadata,
@@ -474,27 +575,20 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
         step_op, cancel_op = new_id("op"), new_id("op")
         step_raw = json.dumps({"step": "x" * 40_000}, separators=(",", ":")).encode()
         step_id, cancel_id = b"S" * 16, b"C" * 16
-        step = self._request_bundle(
+        self._request_bundle(
             method="Step", operation_id=step_op, request_id=request_id,
             session_id=session_id, protobuf=step_raw, sequence_expected=2,
             message_id=step_id)
-        first_step_frame = self.writer.next_frame()
-        self.assertEqual(first_step_frame[4], DATA)
-        list(self.worker_server_hello.decoder.feed(first_step_frame))
-        self.writer.frame_sent(first_step_frame)
+        first_global_sequence = self.writer.accounting.next_fragment_sequence
+        self.worker_server_stream.pump()
+        self.assertEqual(self.writer.accounting.next_fragment_sequence,
+                         first_global_sequence + 1)
         cancel_raw = b"cancel"
-        cancel = self._request_bundle(
+        self._request_bundle(
             method="CancelSession", operation_id=cancel_op,
             request_id=request_id, session_id=session_id, protobuf=cancel_raw,
             sequence_expected=1, message_id=cancel_id)
-        first_after_cancel = self.writer.next_frame()
-        self.assertEqual(first_after_cancel[4], CONTROL)
-        messages = list(self.worker_server_hello.decoder.feed(first_after_cancel))
-        self.writer.frame_sent(first_after_cancel)
-        while self.writer.pending_bytes:
-            frame = self.writer.next_frame()
-            messages.extend(self.worker_server_hello.decoder.feed(frame))
-            self.writer.frame_sent(frame)
+        messages = [self._receive_worker_message(), self._receive_worker_message()]
         self.assertEqual([m.kind for m in messages], [CONTROL, DATA])
         decoded = [decode_bundle(m.payload, fragment_kind=m.kind) for m in messages]
         self.assertEqual([b.method for b in decoded], ["CancelSession", "Step"])
@@ -534,6 +628,22 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             worker=self.worker_registration, operation_id=step_op,
             request_id=request_id, message_id=step_id,
             method="Step", payload=step_response))
+
+    def test_stale_stream_close_cannot_remove_its_replacement(self):
+        old_registration = self.worker_registration
+        old_stream = self.worker_server_stream
+        replacement_client, replacement_stream = self._new_worker_stream()
+        new_registration = replacement_stream.registration
+        self.assertEqual(old_registration.identity[1:3], new_registration.identity[1:3])
+        self.assertNotEqual(old_registration.identity[3], new_registration.identity[3])
+        self.router.register_worker(replacement_stream)
+        replacement_slot = self.router._slot(self.device_id, self.worker_boot_id)
+        self.assertIs(replacement_slot.stream, replacement_stream)
+        old_stream.close()
+        self.assertFalse(self.router.remove_worker(old_registration))
+        self.assertIs(self.router._slot(self.device_id, self.worker_boot_id).stream,
+                      replacement_stream)
+        self.assertTrue(is_registered_worker_channel_stream(replacement_stream))
 
     def test_wrong_scope_actor_metadata_and_request_bytes_are_rejected(self):
         (fields, request_id, session_id, operation_id, metadata, binding,
@@ -608,6 +718,54 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
                 coordinator=self.coordinator_registration, worker=self.worker_registration,
                 route_guard=guard, method="OpenSession")
 
+    def test_closed_socket_stream_is_pruned_before_queued_dispatch(self):
+        (_fields, _request_id, _session_id, _operation_id, _metadata, _binding,
+         _raw_request, guard, _envelope, _message_id) = self._open_request()
+        reserved = self.worker_server_stream.reservation_bound_bytes
+        self.worker_server_stream.close()
+        with self.assertRaises(GatewayRouterError):
+            self.router.assert_dispatch_live(
+                coordinator=self.coordinator_registration, worker=self.worker_registration,
+                route_guard=guard, method="OpenSession")
+        self.assertEqual(self.router._workers, {})
+        self.assertEqual(self.router._reserved_bytes, 0)
+        self.assertGreater(reserved, 0)
+
     def _assert_base_tempfiles_removed(self):
-        for path in getattr(self, "_base_temp_paths", ()):
+        paths = getattr(self, "_base_temp_paths", None)
+        if paths is None:
+            paths = tuple(Path(path) for path in
+                          getattr(self.base, "client_temp", (None, None, ()))[2])
+        for path in paths:
+            self.assertFalse(path.exists(), f"fixture-owned TLS tempfile leaked: {path}")
+
+    def _restore_base_fixture(self):
+        prior = getattr(self.base, "_prior_now", None)
+        if prior is not None:
+            egress_tests.identity_tests.NOW = prior
+        fx = getattr(self.base, "fx", None)
+        if fx is not None:
+            fx.doCleanups()
+
+
+class GatewayRouterPartialSetupCleanupTests(unittest.TestCase):
+    def test_failed_nested_setup_restores_clock_and_removes_its_tempfiles(self):
+        egress_tests.GatewayEgressTests.setUpClass()
+        previous_now = egress_tests.identity_tests.NOW
+        fixture = GatewayRouterTwoHopTests(
+            methodName="test_submit_binds_real_two_hops_hello_generation_and_core_c1")
+        paths = []
+
+        def fail_after_tempfile(test_case):
+            paths.extend(Path(path) for path in test_case.client_temp[2])
+            raise RuntimeError("injected handshake setup failure")
+
+        with mock.patch.object(egress_tests.GatewayEgressTests,
+                               "_finish_handshake", fail_after_tempfile):
+            with self.assertRaisesRegex(RuntimeError, "injected handshake"):
+                fixture.setUp()
+            fixture.doCleanups()
+        self.assertEqual(egress_tests.identity_tests.NOW, previous_now)
+        self.assertTrue(paths)
+        for path in paths:
             self.assertFalse(path.exists(), f"fixture-owned TLS tempfile leaked: {path}")

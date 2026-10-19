@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 from cryptography import x509
 
 from steamboat_connector import channel_wire as wire
+from steamboat_connector.channel_stream import (
+    ChannelStream, is_registered_worker_channel_stream,
+)
 from steamboat_connector.channel_hello import (
     RegisteredCoordinator, RegisteredWorker,
 )
@@ -50,7 +53,9 @@ class GatewayRouterError(ValueError):
 class _WorkerSlot:
     registration: RegisteredWorker
     writer: ChannelFragmentWriter
+    stream: ChannelStream
     identity: tuple
+    reservation_bytes: int
     lock: threading.RLock = field(default_factory=threading.RLock)
     data_sequence: int = 1
     control_sequence: int = 1
@@ -76,13 +81,19 @@ class GatewayRouter:
         self._reservation = communication_reservation_bytes
         self._lock = threading.RLock()
         self._workers = {}
+        self._reserved_bytes = 0
         self._writer_owners = weakref.WeakSet()
 
-    def register_worker(self, registration, writer):
-        """Install a slot for a genuine committed HELLO capability, identity only."""
-        if type(registration) is not RegisteredWorker:
-            raise GatewayRouterError("worker registration must be owner-minted HELLO capability")
+    def register_worker(self, stream):
+        """Install only a genuine socket-driven worker stream after HELLO ACK."""
+        if (type(stream) is not ChannelStream
+                or not is_registered_worker_channel_stream(stream)):
+            raise GatewayRouterError("worker must be a live registered socket ChannelStream")
         try:
+            registration = stream.registration
+            writer = stream.writer
+            if type(registration) is not RegisteredWorker:
+                raise GatewayRouterError("worker stream has no committed HELLO registration")
             registration.assert_live()
             identity = registration.identity
         except Exception as error:
@@ -94,24 +105,35 @@ class GatewayRouter:
                 or writer.accounting.pending_data_messages != 0
                 or writer.accounting.pending_control_messages != 0
                 or writer.accounting.retired
-                or writer.communication_reservation_bytes > self._reservation):
-            raise GatewayRouterError("worker writer must be fresh for this HELLO generation at sequence two")
+                or writer.communication_reservation_bytes > self._reservation
+                or stream.reservation_bound_bytes > self._reservation):
+            raise GatewayRouterError("worker stream writer must be fresh at sequence two within its reservation")
         key = identity[1:3]
-        slot = _WorkerSlot(registration, writer, identity)
+        slot = _WorkerSlot(registration, writer, stream, identity,
+                           stream.reservation_bound_bytes)
         with self._lock:
+            self._prune_dead_locked()
             if writer in self._writer_owners:
                 raise GatewayRouterError("writer is already owned by a worker slot")
             current = self._workers.get(key)
             if current is not None and current.live:
                 if current.identity == identity:
                     raise GatewayRouterError("worker generation is already registered")
-                # Same device/boot replacement retires only the replaced slot.
-                current.live = False
-                current.writer.retire()
-            elif len(self._workers) >= MAX_WORKERS and key not in self._workers:
+            if current is not None:
+                replacing_bytes = current.reservation_bytes
+                if (self._reserved_bytes - replacing_bytes
+                        + stream.reservation_bound_bytes > self._reservation):
+                    raise GatewayRouterError("aggregate worker stream reservation is exhausted")
+                # Same device/boot replacement retires only the replaced stream.
+                current.stream.close()
+                self._drop_slot_locked(key, current)
+            elif stream.reservation_bound_bytes > self._reservation:
+                raise GatewayRouterError("aggregate worker stream reservation is exhausted")
+            if len(self._workers) >= MAX_WORKERS:
                 raise GatewayRouterError("worker registry is full")
             self._workers[key] = slot
             self._writer_owners.add(writer)
+            self._reserved_bytes += stream.reservation_bound_bytes
         return identity
 
     def remove_worker(self, registration):
@@ -124,16 +146,44 @@ class GatewayRouter:
             if key is None:
                 return False
             slot = self._workers[key]
+            slot.stream.close()
+            self._drop_slot_locked(key, slot)
+            return True
+
+    def _drop_slot_locked(self, key, slot):
+        if self._workers.get(key) is not slot:
+            return
+        with slot.lock:
+            if self._workers.get(key) is not slot:
+                return
             slot.live = False
             slot.writer.retire()
+            if not slot.stream.closed:
+                slot.stream.close()
             del self._workers[key]
-            return True
+            self._reserved_bytes -= slot.reservation_bytes
+
+    @staticmethod
+    def _stream_matches(slot):
+        try:
+            return (is_registered_worker_channel_stream(slot.stream)
+                    and slot.stream.registration is slot.registration
+                    and slot.stream.writer is slot.writer)
+        except Exception:
+            return False
+
+    def _prune_dead_locked(self):
+        for key, slot in tuple(self._workers.items()):
+            if not slot.live or not self._stream_matches(slot):
+                self._drop_slot_locked(key, slot)
 
     def _slot(self, target_device_id, worker_boot_id):
         key = (target_device_id, worker_boot_id)
         with self._lock:
             slot = self._workers.get(key)
-            if slot is None or not slot.live:
+            if slot is None or not slot.live or not self._stream_matches(slot):
+                if slot is not None:
+                    self._drop_slot_locked(key, slot)
                 raise GatewayRouterError("exact live worker generation is not registered")
             return slot
 
@@ -153,6 +203,8 @@ class GatewayRouter:
             worker_channel.assert_live()
             if not slot.live or slot.registration is not worker:
                 raise GatewayRouterError("worker slot was replaced")
+            if not self._stream_matches(slot) or slot.registration is not worker:
+                raise GatewayRouterError("worker socket stream is no longer the exact registered owner")
             if (actor.gateway_id != self.gateway_id
                     or worker_channel.gateway_id != self.gateway_id
                     or actor.gateway_certificate_sha256 != worker_channel.gateway_certificate_sha256
