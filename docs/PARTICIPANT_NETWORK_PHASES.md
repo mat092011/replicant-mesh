@@ -316,6 +316,13 @@ policy-owner run passed 11 tests, but it was not included in component 34 and
 does not implement transport ownership. These remain focused component results,
 not C2 phase acceptance; C2.1–C2.6 remain open.
 
+Focused Clock-bridge, host settings/binding and coordinator settings native
+checks subsequently passed 25, 33 and eight tests respectively, all with zero
+skips, failures or errors. These source-reviewed library results are separate
+from component 34; actual role/process/consumer integration and the real C2
+route remain pending. See the component record for retained failures and pins.
+C2.1–C2.6 and the phase exit gate remain open.
+
 ## C3 — Validate one GPU execution path
 
 **Outcome:** one explicitly supported GPU/backend/precision combination preserves

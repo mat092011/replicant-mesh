@@ -1048,3 +1048,13 @@ integration. C2 gates remain open; fixed-role readiness, live consumer RPC
 delivery, channel transport ownership, shared physical-resource enforcement
 and CT-11/CT-13 remain outstanding. See the [component record](experiments/2026-10-19-participant-c2-components.md)
 for image, proof and test-log hashes.
+
+
+**C2 Clock and role settings, 2026-10-19:** focused native Linux validation
+passed 25 Clock-bridge tests, 33 host settings/binding tests and eight
+coordinator settings tests, each with zero skips, failures or errors.
+The [component record](experiments/2026-10-19-participant-c2-components.md)
+retains exact snapshots, logs and the earlier Clock teardown failure.
+These are library and data-validation results; supervised process handoff,
+fixed-role readiness and the real C2 route remain pending. They are separate
+from component 34. C2.1–C2.6 remain open; C3 and research statuses are unchanged.

@@ -1026,3 +1026,57 @@ re-enrollment path is not implemented by this owner. Component 34 predates
 this channel-policy integration, so the 11-test focused result is separate and
 not part of its 925-test count. C2.1–C2.6 and the C2 exit gate remain open; C3
 and research statuses are unchanged.
+
+
+## Clock handoff and closed role settings: focused native validation
+
+The source-reviewed owned Clock bridge passed 25 unique native Linux tests
+with zero skips, failures or errors in 2.070 seconds. Frozen head was
+fa5586b6c06e6fd6da05addfe7c305fc744f3c5a, source digest
+3ea2ccbcaf70eb69bfaae5b459d0c8cce216a3c9904f2a43df2ca11365d4cee0
+(471 files), with log SHA-256
+f3b060cd153f0f57d8840c4051a8703d5928fe2a84f39bc791e466e0ebdfc380.
+The checks use actual forked children, inherited private Unix sockets and
+kernel peer credentials. They cover atomic Clock samples, monotonic brackets,
+suspend detection, bounded generations, pending spawn leases, late PID binding,
+nonblocking stop, child reaping and sticky descriptor cleanup uncertainty.
+The parent must supply an already trusted Clock with known uncertainty and
+must not revalidate it while a bridge generation remains live or retained.
+This library does not establish clock accuracy or supervised role readiness.
+
+The earlier 25-test native attempt at
+13076268ffc45870bcc40d489b47d4e29d1d2599 had 24 passes and one error
+(zero skips; 2.066 seconds; log SHA-256
+a887c0e7cda48d013b266f82e9e978af5aa8b36e049ffcbfdf181bf75c12bca0).
+Its teardown tried to join a thread whose start had deliberately failed.
+The reviewed test-only correction joins only threads that actually started;
+the ownership and child-reap assertions remain intact. This failure remains
+retained separately from the corrected pass.
+
+The closed host settings and signed binding suites passed 33 native tests
+with zero skips, failures or errors in 0.959 seconds: eight parser tests and
+25 selected host binding tests, including protected runtime-file mutation.
+Frozen head was 1115ff53801e0ff87bfdf1c35f638a8c1aecd5f0, source digest
+e0910088873ce26a17d24fecd0fedc8b3de4433a605fa4c44a225d252001631c
+(479 files), log SHA-256
+9ca2731dc42326659305fef8c101e2171457d9615bee61050d90590165a9a864.
+The coordinator settings parser separately passed eight focused native tests
+with zero skips, failures or errors at
+b9fb7092ca7cb9e7fe283580cddbea20b35dc2b4, digest
+fffede8e1fe8f09c59f1502520a45f9bc209017f2d82126ad4a50da0ccaea4ee
+(485 files), log SHA-256
+748e82d87269b5d464fb1533db1f298298ed6a0dc559be9267652b46165f79e3.
+Both settings parsers accept bounded canonical closed data and return
+immutable declarations. They do not open referenced material, validate
+assignment documents against the declared pins, load weights or start roles.
+Coordinator assignment pins are declarations in the selected header-pinned
+runtime bytes; the coordinator launch specification itself has no such pins.
+
+These diagnostics used the unchanged component caps and dependency image
+sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12,
+with complete frozen source/test overlays mounted read-only. All three
+corrected diagnostic containers exited zero and were removed. They are
+separate focused results, not part of component 34's 925-test count. Process
+handoff integration, actual fixed-role startup, live consumer ownership,
+shared physical resource enforcement and the real C2 route remain unverified.
+All C2 tasks and the C2 exit gate remain open; C3 has not advanced.
