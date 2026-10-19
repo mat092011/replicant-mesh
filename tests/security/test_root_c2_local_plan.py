@@ -1,6 +1,7 @@
 """Portable tests for inert per-device C2 local-plan projection."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import unittest
@@ -43,6 +44,13 @@ class C2LocalPlanTests(unittest.TestCase):
         return derive_c2_local_plan(self.selector, self.bundle, self.active,
             clock=self.clock, account_id=account, device_id=device,
             enable_epoch=epoch, enabled_roles=roles)
+
+    @staticmethod
+    def _resign_local_doc(raw):
+        raw = dict(raw)
+        raw.pop("localplan_sha256", None)
+        raw["localplan_sha256"] = hashlib.sha256(canonical_json(raw)).hexdigest()
+        return canonical_json(raw)
 
     def test_host_device_projection_keeps_remote_coordinator_disabled(self):
         plan = self._derive()
@@ -122,6 +130,35 @@ class C2LocalPlanTests(unittest.TestCase):
         self.assertIs(type(forged), C2LocalPlan)
         with self.assertRaises(CredentialError):
             c2_local_plan_document(forged)
+        with self.assertRaises(CredentialError):
+            forged.to_document()
+
+    def test_recomputed_digest_does_not_hide_spec_or_scope_inconsistency(self):
+        plan = self._derive(epoch=6)
+        raw = c2_local_plan_document(plan)
+        raw["enabled_specs"][0]["boot_id"] = "a" * 32
+        with self.assertRaisesRegex(CredentialError, "exact canonical local projections"):
+            parse_c2_local_plan(self._resign_local_doc(raw))
+
+        paused = c2_local_plan_document(self._derive((), epoch=7))
+        paused["disabled_specs"][0]["boot_id"] = "b" * 32
+        with self.assertRaisesRegex(CredentialError, "exact canonical local projections"):
+            parse_c2_local_plan(self._resign_local_doc(paused))
+
+        bad_parent = c2_local_plan_document(plan)
+        bad_parent["enabled_host_groups"][0]["parent_boot_id"] = "c" * 32
+        with self.assertRaisesRegex(CredentialError, "scope differs"):
+            parse_c2_local_plan(self._resign_local_doc(bad_parent))
+
+        bad_credential = c2_local_plan_document(plan)
+        bad_credential["enabled_host_groups"][0]["credential"]["serial"] = "abc123"
+        with self.assertRaisesRegex(CredentialError, "scope differs"):
+            parse_c2_local_plan(self._resign_local_doc(bad_credential))
+
+        duplicate_group = c2_local_plan_document(plan)
+        duplicate_group["enabled_host_groups"].append(duplicate_group["enabled_host_groups"][0])
+        with self.assertRaisesRegex(CredentialError, "list bound"):
+            parse_c2_local_plan(self._resign_local_doc(duplicate_group))
 
     def test_read_selected_adapter_captures_inert_plan_and_returns_normally(self):
         class Store:

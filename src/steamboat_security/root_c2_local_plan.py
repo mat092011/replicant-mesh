@@ -14,7 +14,8 @@ from .clock import Clock
 from .codec import canonical_json
 from .errors import BindingError, CredentialError, SnapshotError, StorageError
 from .ids import validate_id
-from .root_c2_group_scope import C2HostGroupScope, parse_c2_host_group_scope
+from .root_c2_group_scope import (C2HostGroupScope, parse_c2_host_group_scope,
+    validate_c2_scope_expectations)
 from .root_c2_selected import validate_c2_selected_cohort
 from .root_transition_launch import RoleLaunchSpec, parse_role_launch_spec, role_launch_document
 
@@ -43,14 +44,37 @@ def _scope(raw):
     return parse_c2_host_group_scope(raw.to_document())
 
 
+def _bounded_tuple(value, limit, label):
+    if type(value) is not tuple or len(value) > limit:
+        raise CredentialError(f"C2 local plan {label} exceeds its exact container bound")
+    return value
+
+
+def _bind_scope(scope, spec, generation):
+    try:
+        validate_c2_scope_expectations(scope, account_id=spec.account_id,
+            device_id=spec.device_id, credential_serial=spec.serial,
+            credential_epoch=spec.credential_epoch,
+            certificate_sha256=spec.certificate_sha256,
+            public_key_sha256=spec.public_key_sha256, parent_boot_id=spec.boot_id,
+            generation_sha256=generation, admission_epoch=spec.admission_epoch)
+    except SnapshotError as error:
+        raise CredentialError("C2 local host scope differs from its selected launch spec") from error
+
+
 def _plan_doc(plan, *, include_digest=True):
     if type(plan) is not C2LocalPlan:
         raise CredentialError("C2 local plan requires exact plan value")
-    local = tuple(_spec(x) for x in plan.complete_local_specs)
-    enabled = tuple(_spec(x) for x in plan.enabled_specs)
-    disabled = tuple(_spec(x) for x in plan.disabled_specs)
-    eg = tuple(_scope(x) for x in plan.enabled_host_groups)
-    dg = tuple(_scope(x) for x in plan.disabled_host_groups)
+    local_raw = _bounded_tuple(plan.complete_local_specs, 3, "complete local specs")
+    enabled_raw = _bounded_tuple(plan.enabled_specs, 3, "enabled specs")
+    disabled_raw = _bounded_tuple(plan.disabled_specs, 3, "disabled specs")
+    eg_raw = _bounded_tuple(plan.enabled_host_groups, 1, "enabled host groups")
+    dg_raw = _bounded_tuple(plan.disabled_host_groups, 1, "disabled host groups")
+    local = tuple(_spec(x) for x in local_raw)
+    enabled = tuple(_spec(x) for x in enabled_raw)
+    disabled = tuple(_spec(x) for x in disabled_raw)
+    eg = tuple(_scope(x) for x in eg_raw)
+    dg = tuple(_scope(x) for x in dg_raw)
     account = validate_id(plan.account_id, "acct")
     device = validate_id(plan.device_id, "dev")
     if type(plan.enable_epoch) is not int or not 1 <= plan.enable_epoch <= 2**63 - 1:
@@ -64,21 +88,23 @@ def _plan_doc(plan, *, include_digest=True):
             or len(identities) != len(set(identities))
             or any((x.account_id, x.device_id) != (account, device) for x in local)):
         raise CredentialError("complete local specs do not match the local principal")
-    enabled_ids = {x.identity for x in enabled}
-    disabled_ids = {x.identity for x in disabled}
-    local_ids = set(identities)
-    if (enabled_ids & disabled_ids or enabled_ids | disabled_ids != local_ids
-            or enabled_ids != {x.identity for x in local if x.role in plan.enabled_roles}
-            or disabled_ids != local_ids - enabled_ids):
-        raise CredentialError("enabled and disabled specs do not exactly partition local specs")
-    if (tuple(x.role for x in enabled) != tuple(x for x in plan.enabled_roles)
-            or tuple(x.identity for x in enabled) != tuple(x.identity for x in local if x.role in plan.enabled_roles)
-            or tuple(x.identity for x in disabled) != tuple(x.identity for x in local if x.role not in plan.enabled_roles)):
-        raise CredentialError("local role projections are not canonical")
+    expected_enabled = tuple(x for x in local if x.role in plan.enabled_roles)
+    expected_disabled = tuple(x for x in local if x.role not in plan.enabled_roles)
+    if enabled != expected_enabled or disabled != expected_disabled:
+        raise CredentialError("enabled and disabled specs are not the exact canonical local projections")
     host_local = {x.identity for x in local if x.role == "host"}
-    if ({(x.account_id, x.device_id, x.role) for x in eg} != host_local & enabled_ids
-            or {(x.account_id, x.device_id, x.role) for x in dg} != host_local - enabled_ids):
+    eg_ids = tuple((x.account_id, x.device_id, x.role) for x in eg)
+    dg_ids = tuple((x.account_id, x.device_id, x.role) for x in dg)
+    if (eg_ids != tuple(sorted(set(eg_ids))) or dg_ids != tuple(sorted(set(dg_ids)))
+            or set(eg_ids) != host_local & {x.identity for x in expected_enabled}
+            or set(dg_ids) != host_local & {x.identity for x in expected_disabled}):
         raise CredentialError("enabled and disabled host scopes do not match local host roles")
+    local_by_identity = {x.identity: x for x in local}
+    for scope in eg + dg:
+        spec = local_by_identity.get((scope.account_id, scope.device_id, scope.role))
+        if spec is None:
+            raise CredentialError("local host scope has no exact selected launch role")
+        _bind_scope(scope, spec, plan.generation_sha256)
     doc = {"version": 1, "generation_sha256": _hash(plan.generation_sha256, "generation hash"),
         "selector_sha256": _hash(plan.selector_sha256, "selector hash"),
         "activation_manifest_sha256": _hash(plan.activation_manifest_sha256, "manifest hash"),
@@ -113,7 +139,7 @@ class C2LocalPlan:
     localplan_sha256: str
 
     def to_document(self):
-        return _plan_doc(self)
+        return c2_local_plan_document(self)
 
 
 def _make(selector, cohort, account_id, device_id, enable_epoch, enabled_roles):
@@ -187,16 +213,18 @@ def parse_c2_local_plan(encoded: bytes) -> C2LocalPlan:
     if type(raw) is not dict or set(raw) != _FIELDS or type(raw.get("version")) is not int or raw["version"] != 1:
         raise CredentialError("C2 local plan has unknown fields or unsupported version")
     try:
+        list_bounds = {"complete_local_specs": 3, "enabled_specs": 3,
+            "disabled_specs": 3, "enabled_host_groups": 1, "disabled_host_groups": 1}
+        for key, bound in list_bounds.items():
+            if type(raw[key]) is not list or len(raw[key]) > bound:
+                raise CredentialError(f"C2 local plan {key} exceeds its list bound")
+        if type(raw["enabled_roles"]) is not list or len(raw["enabled_roles"]) > 3:
+            raise CredentialError("C2 local plan roles exceed their list bound")
         values = [tuple(parse_role_launch_spec(x) for x in raw[key])
                   for key in ("complete_local_specs", "enabled_specs", "disabled_specs")]
         groups = [tuple(parse_c2_host_group_scope(x) for x in raw[key])
                   for key in ("enabled_host_groups", "disabled_host_groups")]
-        if any(type(raw[k]) is not list for k in ("complete_local_specs", "enabled_specs", "disabled_specs",
-                                                   "enabled_host_groups", "disabled_host_groups")):
-            raise CredentialError("C2 local plan projections must be lists")
         roles = raw["enabled_roles"]
-        if type(roles) is not list:
-            raise CredentialError("C2 local plan roles must be a list")
         plan = C2LocalPlan(_hash(raw["generation_sha256"], "generation hash"),
             _hash(raw["selector_sha256"], "selector hash"),
             _hash(raw["activation_manifest_sha256"], "manifest hash"),
