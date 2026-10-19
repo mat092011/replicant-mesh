@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from steamboat_security.codec import canonical_json
-from steamboat_security.errors import CredentialError
+from steamboat_security.errors import CredentialError, SnapshotError
 from steamboat_security.root_c2_coordinator import (
     C2CoordinatorRuntimeBinding, _FIELDS, _read_header,
     load_c2_personal_coordinator_binding,
@@ -170,8 +170,9 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
                 self.fx.mono += delta
             return original(*args, **kwargs)
         with patch("steamboat_security.root_c2_coordinator.safe_read", side_effect=delayed):
-            with self.assertRaises(CredentialError):
+            with self.assertRaisesRegex(SnapshotError, "expired"):
                 binding.assert_live()
+        self.assertEqual(calls, 8)
         self.assertEqual(len(events), 1)
 
 
