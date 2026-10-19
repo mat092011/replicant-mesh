@@ -12,9 +12,10 @@ closed schema and calls `open_c2_child_binding`; that function opens a real
 `RootGenerationStore` and invokes the existing C2 host or coordinator loader.
 Those loaders re-read protected configuration and the selected signed root,
 compare the complete launch specification, and validate the current policy.
-The returned owner keeps the root descriptors open for the binding lifetime;
-call `close()` when the child is done. Closing invalidates the binding before
-closing the descriptors.
+Use `with owner.borrow() as binding:` around each complete binding operation;
+the lease keeps the root descriptors open for that operation. Call `close()`
+when the child is done. Closing blocks new leases and invalidates the binding;
+the root descriptors close after the last existing lease exits.
 
 This module does not start a process, load model artifacts, execute inference,
 or claim readiness. A later startup adapter must establish those behaviors and
