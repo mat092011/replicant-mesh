@@ -352,20 +352,17 @@ class C2HostRuntimeBinding:
             # A local current() may wait on its store lock or durable commit. Do
             # all such work before the final selected read, protected reads, and
             # clock sample; the returned view is the one checked below.
-            local_view = None
-            if require_local_head:
-                local_view = self._snapshot_store.current()
+            # Keep the exact returned local view in the same final decision,
+            # including refresh checks where local and selected heads differ.
+            local_view = self._snapshot_store.current()
             final_selected, final_cohort = _selected(self._root_store, self._clock)
             self._check_selected_identity(final_selected, final_cohort)
             self._check_protected_files()
             # Rebuild from the last authenticated selected head. All store
             # construction and verification precedes the final locked sample.
             final_policy_store, final_policy_view = self._assert_selected_policy(final_selected, sample)
-            if require_local_head:
-                if (local_view is None or local_view.revision != final_selected.selector.policy_revision
-                        or local_view.policy_digest != final_selected.selector.policy_digest):
-                    raise _C2PolicyRefreshRequired(
-                        "selected policy advanced; install the exact selected head before admission")
+            head_mismatch = (local_view.revision != final_selected.selector.policy_revision
+                             or local_view.policy_digest != final_selected.selector.policy_digest)
             with self._lock:
                 if self._invalid:
                     raise CredentialError(self._reason or "C2 binding was invalidated during liveness check")
@@ -384,16 +381,18 @@ class C2HostRuntimeBinding:
                     raise CredentialError("C2 host is missing from freshly selected policy")
                 final_policy_store.assert_credential_live(retained_view, selected_record, final_sample)
                 _check_group_grants(retained_view, final_sample, self._spec, self._scope)
-                if require_local_head:
-                    local_view = self._deadline_floors.retain(local_view, final_sample)
-                    if (final_sample.latest_wall >= local_view.expires_at
-                            or final_sample.monotonic >= local_view.deadline_monotonic):
-                        raise SnapshotError("authorization snapshot expired")
-                    record = local_view.credential(self._spec.serial)
-                    if record is None:
-                        raise CredentialError("C2 host is missing from current policy")
-                    self._snapshot_store.assert_credential_live(local_view, record, final_sample)
-                    _check_group_grants(local_view, final_sample, self._spec, self._scope)
+                local_view = self._deadline_floors.retain(local_view, final_sample)
+                if (final_sample.latest_wall >= local_view.expires_at
+                        or final_sample.monotonic >= local_view.deadline_monotonic):
+                    raise SnapshotError("authorization snapshot expired")
+                record = local_view.credential(self._spec.serial)
+                if record is None:
+                    raise CredentialError("C2 host is missing from current policy")
+                self._snapshot_store.assert_credential_live(local_view, record, final_sample)
+                _check_group_grants(local_view, final_sample, self._spec, self._scope)
+                if require_local_head and head_mismatch:
+                    raise _C2PolicyRefreshRequired(
+                        "selected policy advanced; install the exact selected head before admission")
                 return None
         except _C2PolicyRefreshRequired:
             with self._lock:

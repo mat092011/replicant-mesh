@@ -27,7 +27,9 @@ from steamboat_security.channel_certificates import (
 from steamboat_security.root_c2_group_scope import (
     PROFILE, sign_c2_host_group_policy, verify_c2_host_group_policy,
 )
-from steamboat_security.root_c2_runtime import _header, load_c2_host_runtime_binding
+from steamboat_security.root_c2_runtime import (
+    _C2PolicyRefreshRequired, _header, load_c2_host_runtime_binding,
+)
 from steamboat_security.root_runtime import load_root_runtime_binding
 from steamboat_security.root_transition_launch import (
     canonical_role_launch_digest, parse_role_launch_spec,
@@ -577,6 +579,56 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         self.mono += 71
         with self.assertRaisesRegex(CredentialError, "channel certificate expired"):
             binding.assert_live()
+        self.assertEqual(len(calls), 1)
+
+    def test_selected_head_mismatch_retains_deadline_before_refresh(self):
+        self.wall += 30
+        self.mono += 30
+        root_store, binding = self._load()
+        self.addCleanup(root_store.close)
+        original_payload = json.loads(self.active)["payload"]
+        payload_a = dict(original_payload)
+        payload_a["revision"] += 1
+        payload_a["expires_at"] = int(self.wall) + 40
+        encoded_a = sign_snapshot(payload_a, self.fx.new_snapshot_key)
+        binding.install_policy(encoded_a)
+        binding.assert_live()  # retain A's wider, uncertainty-zero floor
+        payload_b = dict(payload_a)
+        payload_b["revision"] += 1
+        encoded_b = sign_snapshot(payload_b, self.fx.new_snapshot_key)
+        old_head = hashlib.sha256((self.root / "selector.json").read_bytes()).hexdigest()
+        root_store.advance_policy(encoded_b, expected_old_selector_sha256=old_head,
+                                  clock=self.clock, validate=lambda *_: None)
+        calls = []
+        binding.subscribe_teardown(calls.append)
+        original_read = runtime_module.safe_read
+        reads = 0
+        def widen_on_final_read(*args, **kwargs):
+            nonlocal reads
+            result = original_read(*args, **kwargs)
+            reads += 1
+            if reads == 22:
+                self.uncertainty = 20.0
+            return result
+        with patch.object(runtime_module, "safe_read", side_effect=widen_on_final_read):
+            with self.assertRaises(_C2PolicyRefreshRequired):
+                binding.assert_live()
+        self.assertEqual(reads, 22)
+        self.assertFalse(binding._invalid)
+        self.assertEqual(calls, [])
+        self.uncertainty = 0.0
+        self.wall += 1
+        self.mono += 21
+        install_calls = []
+        original_install = binding._snapshot_store.install
+        def counted_install(*args, **kwargs):
+            install_calls.append(True)
+            return original_install(*args, **kwargs)
+        with patch.object(binding._snapshot_store, "install", side_effect=counted_install):
+            with self.assertRaisesRegex(SnapshotError, "expired"):
+                binding.install_policy(encoded_b)
+        self.assertEqual(install_calls, [])
+        self.assertEqual(binding._snapshot_store.current().revision, payload_a["revision"])
         self.assertEqual(len(calls), 1)
 
     def test_teardown_notification_must_be_synchronous(self):

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from steamboat_security.errors import CredentialError, SnapshotError
 from steamboat_security.root_c2_coordinator import (
-    C2CoordinatorRuntimeBinding, _FIELDS, _read_header,
+    C2CoordinatorRuntimeBinding, _FIELDS, _PolicyRefreshRequired, _read_header,
     load_c2_personal_coordinator_binding,
 )
 from steamboat_security.root_transition_launch import (
@@ -203,6 +203,58 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
         self.fx.mono += 21
         with self.assertRaisesRegex(SnapshotError, "expired"):
             binding.assert_live()
+        self.assertEqual(len(events), 1)
+
+    def test_head_mismatch_retains_deadline_before_policy_refresh(self):
+        self.fx.wall += 30
+        self.fx.mono += 30
+        root_store, binding = self._load()
+        self.addCleanup(root_store.close)
+        payload_a = json.loads(self.fx.active)["payload"]
+        payload_a["revision"] += 1
+        payload_a["expires_at"] = int(self.fx.wall) + 40
+        encoded_a = sign_snapshot(payload_a, self.fx.fx.new_snapshot_key)
+        binding.install_policy(encoded_a)
+        binding.assert_live()
+        payload_b = dict(payload_a)
+        payload_b["revision"] += 1
+        encoded_b = sign_snapshot(payload_b, self.fx.fx.new_snapshot_key)
+        old_head = hashlib.sha256((self.fx.root / "selector.json").read_bytes()).hexdigest()
+        root_store.advance_policy(encoded_b, expected_old_selector_sha256=old_head,
+                                  clock=self.fx.clock, validate=lambda *_: None)
+        events = []
+        binding.subscribe_teardown(events.append)
+        uncertainty = [0.0]
+        self.fx.clock._uncertainty = lambda: uncertainty[0]
+        import steamboat_security.root_c2_coordinator as coordinator_module
+        original_read = coordinator_module.safe_read
+        reads = 0
+        def widen_after_final_read(*args, **kwargs):
+            nonlocal reads
+            result = original_read(*args, **kwargs)
+            reads += 1
+            if reads == 8:
+                uncertainty[0] = 20.0
+            return result
+        with patch.object(coordinator_module, "safe_read", side_effect=widen_after_final_read):
+            with self.assertRaises(_PolicyRefreshRequired):
+                binding.assert_live()
+        self.assertEqual(reads, 8)
+        self.assertFalse(binding._invalid)
+        self.assertEqual(events, [])
+        uncertainty[0] = 0.0
+        self.fx.wall += 1
+        self.fx.mono += 21
+        install_calls = []
+        original_install = binding._snapshot_store.install
+        def counted_install(*args, **kwargs):
+            install_calls.append(True)
+            return original_install(*args, **kwargs)
+        with patch.object(binding._snapshot_store, "install", side_effect=counted_install):
+            with self.assertRaisesRegex(SnapshotError, "expired"):
+                binding.refresh_selected_policy()
+        self.assertEqual(install_calls, [])
+        self.assertEqual(binding._snapshot_store.current().revision, payload_a["revision"])
         self.assertEqual(len(events), 1)
 
     def test_expiry_during_final_protected_io_invalidates(self):
