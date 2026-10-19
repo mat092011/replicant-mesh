@@ -8,7 +8,7 @@ from cryptography.x509.oid import (ExtendedKeyUsageOID, ExtensionOID, NameOID,
                                    ObjectIdentifier)
 
 from steamboat_security.certificates import (generate_ca, generate_private_key_pem,
-    issue_leaf, make_csr)
+    issue_leaf, make_csr, verify_leaf)
 from steamboat_security.channel_certificates import (
     issue_channel_certificate, make_channel_csr, verify_channel_certificate)
 from steamboat_security.errors import CredentialError
@@ -101,6 +101,16 @@ class ChannelCertificateTests(unittest.TestCase):
             __import__("datetime").timedelta(minutes=10), ekus={"server"})
         with self.assertRaises(CredentialError):
             self.verify(c1)
+
+    def test_channel_certificates_are_not_c1_participant_credentials(self):
+        for cert, role in ((self.issue(), "host"),
+                           (self.issue("gateway", GATEWAY,
+                                       dns=("gateway.example",)),
+                            "personal_coordinator")):
+            with self.subTest(role=role):
+                with self.assertRaises(CredentialError):
+                    verify_leaf(self.ca_pem, cert, account_id=WORKER["account_id"],
+                                device_id=WORKER["device_id"], role=role, now=NOW)
 
     def test_tampering_and_multiple_pem_certificates_rejected(self):
         cert = self.issue()
