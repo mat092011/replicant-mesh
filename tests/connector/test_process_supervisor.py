@@ -330,7 +330,7 @@ class ProcessSupervisorTests(unittest.TestCase):
         watchdog_event = watchdog.wake
         watchdog.wake = ObservedEvent()
         locks = (self.backend._lock, self.backend._watchdog_lock,
-                 owned.escalation_lock)
+                 owned.escalation_lock, owned.deadline_lock)
         for lock in locks:
             lock.acquire()
         try:
@@ -340,6 +340,7 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertLess(elapsed, 0.5)
             self.assertTrue(signal_event.is_set())
             self.assertTrue(owned.stopping)
+            self.assertTrue(owned.force_cleanup.is_set())
         finally:
             for lock in reversed(locks):
                 lock.release()
@@ -347,6 +348,56 @@ class ProcessSupervisorTests(unittest.TestCase):
                         side_effect=lambda pid, sig: holder["process"].on_signal(sig),
                         create=True):
             self.assertTrue(self.backend.stop(["host"], 0.5)["host"])
+
+    def test_deadline_force_flag_cannot_be_overwritten_by_late_writer(self):
+        intent = _StartIntent()
+        intent.deadline_lock.acquire()
+        outcome = {}
+
+        def tighten_while_writer_holds_lock():
+            started = time.monotonic()
+            self.backend._cancel_intent(intent, started + 10, started + 5)
+            outcome["elapsed"] = time.monotonic() - started
+
+        thread = threading.Thread(target=tighten_while_writer_holds_lock)
+        thread.start()
+        thread.join(0.5)
+        self.assertFalse(thread.is_alive())
+        self.assertLess(outcome["elapsed"], 0.5)
+        self.assertTrue(intent.force_cleanup.is_set())
+        intent.deadline_lock.release()
+
+        later = time.monotonic() + 100
+        self.backend._cancel_intent(intent, later, later)
+        self.assertTrue(intent.force_cleanup.is_set())
+        effective_deadline, effective_term = self.backend._effective_deadlines(
+            intent, intent=True)
+        self.assertLess(effective_deadline, later)
+        self.assertLess(effective_term, later)
+
+    def test_reaped_leader_uses_owned_cgroup_kill_without_reused_pgid(self):
+        holder, popen, _ = self._spawn_patch()
+        with popen:
+            self.assertTrue(self.backend.start("host", sample_policy()))
+        owned = self.backend._owned["host"]
+        kill_file = owned.group / "cgroup.kill"
+        kill_file.write_text("", encoding="ascii")
+        holder["process"].returncode = 0
+        owned.leader_reaped = True
+        owned.reaped_event.set()
+        writes = []
+        original_write_text = Path.write_text
+
+        def record_owned_kill(path, data, *args, **kwargs):
+            if path == kill_file:
+                writes.append(data)
+            return original_write_text(path, data, *args, **kwargs)
+
+        with mock.patch.object(Path, "write_text", record_owned_kill), mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg", create=True) as killpg:
+            self.backend._watchdog_kill(owned)
+        self.assertEqual(writes, ["1"])
+        killpg.assert_not_called()
 
     def test_drain_cutoff_is_not_process_cleanup_deadline(self):
         holder, popen, _ = self._spawn_patch()

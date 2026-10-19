@@ -50,6 +50,8 @@ class _OwnedProcess:
     term_sent: bool = False
     leader_reaped: bool = False
     reaped_event: object = field(default_factory=threading.Event)
+    deadline_lock: object = field(default_factory=threading.Lock)
+    force_cleanup: object = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -60,6 +62,8 @@ class _StartIntent:
     group: Path = None
     finished: bool = False
     final_stop_requested: bool = False
+    deadline_lock: object = field(default_factory=threading.Lock)
+    force_cleanup: object = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -210,7 +214,7 @@ class ProcessRoleBackend:
 
     @staticmethod
     def _cancelled(intent, cancel_event):
-        return intent.cancelled.is_set() or (
+        return intent.cancelled.is_set() or intent.force_cleanup.is_set() or (
             cancel_event is not None and cancel_event.is_set())
 
     def _forget_start_intent(self, role, intent):
@@ -226,17 +230,43 @@ class ProcessRoleBackend:
             self._lock.release()
 
     @staticmethod
-    def _cancel_intent(intent, deadline=None, term_deadline=None):
+    def _tighten_deadlines(target, deadline_attr, term_attr, deadline, term_deadline):
         now = time.monotonic()
         requested_deadline = (deadline if deadline is not None else
                               now + STOP_GRACE_MAX_SECONDS)
         requested_term = (term_deadline if term_deadline is not None else
                           now + STOP_GRACE_MAX_SECONDS * 0.5)
-        intent.cancel_deadline = (requested_deadline if intent.cancel_deadline is None else
-                                  min(intent.cancel_deadline, requested_deadline))
-        intent.term_deadline = (requested_term if intent.term_deadline is None else
-                                min(intent.term_deadline, requested_term))
+        if not target.deadline_lock.acquire(blocking=False):
+            target.force_cleanup.set()
+            return
+        try:
+            if target.force_cleanup.is_set():
+                requested_deadline = requested_term = now
+            old_deadline = getattr(target, deadline_attr)
+            old_term = getattr(target, term_attr)
+            next_deadline = (requested_deadline if old_deadline is None else
+                             min(old_deadline, requested_deadline))
+            next_term = requested_term if old_term is None else min(old_term, requested_term)
+            if target.force_cleanup.is_set():
+                next_deadline = next_term = time.monotonic()
+            setattr(target, deadline_attr, next_deadline)
+            setattr(target, term_attr, next_term)
+        finally:
+            target.deadline_lock.release()
+
+    @classmethod
+    def _cancel_intent(cls, intent, deadline=None, term_deadline=None):
+        cls._tighten_deadlines(intent, "cancel_deadline", "term_deadline",
+                               deadline, term_deadline)
         intent.cancelled.set()
+
+    @staticmethod
+    def _effective_deadlines(target, *, intent=False):
+        if target.force_cleanup.is_set():
+            now = time.monotonic()
+            return now, now
+        deadline = target.cancel_deadline if intent else target.stop_deadline
+        return deadline, target.term_deadline
 
     def _ensure_stop_watchdog(self, role):
         """Preallocate one bounded escalation worker before a role can run."""
@@ -269,8 +299,9 @@ class ProcessRoleBackend:
         intent = self._start_intents.get(watchdog.role)
         owned = self._owned.get(watchdog.role)
         if owned is not None and not owned.reclaimed:
-            if (owned.stopping and owned.stop_deadline is not None
-                    and owned.term_deadline is not None
+            owner_deadline, owner_term = self._effective_deadlines(owned)
+            if (owned.stopping and owner_deadline is not None
+                    and owner_term is not None
                     and (intent is None or owned.start_intent is intent)):
                 return owned, False
             return None, False
@@ -299,20 +330,23 @@ class ProcessRoleBackend:
             process = owned.process
             if process is None or owned.reclaimed or self._owned.get(owned.role) is not owned:
                 return
+            kill_file = owned.group / "cgroup.kill"
+            if owned.attached:
+                try:
+                    if kill_file.exists():
+                        kill_file.write_text("1", encoding="ascii")
+                        if not owned.leader_reaped and process.poll() is not None:
+                            owned.leader_reaped = True
+                            owned.reaped_event.set()
+                        return
+                except OSError:
+                    pass
             if owned.leader_reaped:
                 return
             if process.poll() is not None:
                 owned.leader_reaped = True
                 owned.reaped_event.set()
                 return
-            kill_file = owned.group / "cgroup.kill"
-            if owned.attached:
-                try:
-                    if kill_file.exists():
-                        kill_file.write_text("1", encoding="ascii")
-                        return
-                except OSError:
-                    pass
             # Before cgroup attachment the session leader is the only available
             # safe target. Afterward, only use the pgid while the cgroup proves a
             # live member remains (preventing a reaped/reused PID signal).
@@ -367,11 +401,13 @@ class ProcessRoleBackend:
                 return
             if owner is not None:
                 if owner.process is not None:
-                    term_deadline = owner.term_deadline
+                    _, term_deadline = self._effective_deadlines(owner)
                     intent = owner.start_intent
-                    if intent is not None and intent.term_deadline is not None:
-                        term_deadline = (intent.term_deadline if term_deadline is None
-                                         else min(term_deadline, intent.term_deadline))
+                    if intent is not None:
+                        _, intent_term = self._effective_deadlines(intent, intent=True)
+                        if intent_term is not None:
+                            term_deadline = (intent_term if term_deadline is None else
+                                             min(term_deadline, intent_term))
                     now = time.monotonic()
                     if now >= (term_deadline if term_deadline is not None else now):
                         self._watchdog_kill(owner)
@@ -478,9 +514,10 @@ class ProcessRoleBackend:
                 if intent.cancelled.is_set() or (
                         cancel_event is not None and cancel_event.is_set()):
                     self._cancel_intent(intent)
-                    self._mark_stopping(owned, intent.cancel_deadline,
-                                        intent.term_deadline)
-                    if time.monotonic() >= intent.term_deadline:
+                    intent_deadline, intent_term = self._effective_deadlines(
+                        intent, intent=True)
+                    self._mark_stopping(owned, intent_deadline, intent_term)
+                    if time.monotonic() >= intent_term:
                         self._watchdog_kill(owned)
                     else:
                         self._signal_owned_term(owned)
@@ -586,12 +623,8 @@ class ProcessRoleBackend:
     def _mark_stopping(owned, deadline=None, term_deadline=None):
         # Cleanup caps are immutable once established, except that a later
         # request may tighten them. Drain cutoffs must never be passed here.
-        if deadline is not None:
-            owned.stop_deadline = (deadline if owned.stop_deadline is None else
-                                   min(owned.stop_deadline, deadline))
-        if term_deadline is not None:
-            owned.term_deadline = (term_deadline if owned.term_deadline is None else
-                                   min(owned.term_deadline, term_deadline))
+        ProcessRoleBackend._tighten_deadlines(
+            owned, "stop_deadline", "term_deadline", deadline, term_deadline)
         owned.stopping = True
         owned.ready = False
 
@@ -608,7 +641,8 @@ class ProcessRoleBackend:
         results = {}
         acquired = []
         for role, owned in entries:
-            stop_deadline = owned.stop_deadline if owned.stop_deadline is not None else deadline
+            effective_stop, _ = self._effective_deadlines(owned)
+            stop_deadline = effective_stop if effective_stop is not None else deadline
             if not self._acquire_until(owned.stop_lock, min(deadline, stop_deadline)):
                 results[role] = False
                 continue
@@ -634,7 +668,7 @@ class ProcessRoleBackend:
                     if self._owned.get(role) is not owned:
                         results[role] = owned.reclaimed
                         continue
-                    stop_deadline = owned.stop_deadline
+                    stop_deadline, _ = self._effective_deadlines(owned)
                     if stop_deadline is None:
                         self._mark_stopping(owned, deadline, term_deadline)
                     else:
@@ -648,7 +682,8 @@ class ProcessRoleBackend:
                 for _, owned in active:
                     self._signal_owned_term(owned)
             for _, owned in active:
-                own_term_deadline = (owned.term_deadline if owned.term_deadline is not None
+                _, effective_term = self._effective_deadlines(owned)
+                own_term_deadline = (effective_term if effective_term is not None
                                      else term_deadline)
                 remaining = max(0.0, min(deadline, own_term_deadline) - time.monotonic())
                 owned.reaped_event.wait(remaining)
@@ -660,7 +695,8 @@ class ProcessRoleBackend:
                     self._watchdog_kill(owned)
 
             for role, owned in active:
-                own_deadline = min(deadline, owned.stop_deadline or deadline)
+                effective_stop, _ = self._effective_deadlines(owned)
+                own_deadline = min(deadline, effective_stop or deadline)
                 empty = self._wait_empty(owned, own_deadline)
                 remaining = max(0.0, own_deadline - time.monotonic())
                 owned.reaped_event.wait(remaining)
@@ -700,11 +736,12 @@ class ProcessRoleBackend:
             return False
         started = time.monotonic()
         requested_deadline = started + grace
-        deadline = (requested_deadline if owned.stop_deadline is None else
-                    min(owned.stop_deadline, requested_deadline))
+        current_deadline, current_term = self._effective_deadlines(owned)
+        deadline = (requested_deadline if current_deadline is None else
+                    min(current_deadline, requested_deadline))
         requested_term_deadline = min(deadline, started + grace * 0.5)
-        term_deadline = (requested_term_deadline if owned.term_deadline is None else
-                         min(owned.term_deadline, requested_term_deadline))
+        term_deadline = (requested_term_deadline if current_term is None else
+                         min(current_term, requested_term_deadline))
         self._mark_stopping(owned, deadline, term_deadline)
         return self._stop_many([(owned.role, owned)], deadline,
                                term_deadline).get(owned.role, False)
@@ -802,14 +839,14 @@ class ProcessRoleBackend:
                 deadline = requested_deadline
                 term_deadline = requested_term
                 if intent is not None:
-                    deadline = min(deadline, intent.cancel_deadline)
-                    term_deadline = min(term_deadline, intent.term_deadline)
+                    intent_deadline, intent_term = self._effective_deadlines(
+                        intent, intent=True)
+                    deadline = min(deadline, intent_deadline)
+                    term_deadline = min(term_deadline, intent_term)
                 self._mark_stopping(owned, deadline, term_deadline)
-                deadline = owned.stop_deadline
-                term_deadline = owned.term_deadline
+                deadline, term_deadline = self._effective_deadlines(owned)
             elif intent is not None:
-                deadline = intent.cancel_deadline
-                term_deadline = intent.term_deadline
+                deadline, term_deadline = self._effective_deadlines(intent, intent=True)
             else:
                 deadline = term_deadline = None
             if generation is not None:
