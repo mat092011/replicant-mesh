@@ -8,6 +8,7 @@ credential liveness, authorization, and the secure RPC wire protocol.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
 import threading
 import time
@@ -128,7 +129,12 @@ class ConsumerRun:
 
     @property
     def result(self):
-        return asyncio.shield(self._result)
+        return asyncio.shield(self._result_after_guard())
+
+    async def _result_after_guard(self):
+        result = await asyncio.shield(self._result)
+        self._transport._check_runtime_guard()
+        return result
 
     @property
     def closed(self):
@@ -168,6 +174,13 @@ class ConsumerRun:
     async def __anext__(self):
         item = await self._queue.get()
         if isinstance(item, ConsumerEvent):
+            try:
+                self._transport._check_runtime_guard()
+            except ConnectorError:
+                self._event_slots.release()
+                self._discard_output()
+                self._transport._release(self.request_id, self)
+                raise
             self._event_slots.release()
             return item
         if isinstance(item, _Failure):
@@ -194,6 +207,7 @@ class ConsumerRun:
                 self._event_slots.release()
 
     async def _emit(self, event, hard_deadline, context):
+        self._transport._check_runtime_guard()
         remaining = min(
             MAX_OUTPUT_STALL_SECONDS,
             _remaining(hard_deadline),
@@ -206,6 +220,7 @@ class ConsumerRun:
                 "BACKPRESSURE", "consumer stopped draining its bounded event stream"
             ) from error
         try:
+            self._transport._check_runtime_guard()
             self._queue.put_nowait(event)
         except BaseException:
             self._event_slots.release()
@@ -222,12 +237,14 @@ class ConsumerRun:
         tokens = []
         terminal_seen = False
         try:
+            self._transport._check_runtime_guard()
             remaining = _remaining(deadline)
             context = self._transport._authorizer.create_consumer_request_context(
                 lifetime_seconds=remaining,
                 request_id=self.request_id,
             )
             self._context = context
+            self._transport._check_runtime_guard()
             token_ids = await self._transport._await_before(
                 self._transport._client.tokenize(
                     self._submission.prompt,
@@ -236,6 +253,7 @@ class ConsumerRun:
                 deadline,
                 context=context,
             )
+            self._transport._check_runtime_guard()
             if (
                 type(token_ids) is not list
                 or not token_ids
@@ -251,6 +269,7 @@ class ConsumerRun:
             timeout = min(
                 _remaining(deadline), self._transport._context_remaining(context)
             )
+            self._transport._check_runtime_guard()
             stream = self._transport._client.generate(
                 token_ids,
                 self._submission.max_new_tokens,
@@ -259,6 +278,7 @@ class ConsumerRun:
                 capture_logits=False,
                 timeout_seconds=timeout,
             )
+            self._transport._check_runtime_guard()
             if not hasattr(stream, "__aiter__") or not callable(
                 getattr(stream, "aclose", None)
             ):
@@ -269,6 +289,7 @@ class ConsumerRun:
             iterator = stream.__aiter__()
             while True:
                 try:
+                    self._transport._check_runtime_guard()
                     raw = await self._transport._await_before(
                         iterator.__anext__(), deadline, context=context
                     )
@@ -374,6 +395,11 @@ class ConsumerRun:
             if context is not None and preserve_context:
                 self._transport._finish_context_driver(context)
             if failure is None:
+                try:
+                    self._transport._check_runtime_guard()
+                except ConnectorError as error:
+                    failure = error
+            if failure is None:
                 if not self._result.done():
                     self._result.set_result(result)
                 self._queue.put_nowait(_END)
@@ -390,7 +416,8 @@ class ConsumerRun:
 class SecureConsumerTransport:
     """Consumer stream over exact C1 secure-client and outbound-authorizer types."""
 
-    def __init__(self, client: SecureCoordinatorClient, authorizer: OutboundAuthorizer):
+    def __init__(self, client: SecureCoordinatorClient, authorizer: OutboundAuthorizer,
+                 *, runtime_guard=None):
         if type(client) is not SecureCoordinatorClient:
             raise TypeError("client must be the exact SecureCoordinatorClient")
         if type(authorizer) is not OutboundAuthorizer:
@@ -399,11 +426,25 @@ class SecureConsumerTransport:
             raise TypeError(
                 "client and transport must share the same OutboundAuthorizer"
             )
-        self._initialize(client, authorizer)
+        self._initialize(client, authorizer, runtime_guard)
 
-    def _initialize(self, client, authorizer):
+    def _initialize(self, client, authorizer, runtime_guard=None):
+        if (runtime_guard is not None
+                and (not callable(runtime_guard)
+                     or inspect.iscoroutinefunction(runtime_guard)
+                     or inspect.isasyncgenfunction(runtime_guard)
+                     or inspect.iscoroutinefunction(
+                         getattr(runtime_guard, "__call__", None))
+                     or inspect.isasyncgenfunction(
+                         getattr(runtime_guard, "__call__", None)))):
+            raise TypeError("runtime guard must be a synchronous callable or None")
         self._client = client
         self._authorizer = authorizer
+        self._runtime_guard = runtime_guard
+        self._runtime_invalidated = threading.Event()
+        self._invalidation_lock = threading.Lock()
+        self._invalidation_scheduled_loops = set()
+        self._owner_loops = ()
         self._active = {}
         self._recent_ids = set()
         self._recent_order = deque()
@@ -415,21 +456,24 @@ class SecureConsumerTransport:
         self._lock = threading.RLock()
 
     @classmethod
-    def _for_tests(cls, client, authorizer):
+    def _for_tests(cls, client, authorizer, *, runtime_guard=None):
         """Private seam for portable fake-peer tests; never use in production."""
         instance = cls.__new__(cls)
-        instance._initialize(client, authorizer)
+        instance._initialize(client, authorizer, runtime_guard)
         return instance
 
     async def submit(self, submission: ConsumerSubmission) -> ConsumerRun:
         started = time.monotonic()
         _validate_submission(submission)
+        self._check_runtime_guard()
         loop = asyncio.get_running_loop()
         with self._lock:
             if self._is_unavailable():
                 raise ConnectorError(
                     "UNAVAILABLE", "secure consumer transport is unavailable"
                 )
+            if loop not in self._owner_loops:
+                self._owner_loops = (*self._owner_loops, loop)
             if (
                 submission.request_id in self._active
                 or submission.request_id in self._recent_ids
@@ -505,6 +549,98 @@ class SecureConsumerTransport:
                 }
             )
 
+    def request_runtime_invalidation(self, reason):
+        """Record sticky local teardown and optionally cancel active runs.
+
+        The synchronous caller never waits for transport or run-state locks.
+        A false return means the optional owner-loop cancellation was not
+        queued; the sticky invalidation still rejects later admission/delivery.
+        """
+        if type(reason) is not str:
+            raise TypeError("runtime invalidation reason must be text")
+        return self._record_runtime_invalidation()
+
+    def _record_runtime_invalidation(self, *, exclude_task=None):
+        self._runtime_invalidated.set()
+        self._unavailable = True
+        if not self._invalidation_lock.acquire(blocking=False):
+            return False
+        try:
+            loops = self._owner_loops
+            if not loops:
+                return False
+            pending = tuple(loop for loop in loops
+                            if loop not in self._invalidation_scheduled_loops)
+            if not pending:
+                return True
+            self._invalidation_scheduled_loops.update(pending)
+        finally:
+            self._invalidation_lock.release()
+        queued = False
+        for loop in pending:
+            try:
+                loop.call_soon_threadsafe(
+                    self._cancel_active_runs_on_loop, loop, exclude_task)
+                queued = True
+            except RuntimeError:
+                self._clear_invalidation_schedule(loop)
+        return queued
+
+    def _clear_invalidation_schedule(self, loop):
+        if self._invalidation_lock.acquire(blocking=False):
+            try:
+                self._invalidation_scheduled_loops.discard(loop)
+            finally:
+                self._invalidation_lock.release()
+
+    def _cancel_active_runs_on_loop(self, loop, exclude_task=None):
+        with self._invalidation_lock:
+            self._invalidation_scheduled_loops.discard(loop)
+        with self._lock:
+            runs = tuple(run for run in self._active.values()
+                         if run._loop is loop)
+            tasks = []
+            for run in runs:
+                task = run._task
+                if (task is None or task is exclude_task or task.done()
+                        or run._cancel_sent):
+                    continue
+                run._cancel_requested = True
+                run._cancel_sent = True
+                tasks.append(task)
+        for task in tasks:
+            task.cancel()
+
+    def _check_runtime_guard(self):
+        if self._runtime_invalidated.is_set():
+            raise ConnectorError(
+                "UNAVAILABLE", "selected consumer runtime binding is unavailable"
+            )
+        guard = self._runtime_guard
+        if guard is None:
+            return
+        try:
+            result = guard()
+            if result is not None:
+                if inspect.isawaitable(result):
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
+                raise TypeError("runtime guard must return exactly None")
+        except BaseException:
+            try:
+                exclude_task = asyncio.current_task()
+            except RuntimeError:
+                exclude_task = None
+            self._record_runtime_invalidation(exclude_task=exclude_task)
+            raise ConnectorError(
+                "UNAVAILABLE", "selected consumer runtime binding is unavailable"
+            ) from None
+        if self._runtime_invalidated.is_set():
+            raise ConnectorError(
+                "UNAVAILABLE", "selected consumer runtime binding is unavailable"
+            )
+
     def _context_remaining(self, context):
         try:
             sample = self._authorizer.clock.sample()
@@ -522,11 +658,13 @@ class SecureConsumerTransport:
     def _is_unavailable(self):
         return bool(
             self._unavailable
+            or self._runtime_invalidated.is_set()
             or getattr(self._client, "_closed", False)
             or getattr(self._client, "_unavailable", False)
         )
 
     async def _await_before(self, awaitable, deadline, *, context=None):
+        self._check_runtime_guard()
         remaining = max(0.0, deadline - time.monotonic())
         if context is not None:
             remaining = min(remaining, self._context_remaining(context))
@@ -541,7 +679,9 @@ class SecureConsumerTransport:
             raise ConnectorError(
                 "DEADLINE_EXCEEDED", "consumer request deadline elapsed"
             )
-        return task.result()
+        result = task.result()
+        self._check_runtime_guard()
+        return result
 
     async def _await_cleanup(self, awaitable, context=None):
         task = asyncio.ensure_future(awaitable)
@@ -701,3 +841,5 @@ class SecureConsumerTransport:
         with self._lock:
             if self._active.get(request_id) is run:
                 del self._active[request_id]
+            self._owner_loops = tuple(dict.fromkeys(
+                active._loop for active in self._active.values()))
