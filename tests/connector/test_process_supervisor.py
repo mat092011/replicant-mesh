@@ -19,6 +19,11 @@ from steamboat_connector.process_supervisor import (ProcessRoleBackend,
 from steamboat_connector.resources import CgroupV2Controller, ResourceError
 
 
+# setUp patches the supervisor's os.write attribute. Since os is a module
+# singleton, preserve a real writer for tests that exercise inherited pipes.
+REAL_OS_WRITE = os.write
+
+
 def sample_policy():
     reservation = {
         "weights_bytes": 10, "kv_bytes": 10, "temporary_bytes": 10,
@@ -275,6 +280,45 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertTrue(self.backend.stop(["host"], 0.05)["host"])
         self.assertLess(time.monotonic() - started, 0.2)
 
+    def test_request_drain_disables_admission_without_signalling_healthy_role(self):
+        holder, popen, killpg = self._spawn_patch()
+        signals = []
+        with popen, mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg",
+                side_effect=lambda pid, sig: signals.append(sig), create=True):
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            owned = self.backend._owned["host"]
+            self.assertTrue(owned.ready)
+            self.assertEqual(self.backend.request_drain(["host"]), {"host": True})
+            self.assertFalse(owned.ready)
+            self.assertTrue(owned.stopping)
+            self.assertEqual(signals, [])
+        with killpg:
+            self.assertTrue(self.backend.stop(["host"], 0.1)["host"])
+
+    def test_request_drain_is_nonblocking_and_fences_start_during_attach(self):
+        attach_entered = threading.Event()
+        attach_release = threading.Event()
+        self.cgroup.attach_entered = attach_entered
+        self.cgroup.attach_release = attach_release
+        holder, popen, killpg = self._spawn_patch()
+        outcome = {}
+        with popen, killpg:
+            thread = threading.Thread(target=lambda: outcome.setdefault(
+                "started", self.backend.start("host", sample_policy())))
+            thread.start()
+            try:
+                self.assertTrue(attach_entered.wait(1))
+                began = time.monotonic()
+                self.assertEqual(self.backend.request_drain(["host"]), {"host": True})
+                self.assertLess(time.monotonic() - began, 0.1)
+            finally:
+                attach_release.set()
+                thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(outcome["started"])
+        self.assertEqual(self.backend.status(), {})
+
     def test_drain_during_start_sets_only_bounded_cleanup_cap(self):
         attach_entered = threading.Event()
         attach_release = threading.Event()
@@ -509,6 +553,7 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertNotIn("host", self.backend.status())
         self.assertIn(9, signals)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires selectable Linux pipes")
     def test_real_stdout_pipe_cancellation_interrupts_ready_wait_and_kills(self):
         self.readiness_patch.stop()
         read_fd, write_fd = os.pipe()
@@ -591,6 +636,8 @@ class ProcessSupervisorTests(unittest.TestCase):
         started = time.monotonic()
         with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
                         side_effect=spawn), mock.patch(
+                "steamboat_connector.process_supervisor.os.write",
+                side_effect=REAL_OS_WRITE), mock.patch(
                 "steamboat_connector.process_supervisor.os.killpg",
                 side_effect=killpg), mock.patch(
                 "steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.4), \
@@ -648,6 +695,8 @@ class ProcessSupervisorTests(unittest.TestCase):
 
         with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
                         side_effect=spawn), mock.patch(
+                "steamboat_connector.process_supervisor.os.write",
+                side_effect=REAL_OS_WRITE), mock.patch(
                 "steamboat_connector.process_supervisor.os.killpg",
                 side_effect=killpg, create=True), mock.patch(
                 "steamboat_connector.process_supervisor.os.write",
@@ -765,7 +814,9 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertTrue(partial_failure.exists())
 
     def test_configuration_is_bounded_role_scoped_and_required(self):
-        fresh = ProcessRoleBackend(self.temp.name, FakeCgroup(self.temp.name))
+        fresh_state = Path(self.temp.name) / "fresh-state"
+        fresh_state.mkdir(mode=0o700)
+        fresh = ProcessRoleBackend(str(fresh_state), FakeCgroup(fresh_state))
         self.assertFalse(fresh.start("host", sample_policy()))
         self.assertFalse(fresh.configure_role("consumer", {}))
         self.assertFalse(fresh.configure_role("host", {"large": "x" * ROLE_CONFIG_MAX_BYTES}))
@@ -836,7 +887,7 @@ class ProcessSupervisorTests(unittest.TestCase):
                 time.sleep(0.1)
                 self.assertIsNone(child.poll())
                 self.assertFalse(marker.exists())
-                os.write(write_fd, b"R")
+                REAL_OS_WRITE(write_fd, b"R")
                 os.close(write_fd)
                 write_fd = -1
                 self.assertTrue(select.select([child.stdout], [], [], 5)[0])

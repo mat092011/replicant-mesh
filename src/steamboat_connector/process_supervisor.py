@@ -610,6 +610,31 @@ class ProcessRoleBackend:
             results[role] = intent is not None or owned is not None
         return results
 
+    def request_drain(self, roles):
+        """Fence starts and disable admission without terminating live roles.
+
+        This hook is intentionally nonblocking for management pre-ack use;
+        full runtime drain and cleanup remain on the lifecycle queue.
+        """
+        results = {}
+        for role in roles:
+            if role not in ROLE_MODULES:
+                results[role] = False
+                continue
+            intent = self._start_intents.get(role)
+            if intent is not None:
+                now = time.monotonic()
+                self._cancel_intent(intent, now + STOP_GRACE_MAX_SECONDS,
+                                    now + STOP_GRACE_MAX_SECONDS * 0.5)
+            owned = self._owned.get(role)
+            if owned is not None:
+                # Admission is disabled while existing work drains. Do not
+                # signal a healthy loaded process from the pre-ack hook.
+                owned.stopping = True
+                owned.ready = False
+            results[role] = intent is not None or owned is not None
+        return results
+
     def drain(self, roles, deadline, cancel_event):
         if not self._acquire_until(self._lock, deadline):
             for role in roles:
