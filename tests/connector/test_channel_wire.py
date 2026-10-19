@@ -56,36 +56,118 @@ class ChannelWireTests(unittest.TestCase):
         self.assertIs(type(outputs[0].payload), bytes)
 
     def test_data_and_control_bundle_limits_and_closed_fields(self):
-        request = wire.encode_bundle("Step", wire.REQUEST, binding=b"{}", protobuf=b"p")
+        request = wire.encode_bundle("Step", wire.REQUEST, fragment_kind=wire.DATA,
+                                     binding=b"{}", protobuf=b"p")
         parsed = wire.decode_bundle(request, fragment_kind=wire.DATA)
         self.assertEqual((parsed.method, parsed.binding, parsed.protobuf),
                          ("Step", b"{}", b"p"))
-        control = wire.encode_bundle("CancelSession", wire.REQUEST,
+        control = wire.encode_bundle("CancelSession", wire.REQUEST, fragment_kind=wire.CONTROL,
                                      envelope=b"delegation", binding=b"{}", protobuf=b"p")
         self.assertEqual(wire.decode_bundle(control, fragment_kind=wire.CONTROL).method,
                          "CancelSession")
-        response = wire.encode_bundle("Step", wire.BUNDLE_RESPONSE, protobuf=b"r")
+        response = wire.encode_bundle("Step", wire.BUNDLE_RESPONSE,
+                                      fragment_kind=wire.RESPONSE, protobuf=b"r")
         self.assertEqual(wire.decode_bundle(response, fragment_kind=wire.RESPONSE).classification,
                          wire.BUNDLE_RESPONSE)
         invalid = (
-            lambda: wire.encode_bundle("NoSuchMethod", wire.REQUEST, binding=b"x", protobuf=b"p"),
-            lambda: wire.encode_bundle("Step", wire.REQUEST, binding=b"", protobuf=b"p"),
+            lambda: wire.encode_bundle("NoSuchMethod", wire.REQUEST, fragment_kind=wire.DATA,
+                                       binding=b"x", protobuf=b"p"),
+            lambda: wire.encode_bundle("Step", wire.REQUEST, fragment_kind=wire.DATA,
+                                       binding=b"", protobuf=b"p"),
             lambda: wire.encode_bundle("Step", wire.BUNDLE_RESPONSE,
+                                       fragment_kind=wire.RESPONSE,
                                        envelope=b"x", protobuf=b"p"),
             lambda: wire.decode_bundle(request, fragment_kind=wire.RESPONSE),
             lambda: wire.decode_bundle(
-                wire.encode_bundle("Step", wire.REQUEST, binding=b"x", protobuf=b"p"),
+                wire.encode_bundle("Step", wire.REQUEST, fragment_kind=wire.DATA,
+                                   binding=b"x", protobuf=b"p"),
                 fragment_kind=wire.CONTROL),
-            lambda: wire.encode_bundle("CloseSession", wire.REQUEST, binding=b"x",
+            lambda: wire.encode_bundle("CloseSession", wire.REQUEST, fragment_kind=wire.CONTROL,
+                                       binding=b"x",
                                        protobuf=b"x" * (wire.MAX_CONTROL_PROTOBUF_BYTES + 1)),
         )
         for operation in invalid:
             with self.subTest(operation=operation), self.assertRaises(wire.ChannelWireError):
                 operation()
 
+    def test_control_responses_are_closed_bounded_and_preempt_data_fragments(self):
+        step = wire.encode_bundle("Step", wire.BUNDLE_RESPONSE,
+                                  fragment_kind=wire.RESPONSE,
+                                  protobuf=b"s" * 40_000)
+        data_frames = list(wire.iter_fragments(
+            step, kind=wire.RESPONSE, generation=GENERATION,
+            message_id=DATA_ID, first_sequence=1))
+        control = wire.encode_bundle("CancelSession", wire.BUNDLE_RESPONSE,
+                                     fragment_kind=wire.CONTROL_RESPONSE,
+                                     protobuf=b"cancelled")
+        self.assertEqual(len(control), wire.BUNDLE_HEADER_BYTES + len(b"cancelled"))
+        self.assertEqual(wire.decode_bundle(
+            control, fragment_kind=wire.CONTROL_RESPONSE).method, "CancelSession")
+
+        # Interleave one large response fragment, the cleanup reply, and the
+        # remainder of the data response on the single transport sequence.
+        chunks = [frame[wire.FRAGMENT_HEADER_BYTES:] for frame in data_frames]
+        interleaved = [
+            _frame(wire.RESPONSE, wire.START, 1, DATA_ID, 0, chunks[0]),
+            _frame(wire.CONTROL_RESPONSE, wire.START | wire.END, 2, CONTROL_ID, 0,
+                   control),
+        ]
+        interleaved.extend(
+            _frame(wire.RESPONSE, (wire.END if index == len(chunks) - 1 else 0),
+                   index + 2, DATA_ID, index, chunk)
+            for index, chunk in enumerate(chunks[1:], start=1))
+        decoder = wire.FragmentDecoder(GENERATION,
+                                       reassembly_capacity=wire.MAX_BUNDLE_BYTES)
+        self.assertEqual(list(decoder.feed(interleaved[0])), [])
+        control_out = list(decoder.feed(interleaved[1]))
+        self.assertEqual(len(control_out), 1)
+        self.assertEqual(control_out[0].kind, wire.CONTROL_RESPONSE)
+        self.assertEqual(wire.decode_bundle(control_out[0].payload,
+                                            fragment_kind=wire.CONTROL_RESPONSE).protobuf,
+                         b"cancelled")
+        data_out = []
+        for frame in interleaved[2:]:
+            data_out.extend(decoder.feed(frame))
+        self.assertEqual(len(data_out), 1)
+        self.assertEqual(data_out[0].kind, wire.RESPONSE)
+        self.assertEqual(len(data_out[0].payload), len(step))
+        decoder.finish()
+
+        invalid = (
+            lambda: wire.encode_bundle("Step", wire.BUNDLE_RESPONSE,
+                                       fragment_kind=wire.CONTROL_RESPONSE, protobuf=b"x"),
+            lambda: wire.decode_bundle(
+                wire.encode_bundle("CancelSession", wire.REQUEST,
+                                   fragment_kind=wire.CONTROL, binding=b"b", protobuf=b"x"),
+                fragment_kind=wire.CONTROL_RESPONSE),
+            lambda: wire.encode_bundle("CloseSession", wire.BUNDLE_RESPONSE,
+                                       fragment_kind=wire.CONTROL_RESPONSE,
+                                       envelope=b"e", protobuf=b"x"),
+            lambda: wire.encode_bundle("SessionStatus", wire.BUNDLE_RESPONSE,
+                                       fragment_kind=wire.CONTROL_RESPONSE,
+                                       binding=b"b", protobuf=b"x"),
+            lambda: wire.encode_bundle("CancelSession", wire.BUNDLE_RESPONSE,
+                                       fragment_kind=wire.CONTROL_RESPONSE,
+                                       protobuf=b"x" * (wire.MAX_CONTROL_PROTOBUF_BYTES + 1)),
+            lambda: wire.decode_bundle(step, fragment_kind=wire.CONTROL_RESPONSE),
+        )
+        for operation in invalid:
+            with self.subTest(operation=operation), self.assertRaises(wire.ChannelWireError):
+                operation()
+
+        too_large = b"x" * (wire.MAX_CONTROL_RESPONSE_BUNDLE_BYTES + 1)
+        oversized_frame = _frame(wire.CONTROL_RESPONSE, wire.START | wire.END,
+                                 1, CONTROL_ID, 0, too_large)
+        faulted = wire.FragmentDecoder(GENERATION,
+                                       reassembly_capacity=wire.MAX_CONTROL_RESPONSE_BUNDLE_BYTES)
+        with self.assertRaises(wire.ChannelWireError):
+            list(faulted.feed(oversized_frame))
+        with self.assertRaises(wire.ChannelWireError):
+            faulted.finish()
+
     def test_bounds_rejected_before_large_bundle_or_fragment_allocation(self):
         with self.assertRaises(wire.ChannelWireError):
-            wire.encode_bundle("Step", wire.REQUEST, binding=b"x",
+            wire.encode_bundle("Step", wire.REQUEST, fragment_kind=wire.DATA, binding=b"x",
                                protobuf=b"x" * (wire.MAX_PROTOBUF_BYTES + 1))
         with self.assertRaises(wire.ChannelWireError):
             list(wire.iter_fragments(b"x" * (wire.MAX_BUNDLE_BYTES + 1),
@@ -218,7 +300,7 @@ class ChannelWireTests(unittest.TestCase):
 
     def test_control_bundle_uses_tightest_combined_control_limit(self):
         payload = wire.encode_bundle(
-            "CancelSession", wire.REQUEST,
+            "CancelSession", wire.REQUEST, fragment_kind=wire.CONTROL,
             envelope=b"e" * wire.MAX_ENVELOPE_BYTES,
             binding=b"b" * wire.MAX_BINDING_BYTES,
             protobuf=b"p" * wire.MAX_CONTROL_PROTOBUF_BYTES)

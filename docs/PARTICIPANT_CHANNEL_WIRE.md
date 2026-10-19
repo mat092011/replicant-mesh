@@ -29,10 +29,11 @@ maximum `2^63-1`; no wrap, duplicate, gap or reordered fragment is accepted.
 The receiver gets its expected generation from the authenticated channel setup,
 not from an unverified data fragment. Nonces do not authenticate a connection.
 
-Kinds are DATA=1, CONTROL=2, RESPONSE=3, HELLO=4, HEARTBEAT=5 and CLOSE=6. A
-fragment carries at most 16,384 payload bytes. One partially assembled data
-message and one control message may coexist; fragments of another message in
-the same lane are rejected. Index starts at zero and advances exactly once.
+Kinds are DATA=1, CONTROL=2, RESPONSE=3, HELLO=4, HEARTBEAT=5, CLOSE=6 and
+CONTROL_RESPONSE=7. A fragment carries at most 16,384 payload bytes. One
+partially assembled data message and one control-lane message may coexist;
+fragments of another message in the same lane are rejected. CONTROL requests
+and CONTROL_RESPONSE replies share the control lane. Index starts at zero and advances exactly once.
 No abandoned or truncated message is retried or adopted by another generation.
 Malformed input permanently faults the decoder and clears its buffered bytes.
 
@@ -40,16 +41,22 @@ An inference bundle header uses `!4sBBHIII` (20 bytes): magic `C2M1`, worker
 method code, classification, reserved zero, envelope length, binding length and
 protobuf length. Closed method codes are Describe=1, OpenSession=2,
 RenewSession=3, Step=4, CloseSession=5, CancelSession=6, SessionStatus=7.
-Classification REQUEST=1 or RESPONSE=2 must match the enclosing fragment kind.
+Classification REQUEST=1 or RESPONSE=2 must match the enclosing fragment kind:
+DATA and CONTROL carry requests, while RESPONSE and CONTROL_RESPONSE carry
+replies.
 The signed delegation is at most 32 KiB, canonical C1 binding at most 8 KiB, and
 protobuf at most 1 MiB. The total bundle ceiling is 1,089,556 bytes. Reject size
 or shape violations before protobuf/tensor parsing. Responses carry no request
 delegation or binding and must match a captured admitted request.
 
 Only CloseSession, CancelSession and SessionStatus requests may enter CONTROL;
-each control protobuf is at most 8 KiB. HELLO/CLOSE are at most 4 KiB and HEARTBEAT
-at most 64 bytes. Those control messages are single logical messages; they may
-be fragmented where necessary. Step and renewal cannot borrow cleanup credit.
+each control protobuf is at most 8 KiB. Their replies use CONTROL_RESPONSE,
+carry no delegation or binding, and are limited to the same cleanup methods and
+8 KiB protobuf ceiling (8,212 bytes total including the bundle header). This
+separate control lane lets a cleanup reply complete while a large Step response
+is still fragmented. HELLO/CLOSE are at most 4 KiB and HEARTBEAT at most 64
+bytes. Those control messages are single logical messages; they may be
+fragmented where necessary. Step and renewal cannot borrow cleanup credit.
 Transport fragment counters and signed logical-operation counters are distinct;
 neither is reconstructed from the other, and both must be validated by their
 respective owners before dispatch.

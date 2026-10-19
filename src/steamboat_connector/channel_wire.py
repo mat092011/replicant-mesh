@@ -23,6 +23,7 @@ MAX_SMALL_CONTROL_BYTES = 4 * 1024
 MAX_HEARTBEAT_BYTES = 64
 MAX_CONTROL_BUNDLE_BYTES = (BUNDLE_HEADER_BYTES + MAX_ENVELOPE_BYTES
                             + MAX_BINDING_BYTES + MAX_CONTROL_PROTOBUF_BYTES)
+MAX_CONTROL_RESPONSE_BUNDLE_BYTES = BUNDLE_HEADER_BYTES + MAX_CONTROL_PROTOBUF_BYTES
 MAX_WIRE_FRAME_BYTES = FRAGMENT_HEADER_BYTES + MAX_FRAGMENT_BYTES
 MAX_FEED_BYTES = 64 * 1024
 # Python iterator/view/allocator bookkeeping is bounded independently of the
@@ -39,6 +40,7 @@ RESPONSE = 3
 HELLO = 4
 HEARTBEAT = 5
 CLOSE = 6
+CONTROL_RESPONSE = 7
 
 REQUEST = 1
 BUNDLE_RESPONSE = 2
@@ -47,11 +49,12 @@ METHODS = {1: "Describe", 2: "OpenSession", 3: "RenewSession", 4: "Step",
 METHOD_CODES = {name: code for code, name in METHODS.items()}
 CONTROL_METHODS = {5, 6, 7}
 DATA_KINDS = {DATA, RESPONSE}
-CONTROL_KINDS = {CONTROL, HELLO, HEARTBEAT, CLOSE}
+CONTROL_KINDS = {CONTROL, HELLO, HEARTBEAT, CLOSE, CONTROL_RESPONSE}
 _MAX_LOGICAL = {DATA: MAX_BUNDLE_BYTES, RESPONSE: MAX_BUNDLE_BYTES,
                 CONTROL: MAX_CONTROL_BUNDLE_BYTES,
                 HELLO: MAX_SMALL_CONTROL_BYTES, CLOSE: MAX_SMALL_CONTROL_BYTES,
-                HEARTBEAT: MAX_HEARTBEAT_BYTES}
+                HEARTBEAT: MAX_HEARTBEAT_BYTES,
+                CONTROL_RESPONSE: MAX_CONTROL_RESPONSE_BUNDLE_BYTES}
 
 
 class ChannelWireError(ValueError):
@@ -128,13 +131,17 @@ def iter_fragments(payload, *, kind, generation, message_id, first_sequence=1,
         yield header + chunk
 
 
-def encode_bundle(method, classification, *, envelope=b"", binding=b"", protobuf=b""):
+def encode_bundle(method, classification, *, fragment_kind, envelope=b"", binding=b"", protobuf=b""):
     """Encode a closed C2M1 bundle after enforcing all length/class rules."""
     method_code = METHOD_CODES.get(method) if type(method) is str else method
     if type(method_code) is not int or method_code not in METHODS:
         raise ChannelWireError("unknown bundle method")
     if type(classification) is not int or classification not in (REQUEST, BUNDLE_RESPONSE):
         raise ChannelWireError("unknown bundle classification")
+    if type(fragment_kind) is not int or fragment_kind not in (DATA, CONTROL, RESPONSE, CONTROL_RESPONSE):
+        raise ChannelWireError("bundle fragment kind is invalid")
+    if ((classification == BUNDLE_RESPONSE) != (fragment_kind in (RESPONSE, CONTROL_RESPONSE))):
+        raise ChannelWireError("bundle classification disagrees with fragment kind")
     if any(type(part) is not bytes for part in (envelope, binding, protobuf)):
         raise ChannelWireError("bundle fields must be immutable bytes")
     if len(envelope) > MAX_ENVELOPE_BYTES or len(binding) > MAX_BINDING_BYTES or len(protobuf) > MAX_PROTOBUF_BYTES:
@@ -147,8 +154,13 @@ def encode_bundle(method, classification, *, envelope=b"", binding=b"", protobuf
         raise ChannelWireError("requests require a canonical binding")
     if classification == REQUEST and method_code in CONTROL_METHODS and len(protobuf) > MAX_CONTROL_PROTOBUF_BYTES:
         raise ChannelWireError("control protobuf exceeds its limit")
+    if fragment_kind == CONTROL and method_code not in CONTROL_METHODS:
+        raise ChannelWireError("control lane only accepts cleanup methods")
+    if fragment_kind == CONTROL_RESPONSE and (method_code not in CONTROL_METHODS
+                                               or len(protobuf) > MAX_CONTROL_PROTOBUF_BYTES):
+        raise ChannelWireError("control response must be a bounded cleanup reply")
     total = BUNDLE_HEADER_BYTES + len(envelope) + len(binding) + len(protobuf)
-    if total > MAX_BUNDLE_BYTES:
+    if total > _kind_limit(fragment_kind):
         raise ChannelWireError("bundle exceeds its total limit")
     return (struct.pack(BUNDLE_FORMAT, BUNDLE_MAGIC, method_code, classification, 0,
                         len(envelope), len(binding), len(protobuf))
@@ -156,7 +168,9 @@ def encode_bundle(method, classification, *, envelope=b"", binding=b"", protobuf
 
 
 def decode_bundle(payload, *, fragment_kind):
-    if type(payload) is not bytes or len(payload) < BUNDLE_HEADER_BYTES or len(payload) > MAX_BUNDLE_BYTES:
+    if (type(payload) is not bytes or type(fragment_kind) is not int
+            or fragment_kind not in (DATA, CONTROL, RESPONSE, CONTROL_RESPONSE)
+            or len(payload) < BUNDLE_HEADER_BYTES or len(payload) > _kind_limit(fragment_kind)):
         raise ChannelWireError("bundle size is invalid")
     magic, method_code, classification, reserved, envelope_len, binding_len, protobuf_len = struct.unpack_from(
         BUNDLE_FORMAT, payload)
@@ -164,8 +178,7 @@ def decode_bundle(payload, *, fragment_kind):
         raise ChannelWireError("bundle header is invalid")
     if classification not in (REQUEST, BUNDLE_RESPONSE):
         raise ChannelWireError("bundle classification is invalid")
-    if ((classification == BUNDLE_RESPONSE) != (fragment_kind == RESPONSE)
-            or fragment_kind not in (DATA, CONTROL, RESPONSE)):
+    if ((classification == BUNDLE_RESPONSE) != (fragment_kind in (RESPONSE, CONTROL_RESPONSE))):
         raise ChannelWireError("bundle classification disagrees with fragment kind")
     if (envelope_len > MAX_ENVELOPE_BYTES or binding_len > MAX_BINDING_BYTES
             or protobuf_len > MAX_PROTOBUF_BYTES
@@ -179,6 +192,10 @@ def decode_bundle(payload, *, fragment_kind):
     if fragment_kind == CONTROL and (method_code not in CONTROL_METHODS
                                      or protobuf_len > MAX_CONTROL_PROTOBUF_BYTES):
         raise ChannelWireError("control lane only accepts bounded cleanup methods")
+    if fragment_kind == CONTROL_RESPONSE and (method_code not in CONTROL_METHODS
+                                              or envelope_len or binding_len
+                                              or protobuf_len > MAX_CONTROL_PROTOBUF_BYTES):
+        raise ChannelWireError("control response only accepts bounded cleanup replies")
     offset = BUNDLE_HEADER_BYTES
     envelope = payload[offset:offset + envelope_len]
     offset += envelope_len
