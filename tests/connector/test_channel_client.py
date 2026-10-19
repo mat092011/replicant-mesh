@@ -29,11 +29,21 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
             methodName="test_submit_binds_real_two_hops_hello_generation_and_core_c1")
         # Register nested fixture cleanup before setup so partial setup also cleans.
         self.addCleanup(self.fx.doCleanups)
-        self.fx.setUp()
-        # The shared two-hop fixture normally uses a portable request wrapper
-        # for its RPC tests. This adapter exercises the real generated worker
-        # protobuf, so configure the same genuine C1 authorizer accordingly.
-        self.fx.base.adapter.worker_request_type = Request
+        # The real egress pins its authorizer configuration at construction.
+        # Configure the generated protobuf before the genuine fixture creates
+        # either coordinator egress, rather than mutating its authorizer later.
+        original_connect = gateway_router_tests.GatewayCoordinatorEgress.connect
+
+        def connect_with_generated_request_type(**kwargs):
+            kwargs["authorizer"].worker_request_type = Request
+            return original_connect(**kwargs)
+
+        with mock.patch.object(
+                gateway_router_tests.GatewayCoordinatorEgress, "connect",
+                side_effect=connect_with_generated_request_type):
+            self.fx.setUp()
+        self.assertIs(self.fx.coordinator_egress._primary_view._request_type,
+                      Request)
         self.client = None
         self._call_tasks = []
         self._release_events = []
