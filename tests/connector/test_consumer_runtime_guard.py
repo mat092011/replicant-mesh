@@ -261,28 +261,16 @@ class ConsumerRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [caller])
 
     async def test_call_soon_invalidation_before_result_resume_withholds_result(self):
-        started, never_release = asyncio.Event(), asyncio.Event()
-
-        async def generation(_ids, _count):
-            yield {"type": "token", "index": 0, "token_id": 9}
-            started.set()
-            await never_release.wait()
-            yield {"type": "result", "status": "completed",
-                   "cleanup_complete": True, "token_ids": [9]}
-
-        client = FakeClient(generation=generation)
+        client = FakeClient()
         transport = SecureConsumerTransport._for_tests(client, FakeAuthorizer())
         run = await transport.submit(self.submission())
-        self.assertEqual((await asyncio.wait_for(run.__anext__(), 1)).token_id, 9)
-        await asyncio.wait_for(started.wait(), 1)
-        result_awaitable = run.result
+        await asyncio.wait_for(run.closed, 1)
+        result_future = run.result
         loop = asyncio.get_running_loop()
         loop.call_soon(transport.request_runtime_invalidation, "owner stopped")
-        await asyncio.sleep(0)
         with self.assertRaises(ConnectorError) as caught:
-            await result_awaitable
+            await asyncio.wait_for(result_future, 1)
         self.assertEqual(caught.exception.code, "UNAVAILABLE")
-        await asyncio.wait_for(run.closed, 1)
         await run.aclose()
 
     async def test_guard_failure_closes_unstarted_coroutine_argument(self):
@@ -310,20 +298,29 @@ class ConsumerRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
             child = asyncio.create_task(child_gate.wait())
             children.append(child)
             child_started.set()
-            try:
-                await asyncio.Future()
-            except asyncio.CancelledError:
-                raise SecureTaskPending((child,), "child remains owned")
+            raise SecureTaskPending((child,), "child remains owned")
 
         task = asyncio.create_task(child_operation())
         await asyncio.wait_for(child_started.wait(), 1)
+        context = FakeContext("req_" + "0" * 32, time.monotonic() + 10)
         with self.assertRaises(SecureTaskPending):
-            await transport._await_before(task, time.monotonic() + 1)
-        self.assertIn(task, transport._pending_tasks)
+            await transport._await_before(
+                task, time.monotonic() + 1, context=context
+            )
+        self.assertTrue(task.done())
+        self.assertIsInstance(task.exception(), SecureTaskPending)
         child = children[0]
         self.assertIn(child, transport._pending_tasks)
+        owner = transport._pending_context_owners[context]
+        watcher = owner["watcher"]
+        self.assertIsNotNone(watcher)
+        self.assertFalse(context.closed)
+        transport._finish_context_driver(context)
         child_gate.set()
         await asyncio.wait_for(child, 1)
+        await asyncio.wait_for(watcher, 1)
+        self.assertTrue(context.closed)
+        self.assertNotIn(context, transport._pending_contexts)
 
     async def test_rejected_duplicate_loops_do_not_accumulate_cancel_owners(self):
         client = FakeClient()

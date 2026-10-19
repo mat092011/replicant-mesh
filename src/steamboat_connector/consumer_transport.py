@@ -108,7 +108,7 @@ def _observe_future(future):
 
 
 class ConsumerRun:
-    """One bounded stream; ``result`` and ``closed`` are awaitable futures."""
+    """One bounded stream; ``result`` is a coroutine, ``closed`` a future."""
 
     def __init__(self, transport, submission, started_at, loop):
         self.request_id = submission.request_id
