@@ -10,8 +10,9 @@ worker channel. The gateway can read and modify traffic on both TLS hops. A
 valid policy is not participant enrollment, a C1 grant, certificate revocation
 status, host readiness, proof of coordinator possession at the worker, or
 end-to-end prompt privacy. The signing key is a dedicated operator policy key,
-separate from gateway, worker, and CA keys. It is not distributed to gateway or
-worker participants.
+separate from gateway, worker, and CA keys. Only the public verification key
+is distributed to verifiers; the private signing key is not distributed to
+gateway or worker participants.
 
 ## Encoding and limits
 
@@ -50,20 +51,25 @@ Every route record contains exactly `gateway_id`, `account_id`, `device_id`,
 All serials are positive canonical lowercase hexadecimal of at most 40
 characters. Typed account/device/assignment IDs and boot IDs use the existing
 strict v1 grammars. Hashes and model IDs are lowercase 64-character hex.
+Integer values are bounded to signed 64-bit nonnegative values, with credential
+epochs capped at the existing signed 32-bit identity limit.
 Channel/gateway validity is at most 900 seconds and must cover the policy's
 entire issued-to-expiry interval. Each route must name an exact worker and its
-gateway, account, assignment, and model. The tenant must equal the actor
-account. Methods are a nonempty sorted subset of the existing worker RPC
-method names. Gateway/worker public keys cannot reuse the policy signing key.
+gateway, assignment, and model. The tenant must equal the actor account; the
+worker may belong to another account. C1 grant validation at admission must
+independently bind the actor and target credentials/accounts. Methods are a
+nonempty sorted subset of the existing worker RPC method names. Gateway and
+worker channel public keys cannot reuse the policy signing key or each other.
 
 ## Store API and liveness
 
 `ChannelPolicyStore(verification_key_pem, *, clock, minimum_revision=None,
 minimum_policy_digest=None, durable_commit=None, require_durable=True)` pins an
-operator P-256 verification key and requires the core `Clock` type. Production
-construction requires a synchronous durable callback; tests can explicitly
-set `require_durable=False`, but installation still requires a callback. The
-callback receives `(encoded_envelope, revision, canonical_payload_sha256)` and
+operator P-256 verification key and requires the exact core `Clock` type.
+Production construction requires a synchronous durable callback. A caller may
+explicitly set `require_durable=False` for tests or ephemeral inspection; with
+no callback, that mode is memory-only and provides no durable anti-rollback
+fence. The callback receives `(encoded_envelope, revision, canonical_payload_sha256)` and
 must synchronously return `None`. It runs under the store's bounded serialized
 install operation, before publication. Re-entry, exceptions, awaitables, or
 other return values fail closed and latch the store unusable. The callback

@@ -2,8 +2,9 @@
 
 This is a policy primitive. It does not authenticate TLS peers, check C1
 grants/revocation or readiness, or issue a per-operation delegation. The
-verification key is a dedicated operator policy key; it must not be a gateway,
-worker, or CA key and is never distributed to participants.
+verification key is a public key distributed to verifiers. Its private signing
+counterpart is a dedicated operator policy key, separate from gateway, worker,
+or CA keys, and is never distributed to participants.
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ import hashlib
 import ipaddress
 import inspect
 import json
-import math
 import re
 import threading
 from dataclasses import dataclass
@@ -22,7 +22,10 @@ from types import MappingProxyType
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+from cryptography.hazmat.primitives.asymmetric.utils import (
+    decode_dss_signature,
+    encode_dss_signature,
+)
 
 from .certificates import public_key_sha256
 from .clock import Clock
@@ -37,11 +40,62 @@ DOMAIN = b"steamboat-channel-policy-v1\0"
 _HEX64 = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
 _SERIAL = re.compile(r"^[1-9a-f][0-9a-f]{0,39}$", re.ASCII)
 _GATEWAY = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$", re.ASCII)
-_DNS = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$", re.ASCII)
-_POLICY_FIELDS = {"version", "revision", "issued_at", "expires_at", "gateways", "workers", "routes"}
-_GATEWAY_FIELDS = {"gateway_id", "serial", "certificate_sha256", "public_key_sha256", "not_before", "not_after", "endpoint_host", "endpoint_port"}
-_WORKER_FIELDS = {"account_id", "device_id", "host_serial", "host_credential_epoch", "host_certificate_sha256", "worker_boot_id", "assignment_id", "model_id", "channel_serial", "channel_certificate_sha256", "channel_public_key_sha256", "not_before", "not_after", "gateway_id"}
-_ROUTE_FIELDS = {"gateway_id", "account_id", "device_id", "actor_serial", "actor_credential_epoch", "actor_certificate_sha256", "coordinator_boot_id", "tenant_account_id", "target_device_id", "worker_boot_id", "assignment_id", "model_id", "methods"}
+_DNS = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$",
+    re.ASCII,
+)
+_POLICY_FIELDS = {
+    "version",
+    "revision",
+    "issued_at",
+    "expires_at",
+    "gateways",
+    "workers",
+    "routes",
+}
+_GATEWAY_FIELDS = {
+    "gateway_id",
+    "serial",
+    "certificate_sha256",
+    "public_key_sha256",
+    "not_before",
+    "not_after",
+    "endpoint_host",
+    "endpoint_port",
+}
+_WORKER_FIELDS = {
+    "account_id",
+    "device_id",
+    "host_serial",
+    "host_credential_epoch",
+    "host_certificate_sha256",
+    "worker_boot_id",
+    "assignment_id",
+    "model_id",
+    "channel_serial",
+    "channel_certificate_sha256",
+    "channel_public_key_sha256",
+    "not_before",
+    "not_after",
+    "gateway_id",
+}
+_ROUTE_FIELDS = {
+    "gateway_id",
+    "account_id",
+    "device_id",
+    "actor_serial",
+    "actor_credential_epoch",
+    "actor_certificate_sha256",
+    "coordinator_boot_id",
+    "tenant_account_id",
+    "target_device_id",
+    "worker_boot_id",
+    "assignment_id",
+    "model_id",
+    "methods",
+}
+_MAX_INTEGER = 2**63 - 1
+_MAX_EPOCH = 2**31 - 1
 
 
 def _pairs(pairs):
@@ -58,7 +112,7 @@ def _constant(_value):
 
 
 def _integer(value, name, minimum=0):
-    if type(value) is not int or value < minimum:
+    if type(value) is not int or not minimum <= value <= _MAX_INTEGER:
         raise SnapshotError(f"channel policy {name} is invalid")
     return value
 
@@ -76,7 +130,11 @@ def _serial(value, name):
 
 
 def _sorted_strings(value, name, maximum, allowed=None):
-    if type(value) is not list or len(value) > maximum or any(type(x) is not str for x in value):
+    if (
+        type(value) is not list
+        or len(value) > maximum
+        or any(type(x) is not str for x in value)
+    ):
         raise SnapshotError(f"channel policy {name} exceeds its bound")
     if value != sorted(value) or len(set(value)) != len(value):
         raise SnapshotError(f"channel policy {name} must be sorted and unique")
@@ -92,7 +150,13 @@ def _gateway_id(value):
 
 
 def _endpoint(value):
-    if type(value) is not str or value != value.lower() or "*" in value or "://" in value:
+    if (
+        type(value) is not str
+        or value != value.lower()
+        or "*" in value
+        or "://" in value
+        or "%" in value
+    ):
         raise SnapshotError("channel policy endpoint host is invalid")
     try:
         parsed = ipaddress.ip_address(value)
@@ -135,14 +199,23 @@ def _validate_payload(payload, signer_hash):
         if key == signer_hash:
             raise SnapshotError("gateway key cannot reuse the policy signing key")
         if serial in gateway_serials or cert in gateway_certs or key in gateway_keys:
-            raise SnapshotError("gateway serial, certificate, and key identities must be unique")
+            raise SnapshotError(
+                "gateway serial, certificate, and key identities must be unique"
+            )
         gateway_serials.add(serial)
         gateway_certs.add(cert)
         gateway_keys.add(key)
         start = _integer(item["not_before"], "gateway not_before")
         stop = _integer(item["not_after"], "gateway not_after", 1)
-        if stop <= start or stop - start > MAX_CHANNEL_LIFETIME_SECONDS or start > issued or stop < expires:
-            raise SnapshotError("gateway validity must cover policy lifetime and fit 900 seconds")
+        if (
+            stop <= start
+            or stop - start > MAX_CHANNEL_LIFETIME_SECONDS
+            or start > issued
+            or stop < expires
+        ):
+            raise SnapshotError(
+                "gateway validity must cover policy lifetime and fit 900 seconds"
+            )
         _endpoint(item["endpoint_host"])
         port = _integer(item["endpoint_port"], "endpoint_port", 1)
         if port > 65535:
@@ -151,6 +224,7 @@ def _validate_payload(payload, signer_hash):
     workers = {}
     prior = None
     channel_serials, channel_certs, channel_keys = set(), set(), set()
+    host_serials, host_certs = set(), set()
     account_by_device = {}
     for item in payload["workers"]:
         if type(item) is not dict or set(item) != _WORKER_FIELDS:
@@ -158,7 +232,9 @@ def _validate_payload(payload, signer_hash):
         account = validate_id(item["account_id"], "acct")
         device = validate_id(item["device_id"], "dev")
         if device in account_by_device and account_by_device[device] != account:
-            raise SnapshotError("one stable worker device cannot belong to multiple accounts")
+            raise SnapshotError(
+                "one stable worker device cannot belong to multiple accounts"
+            )
         account_by_device[device] = account
         identity = (device, validate_boot(item["worker_boot_id"]))
         if prior is not None and identity <= prior:
@@ -166,29 +242,72 @@ def _validate_payload(payload, signer_hash):
         prior = identity
         host_serial = _serial(item["host_serial"], "host serial")
         epoch = _integer(item["host_credential_epoch"], "host credential epoch", 1)
+        if epoch > _MAX_EPOCH:
+            raise SnapshotError("channel policy host credential epoch is invalid")
         host_cert = _hex(item["host_certificate_sha256"], "host certificate hash")
+        if host_serial in gateway_serials or host_cert in gateway_certs:
+            raise SnapshotError(
+                "gateway and participant certificate identities must be distinct"
+            )
+        if host_serial in channel_serials or host_cert in channel_certs:
+            raise SnapshotError(
+                "host and worker channel certificate identities must be distinct"
+            )
+        host_serials.add(host_serial)
+        host_certs.add(host_cert)
         assignment = validate_id(item["assignment_id"], "asg")
         model = _hex(item["model_id"], "model ID")
         channel_serial = _serial(item["channel_serial"], "channel serial")
-        channel_cert = _hex(item["channel_certificate_sha256"], "channel certificate hash")
+        channel_cert = _hex(
+            item["channel_certificate_sha256"], "channel certificate hash"
+        )
         channel_key = _hex(item["channel_public_key_sha256"], "channel public key hash")
         if channel_key == signer_hash:
             raise SnapshotError("worker channel key cannot reuse policy signing key")
-        if (channel_serial in channel_serials or channel_cert in channel_certs
-                or channel_key in channel_keys):
-            raise SnapshotError("worker channel serial, certificate, and key identities must be unique")
+        if (
+            channel_serial in channel_serials
+            or channel_cert in channel_certs
+            or channel_key in channel_keys
+            or channel_serial in gateway_serials
+            or channel_cert in gateway_certs
+            or channel_key in gateway_keys
+            or channel_serial in host_serials
+            or channel_cert in host_certs
+        ):
+            raise SnapshotError(
+                "worker channel serial, certificate, and key identities must be unique"
+            )
         channel_serials.add(channel_serial)
         channel_certs.add(channel_cert)
         channel_keys.add(channel_key)
         start = _integer(item["not_before"], "worker not_before")
         stop = _integer(item["not_after"], "worker not_after", 1)
-        if stop <= start or stop - start > MAX_CHANNEL_LIFETIME_SECONDS or start > issued or stop < expires:
-            raise SnapshotError("worker channel validity must cover policy lifetime and fit 900 seconds")
+        if (
+            stop <= start
+            or stop - start > MAX_CHANNEL_LIFETIME_SECONDS
+            or start > issued
+            or stop < expires
+        ):
+            raise SnapshotError(
+                "worker channel validity must cover policy lifetime and fit 900 seconds"
+            )
         gid = _gateway_id(item["gateway_id"])
         if gid not in gateways:
             raise SnapshotError("worker references an unknown gateway")
-        workers[identity] = (account, host_serial, epoch, host_cert, assignment, model,
-                             channel_serial, channel_cert, channel_key, start, stop, gid)
+        workers[identity] = (
+            account,
+            host_serial,
+            epoch,
+            host_cert,
+            assignment,
+            model,
+            channel_serial,
+            channel_cert,
+            channel_key,
+            start,
+            stop,
+            gid,
+        )
     routes = []
     prior_route = None
     for item in payload["routes"]:
@@ -198,7 +317,11 @@ def _validate_payload(payload, signer_hash):
         account = validate_id(item["account_id"], "acct")
         device = validate_id(item["device_id"], "dev")
         actor_serial = _serial(item["actor_serial"], "actor serial")
-        actor_epoch = _integer(item["actor_credential_epoch"], "actor credential epoch", 1)
+        actor_epoch = _integer(
+            item["actor_credential_epoch"], "actor credential epoch", 1
+        )
+        if actor_epoch > _MAX_EPOCH:
+            raise SnapshotError("channel policy actor credential epoch is invalid")
         actor_cert = _hex(item["actor_certificate_sha256"], "actor certificate hash")
         coord_boot = validate_boot(item["coordinator_boot_id"])
         tenant = validate_id(item["tenant_account_id"], "acct")
@@ -206,11 +329,24 @@ def _validate_payload(payload, signer_hash):
         worker_boot = validate_boot(item["worker_boot_id"])
         assignment = validate_id(item["assignment_id"], "asg")
         model = _hex(item["model_id"], "model ID")
-        methods = _sorted_strings(item["methods"], "route methods", len(WORKER_METHODS), WORKER_METHODS)
+        methods = _sorted_strings(
+            item["methods"], "route methods", len(WORKER_METHODS), WORKER_METHODS
+        )
         if not methods:
             raise SnapshotError("route must authorize at least one worker method")
-        route_key = (gid, account, device, actor_serial, actor_epoch, actor_cert,
-                     coord_boot, target, worker_boot, assignment, model)
+        route_key = (
+            gid,
+            account,
+            device,
+            actor_serial,
+            actor_epoch,
+            actor_cert,
+            coord_boot,
+            target,
+            worker_boot,
+            assignment,
+            model,
+        )
         if prior_route is not None and route_key <= prior_route:
             raise SnapshotError("routes must be sorted and unique")
         prior_route = route_key
@@ -218,40 +354,59 @@ def _validate_payload(payload, signer_hash):
             raise SnapshotError("gateway route tenant must match actor account")
         worker = workers.get((target, worker_boot))
         if worker is None or worker[-1] != gid:
-            raise SnapshotError("route does not reference the exact policy worker and gateway")
-        if (worker[0] != tenant or worker[4] != assignment or worker[5] != model):
-            raise SnapshotError("route target assignment/model/account does not match policy worker")
-        routes.append((gid, account, device, actor_serial, actor_epoch, actor_cert,
-                       coord_boot, tenant, target, worker_boot, assignment, model, methods))
+            raise SnapshotError(
+                "route does not reference the exact policy worker and gateway"
+            )
+        if worker[4] != assignment or worker[5] != model:
+            raise SnapshotError(
+                "route target assignment/model does not match policy worker"
+            )
+        routes.append(
+            (
+                gid,
+                account,
+                device,
+                actor_serial,
+                actor_epoch,
+                actor_cert,
+                coord_boot,
+                tenant,
+                target,
+                worker_boot,
+                assignment,
+                model,
+                methods,
+            )
+        )
     return revision, issued, expires, gateways, workers, tuple(routes)
 
 
 def _signing_key(pem):
+    if type(pem) is not bytes or not 1 <= len(pem) <= MAX_CHANNEL_POLICY_BYTES:
+        raise SnapshotError("channel policy signing key input exceeds its bound")
     try:
         key = serialization.load_pem_private_key(pem, password=None)
     except (ValueError, TypeError) as error:
         raise SnapshotError("channel policy signing key is malformed") from error
-    if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
+    if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(
+        key.curve, ec.SECP256R1
+    ):
         raise SnapshotError("channel policy key must be ECDSA P-256")
     return key
 
 
 def _verification_key(pem):
+    if type(pem) is not bytes or not 1 <= len(pem) <= MAX_CHANNEL_POLICY_BYTES:
+        raise SnapshotError("channel policy verification key input exceeds its bound")
     try:
         key = serialization.load_pem_public_key(pem)
     except (ValueError, TypeError) as error:
         raise SnapshotError("channel policy verification key is malformed") from error
-    if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
+    if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(
+        key.curve, ec.SECP256R1
+    ):
         raise SnapshotError("channel policy key must be ECDSA P-256")
     return key
-
-
-def _freeze(value):
-    if type(value) is dict:
-        return MappingProxyType({k: _freeze(v) for k, v in value.items()})
-    if type(value) is list:
-        return tuple(_freeze(v) for v in value)
-    return value
 
 
 def sign_channel_policy(payload: dict, private_key_pem: bytes) -> bytes:
@@ -263,9 +418,10 @@ def sign_channel_policy(payload: dict, private_key_pem: bytes) -> bytes:
     r, s = decode_dss_signature(signature)
     order = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
     if s > order // 2:
-        from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
         signature = encode_dss_signature(r, order - s)
-    encoded = canonical_json({"payload": payload, "signature": base64.b64encode(signature).decode("ascii")})
+    encoded = canonical_json(
+        {"payload": payload, "signature": base64.b64encode(signature).decode("ascii")}
+    )
     if len(encoded) > MAX_CHANNEL_POLICY_BYTES:
         raise SnapshotError("signed channel policy exceeds 64 KiB")
     return encoded
@@ -289,14 +445,42 @@ class ChannelPolicyView:
     def worker(self, device_id, worker_boot_id):
         return self.workers.get((device_id, worker_boot_id))
 
-    def route(self, *, gateway_id, account_id, device_id, actor_serial,
-              actor_credential_epoch, actor_certificate_sha256, coordinator_boot_id,
-              tenant_account_id, target_device_id, worker_boot_id, assignment_id,
-              model_id, method):
+    def route(
+        self,
+        *,
+        gateway_id,
+        account_id,
+        device_id,
+        actor_serial,
+        actor_credential_epoch,
+        actor_certificate_sha256,
+        coordinator_boot_id,
+        tenant_account_id,
+        target_device_id,
+        worker_boot_id,
+        assignment_id,
+        model_id,
+        method,
+    ):
         for route in self.routes:
-            if route[:12] == (gateway_id, account_id, device_id, actor_serial,
-                    actor_credential_epoch, actor_certificate_sha256, coordinator_boot_id,
-                    tenant_account_id, target_device_id, worker_boot_id, assignment_id, model_id) and method in route[12]:
+            if (
+                route[:12]
+                == (
+                    gateway_id,
+                    account_id,
+                    device_id,
+                    actor_serial,
+                    actor_credential_epoch,
+                    actor_certificate_sha256,
+                    coordinator_boot_id,
+                    tenant_account_id,
+                    target_device_id,
+                    worker_boot_id,
+                    assignment_id,
+                    model_id,
+                )
+                and method in route[12]
+            ):
                 return route
         return None
 
@@ -304,13 +488,27 @@ class ChannelPolicyView:
 class ChannelPolicyStore:
     """Pinned operator-key policy store with monotonic deadlines and a durable fence."""
 
-    def __init__(self, verification_key_pem, *, clock: Clock, minimum_revision=None,
-                 minimum_policy_digest=None, durable_commit=None, require_durable=True):
-        if not isinstance(clock, Clock):
+    def __init__(
+        self,
+        verification_key_pem,
+        *,
+        clock: Clock,
+        minimum_revision=None,
+        minimum_policy_digest=None,
+        durable_commit=None,
+        require_durable=True,
+    ):
+        if type(clock) is not Clock:
             raise TypeError("clock must be the exact core Clock")
-        if ((minimum_revision is None) != (minimum_policy_digest is None)
-                or (minimum_revision is not None and (type(minimum_revision) is not int or minimum_revision < 1
-                or type(minimum_policy_digest) is not str or not _HEX64.fullmatch(minimum_policy_digest)))):
+        if (minimum_revision is None) != (minimum_policy_digest is None) or (
+            minimum_revision is not None
+            and (
+                type(minimum_revision) is not int
+                or minimum_revision < 1
+                or type(minimum_policy_digest) is not str
+                or not _HEX64.fullmatch(minimum_policy_digest)
+            )
+        ):
             raise ValueError("minimum revision and digest must be a valid pair")
         if type(require_durable) is not bool:
             raise TypeError("require_durable must be bool")
@@ -324,6 +522,7 @@ class ChannelPolicyStore:
         self._minimum_revision = minimum_revision
         self._minimum_digest = minimum_policy_digest
         self._commit = durable_commit
+        self._require_durable = require_durable
         self._view = None
         self._faulted = False
         self._installing = False
@@ -332,7 +531,9 @@ class ChannelPolicyStore:
     def install(self, encoded: bytes) -> ChannelPolicyView:
         with self._lock:
             if self._installing:
-                raise SnapshotError("reentrant channel policy installation is forbidden")
+                raise SnapshotError(
+                    "reentrant channel policy installation is forbidden"
+                )
             if self._faulted:
                 raise SnapshotError("durable channel policy state is faulted")
             self._installing = True
@@ -342,20 +543,35 @@ class ChannelPolicyStore:
                 self._installing = False
 
     def _install_locked(self, encoded):
-        if type(encoded) is not bytes or not 1 <= len(encoded) <= MAX_CHANNEL_POLICY_BYTES:
+        if (
+            type(encoded) is not bytes
+            or not 1 <= len(encoded) <= MAX_CHANNEL_POLICY_BYTES
+        ):
             raise SnapshotError("channel policy exceeds its byte bound")
         try:
-            envelope = json.loads(encoded.decode("utf-8", "strict"), object_pairs_hook=_pairs, parse_constant=_constant)
+            envelope = json.loads(
+                encoded.decode("utf-8", "strict"),
+                object_pairs_hook=_pairs,
+                parse_constant=_constant,
+            )
         except SnapshotError:
             raise
         except (UnicodeError, ValueError, TypeError, RecursionError) as error:
             raise SnapshotError("channel policy envelope is malformed") from error
-        if type(envelope) is not dict or set(envelope) != {"payload", "signature"} or canonical_json(envelope) != encoded:
-            raise SnapshotError("channel policy envelope is noncanonical or has unknown fields")
+        if (
+            type(envelope) is not dict
+            or set(envelope) != {"payload", "signature"}
+            or canonical_json(envelope) != encoded
+        ):
+            raise SnapshotError(
+                "channel policy envelope is noncanonical or has unknown fields"
+            )
         payload = envelope["payload"]
         if type(payload) is not dict:
             raise SnapshotError("channel policy payload must be an object")
-        revision, issued, expires, gateways, workers, routes = _validate_payload(payload, self._signer_hash)
+        revision, issued, expires, gateways, workers, routes = _validate_payload(
+            payload, self._signer_hash
+        )
         canonical = canonical_json(payload)
         signature_text = envelope["signature"]
         if type(signature_text) is not str or len(signature_text) > 128:
@@ -366,19 +582,34 @@ class ChannelPolicyStore:
                 raise ValueError("noncanonical base64")
             r, s = decode_dss_signature(signature)
             order = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
-            if not (1 <= r < order and 1 <= s <= order // 2):
+            if (
+                not (1 <= r < order and 1 <= s <= order // 2)
+                or encode_dss_signature(r, s) != signature
+            ):
                 raise ValueError("noncanonical ECDSA signature")
             self._key.verify(signature, DOMAIN + canonical, ec.ECDSA(hashes.SHA256()))
         except (ValueError, InvalidSignature) as error:
-            raise SnapshotError("channel policy signature is invalid or noncanonical") from error
+            raise SnapshotError(
+                "channel policy signature is invalid or noncanonical"
+            ) from error
         digest = hashlib.sha256(canonical).hexdigest()
-        if self._minimum_revision is not None and (revision < self._minimum_revision or
-                (revision == self._minimum_revision and digest != self._minimum_digest)):
-            raise SnapshotError("channel policy is below or conflicts with configured minimum")
+        if self._minimum_revision is not None and (
+            revision < self._minimum_revision
+            or (revision == self._minimum_revision and digest != self._minimum_digest)
+        ):
+            raise SnapshotError(
+                "channel policy is below or conflicts with configured minimum"
+            )
         previous = self._view
-        if previous is not None and (revision < previous.revision or issued < previous.issued_at):
+        if previous is not None and (
+            revision < previous.revision or issued < previous.issued_at
+        ):
             raise SnapshotError("channel policy rollback detected")
-        if previous is not None and revision == previous.revision and canonical != previous.canonical_payload:
+        if (
+            previous is not None
+            and revision == previous.revision
+            and canonical != previous.canonical_payload
+        ):
             raise SnapshotError("channel policy revision equivocation")
         sample = self.clock.sample()
         if issued > sample.earliest_wall or expires <= sample.latest_wall:
@@ -391,36 +622,110 @@ class ChannelPolicyStore:
                 raise SnapshotError("channel policy expired")
             # Same signed payload is idempotent; it cannot recommit or extend its lease.
             return previous
-        if self._commit is None:
+        if self._commit is None and self._require_durable:
             raise SnapshotError("durable channel policy hook is unavailable")
+        if self._commit is not None:
+            try:
+                result = self._commit(encoded, revision, digest)
+                if inspect.isawaitable(result) or result is not None:
+                    raise SnapshotError(
+                        "durable channel policy hook must synchronously return None"
+                    )
+            except BaseException as error:
+                self._faulted = True
+                if isinstance(error, SnapshotError):
+                    raise
+                raise SnapshotError("durable channel policy commit failed") from error
         try:
-            result = self._commit(encoded, revision, digest)
-            if inspect.isawaitable(result) or result is not None:
-                raise SnapshotError("durable channel policy hook must synchronously return None")
+            sample = self.clock.sample()
         except BaseException as error:
-            self._faulted = True
-            if isinstance(error, SnapshotError):
-                raise
-            raise SnapshotError("durable channel policy commit failed") from error
-        sample = self.clock.sample()
-        if issued > sample.earliest_wall or expires <= sample.latest_wall or sample.monotonic >= deadline:
-            self._faulted = True
-            raise SnapshotError("channel policy expired during durable commit")
+            if self._commit is not None:
+                self._faulted = True
+            raise SnapshotError("clock failed after channel policy commit") from error
+        final_deadline = sample.monotonic + (expires - sample.latest_wall)
+        final_deadline = min(deadline, final_deadline)
+        if previous is not None and previous.expires_at == expires:
+            final_deadline = min(final_deadline, previous.deadline_monotonic)
+        if (
+            issued > sample.earliest_wall
+            or expires <= sample.latest_wall
+            or sample.monotonic >= final_deadline
+        ):
+            if self._commit is not None:
+                self._faulted = True
+            raise SnapshotError("channel policy expired during commit")
         if previous is not None and revision <= previous.revision:
             self._faulted = True
             raise SnapshotError("channel policy changed during durable commit")
-        frozen_gateways = MappingProxyType({k: MappingProxyType({"serial": v[0], "certificate_sha256": v[1], "public_key_sha256": v[2], "not_before": v[3], "not_after": v[4], "endpoint_host": next(x["endpoint_host"] for x in payload["gateways"] if x["gateway_id"] == k), "endpoint_port": next(x["endpoint_port"] for x in payload["gateways"] if x["gateway_id"] == k)}) for k, v in gateways.items()})
-        frozen_workers = MappingProxyType({k: MappingProxyType({"account_id": v[0], "host_serial": v[1], "host_credential_epoch": v[2], "host_certificate_sha256": v[3], "assignment_id": v[4], "model_id": v[5], "channel_serial": v[6], "channel_certificate_sha256": v[7], "channel_public_key_sha256": v[8], "not_before": v[9], "not_after": v[10], "gateway_id": v[11]}) for k, v in workers.items()})
-        view = ChannelPolicyView(revision, issued, expires, digest, deadline, frozen_gateways,
-                                 frozen_workers, routes, canonical)
+        frozen_gateways = MappingProxyType(
+            {
+                k: MappingProxyType(
+                    {
+                        "serial": v[0],
+                        "certificate_sha256": v[1],
+                        "public_key_sha256": v[2],
+                        "not_before": v[3],
+                        "not_after": v[4],
+                        "endpoint_host": next(
+                            x["endpoint_host"]
+                            for x in payload["gateways"]
+                            if x["gateway_id"] == k
+                        ),
+                        "endpoint_port": next(
+                            x["endpoint_port"]
+                            for x in payload["gateways"]
+                            if x["gateway_id"] == k
+                        ),
+                    }
+                )
+                for k, v in gateways.items()
+            }
+        )
+        frozen_workers = MappingProxyType(
+            {
+                k: MappingProxyType(
+                    {
+                        "account_id": v[0],
+                        "host_serial": v[1],
+                        "host_credential_epoch": v[2],
+                        "host_certificate_sha256": v[3],
+                        "assignment_id": v[4],
+                        "model_id": v[5],
+                        "channel_serial": v[6],
+                        "channel_certificate_sha256": v[7],
+                        "channel_public_key_sha256": v[8],
+                        "not_before": v[9],
+                        "not_after": v[10],
+                        "gateway_id": v[11],
+                    }
+                )
+                for k, v in workers.items()
+            }
+        )
+        view = ChannelPolicyView(
+            revision,
+            issued,
+            expires,
+            digest,
+            final_deadline,
+            frozen_gateways,
+            frozen_workers,
+            routes,
+            canonical,
+        )
         self._view = view
         return view
 
     def current(self) -> ChannelPolicyView:
         with self._lock:
+            if self._installing:
+                raise SnapshotError("channel policy is unavailable during installation")
             if self._faulted or self._view is None:
                 raise SnapshotError("no live channel policy is installed")
             sample = self.clock.sample()
-            if sample.latest_wall >= self._view.expires_at or sample.monotonic >= self._view.deadline_monotonic:
+            if (
+                sample.latest_wall >= self._view.expires_at
+                or sample.monotonic >= self._view.deadline_monotonic
+            ):
                 raise SnapshotError("channel policy has expired")
             return self._view
