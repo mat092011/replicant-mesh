@@ -324,6 +324,16 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
             binding.assert_live()
         self.assertEqual(len(calls), 1)
 
+    def test_runtime_configuration_accessor_rechecks_protected_pin(self):
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        runtime_path = self.protected / "runtime.json"
+        original = runtime_path.read_bytes()
+        self.assertEqual(binding.runtime_configuration_bytes, original)
+        self._private(runtime_path, original + b" ")
+        with self.assertRaises(CredentialError):
+            _ = binding.runtime_configuration_bytes
+
     def test_original_group_policy_expiry_invalidates_and_cannot_revive(self):
         store, binding = self._load()
         self.addCleanup(store.close)

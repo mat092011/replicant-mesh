@@ -217,6 +217,12 @@ class C2HostRuntimeBinding:
         self.assert_live()
         return self._host_tls
 
+    @property
+    def runtime_configuration_bytes(self):
+        """Return the pinned inert runtime bytes only while this binding is live."""
+        self.assert_live()
+        return self._runtime_bytes
+
     def install_policy(self, encoded: bytes):
         """Install a signed head only through the selected durable C2 store."""
         self.assert_refreshable()
