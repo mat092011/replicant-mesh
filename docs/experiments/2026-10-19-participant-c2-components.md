@@ -692,11 +692,13 @@ implementation failed all four assertions (no test errors or skips); the new
 implementation passed all four with zero errors or skips. The old run used two
 historical single-file overrides over a newer frozen image, so it is a hybrid
 causal comparison, not a baked-source proof. This compares the historical
-`1b`/`6994` implementation with the newer `4354` source. The logs are
+`1b`/`6994` implementation with the newer source at
+`435734c5a5d8b3296681a81112f13d554608040b`. The logs are
 `86dea0290f67877d312fade1dff13552bdc2bed53ec9be79d4ac4c4d5b9eb467` (old) and
 `e6f8cf8cda5c3a9d284aae56428f93392345bc5d72833bbe37871b31410c0527` (new).
-The new side used a 435-file source snapshot at `4354` and pinned image
-`sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`.
+The new side used a 437-file source snapshot with digest
+`0b33a9bce13b4acb5ecbf2ec207f5ce1a7b5631f318ff4b2066a28490e406b8e` and pinned
+image `sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`.
 
 A separate first-window causal probe also ran four deadline-retention tests.
 The old `60d` two-file hybrid failed all four expected-expiration assertions,
@@ -738,8 +740,12 @@ concurrent role-change epoch observation; the error was an invalid empty-role
 fixture. A later focused native probe passed 13 tests with zero skips, log
 SHA-256 `3b5328363a8cb2d3e4202dd7c169c4bf73324d02a84c6c4ed96b57d484d9618a`,
 on a 440-file source at `ef72979` with digest
-`eaa8fff820ba19787f73cfb1c8c1a4f95beb2b381988a889a52c6f6aeea62558`. Its
-source review is still pending and the implementation is not integrated or
+`eaa8fff820ba19787f73cfb1c8c1a4f95beb2b381988a889a52c6f6aeea62558`. The
+latest focused probe passed 14 tests with zero skips/failures/errors in 0.028
+seconds on 440-file source head `a0da6a95` with digest
+`5047a68fa5f0fddb9098ad945dda39a78828f36de573aad8b7a6886e342b9810`; its log
+SHA-256 is `12e962ae29b2ec427dbe0984b00082fbcb6eb686c1880204106429aef9c83e07`.
+Independent source review cleared that change, but it is not integrated or
 ready. No startup/readiness claim follows from the component inventory or
 these focused probes.
 
