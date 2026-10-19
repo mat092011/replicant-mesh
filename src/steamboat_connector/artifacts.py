@@ -132,8 +132,9 @@ class ArtifactInstaller:
         else:
             with self._mutating():
                 with self._locked():
-                    state = self._load_state(create=True)
-                    self._recover_reservations(state)
+                    state = self._load_state(create=True, allow_legacy=True)
+                    if state["version"] == 2:
+                        self._recover_reservations(state)
                     self._check_root_entries(state)
 
     def _locked(self):
@@ -156,22 +157,34 @@ class ArtifactInstaller:
 
     def _new_state(self):
         return {
-            "version": 1,
+            "version": 2,
             "trusted_key_id": self.verifier.key_id,
             "disk_ceiling_bytes": self.disk_ceiling_bytes,
             "disk_headroom_bytes": self.disk_headroom_bytes,
             "highest_catalog_revision": 0,
             "highest_catalog_sha256": None,
             "active": {"host": None, "coordinator": None},
+            "host_slots": {name: None for name in ("worker-1", "worker-2", "worker-3")},
             "installations": {},
             "reservations": {},
         }
 
-    def _validate_state(self, state):
+    def _validate_state(self, state, *, allow_legacy=False):
         fields = {"version", "trusted_key_id", "disk_ceiling_bytes", "disk_headroom_bytes",
                   "highest_catalog_revision", "highest_catalog_sha256", "active",
                   "installations", "reservations"}
-        if type(state) is not dict or set(state) != fields or type(state["version"]) is not int or state["version"] != 1:
+        if (type(state) is dict and state.get("version") == 1 and allow_legacy
+                and set(state) == fields):
+            legacy = True
+        else:
+            legacy = False
+        if (type(state) is dict and state.get("version") == 1 and not allow_legacy
+                and set(state) == fields):
+            raise ArtifactInstallError("legacy artifact state requires explicit migration")
+        expected = fields if legacy else fields | {"host_slots"}
+        if (type(state) is not dict or set(state) != expected
+                or type(state["version"]) is not int
+                or state["version"] != (1 if legacy else 2)):
             raise ArtifactInstallError("artifact install state is malformed; refusing use")
         if (state["trusted_key_id"] != self.verifier.key_id
                 or state["disk_ceiling_bytes"] != self.disk_ceiling_bytes
@@ -187,6 +200,9 @@ class ArtifactInstaller:
             raise ArtifactInstallError("artifact catalog high-water mark is invalid")
         if type(state["active"]) is not dict or set(state["active"]) != {"host", "coordinator"}:
             raise ArtifactInstallError("artifact active-role state is malformed")
+        if not legacy and (type(state["host_slots"]) is not dict
+                           or set(state["host_slots"]) != {"worker-1", "worker-2", "worker-3"}):
+            raise ArtifactInstallError("artifact host-slot state is malformed")
         if type(state["installations"]) is not dict or len(state["installations"]) > MAX_INSTALLATIONS:
             raise ArtifactInstallError("artifact installation inventory exceeds its bound")
         if type(state["reservations"]) is not dict or len(state["reservations"]) > MAX_INSTALLATIONS:
@@ -196,6 +212,16 @@ class ArtifactInstaller:
                 record = state["installations"].get(assignment_id)
                 if record is None or record.get("role") != role:
                     raise ArtifactInstallError("active artifact pointer has no matching installation")
+        if not legacy:
+            for component, assignment_id in state["host_slots"].items():
+                if assignment_id is not None:
+                    record = state["installations"].get(assignment_id)
+                    if record is None or record.get("role") != "host" or record.get("component") != component:
+                        raise ArtifactInstallError("active host slot has no matching installation")
+            if state["active"]["host"] is not None:
+                active_host_ids = set(state["host_slots"].values()) - {None}
+                if state["active"]["host"] not in active_host_ids:
+                    raise ArtifactInstallError("legacy host pointer is not an active host slot")
         for assignment_id, record in state["installations"].items():
             if (not valid_typed_id(assignment_id, "asg") or type(record) is not dict
                     or set(record) != {"role", "component", "catalog_revision", "catalog_sha256",
@@ -244,7 +270,7 @@ class ArtifactInstaller:
                 raise ArtifactInstallError("artifact staging reservation is malformed")
         return state
 
-    def _load_state(self, *, create=False):
+    def _load_state(self, *, create=False, allow_legacy=False):
         try:
             state = read_private_json(self._state_path(), maximum_size=65_536, uid=self.uid)
         except FileNotFoundError:
@@ -254,7 +280,30 @@ class ArtifactInstaller:
             self._write_state(state)
         except StorageError as error:
             raise ArtifactInstallError("artifact install state is unsafe or unreadable") from error
-        return self._validate_state(state)
+        return self._validate_state(state, allow_legacy=allow_legacy)
+
+    def migrate_state_v1(self):
+        """Explicitly migrate the legacy singleton-host state under the pin guard."""
+        with self._mutating(), self._locked():
+            try:
+                state = read_private_json(self._state_path(), maximum_size=65_536, uid=self.uid)
+            except (FileNotFoundError, StorageError) as error:
+                raise ArtifactInstallError("legacy artifact state is unavailable") from error
+            checked = self._validate_state(state, allow_legacy=True)
+            if checked["version"] != 1:
+                raise ArtifactInstallError("artifact state is not a legacy v1 state")
+            migrated = copy.deepcopy(checked)
+            migrated["version"] = 2
+            migrated["host_slots"] = {name: None for name in ("worker-1", "worker-2", "worker-3")}
+            old_host = migrated["active"]["host"]
+            if old_host is not None:
+                record = migrated["installations"].get(old_host)
+                if record is None or record.get("role") != "host" or record.get("component") not in migrated["host_slots"]:
+                    raise ArtifactInstallError("legacy host pointer cannot be assigned to a safe component slot")
+                migrated["host_slots"][record["component"]] = old_host
+            self._validate_state(migrated)
+            self._write_state(migrated)
+            return migrated
 
     def _write_state(self, state):
         try:
@@ -379,7 +428,9 @@ class ArtifactInstaller:
                 same = (existing["catalog_sha256"] == catalog.document_sha256
                         and existing["assignment_sha256"] == assignment.document_sha256
                         and existing["role"] == role and existing["component"] == component)
-                if not same or state["active"].get(role) != assignment_id:
+                active_id = (state["host_slots"].get(component) if role == "host"
+                             else state["active"].get(role))
+                if not same or active_id != assignment_id:
                     raise ArtifactInstallError("assignment identity already exists; explicit owner replacement required")
                 if self.monotonic_clock() >= deadline:
                     raise ArtifactInstallError("artifact install deadline exceeded")
@@ -453,6 +504,8 @@ class ArtifactInstaller:
                     "files": sorted(set(names) | {"signed-catalog.json", "signed-assignment.json"}),
                     "accounted_bytes": accounted_bytes,
                 }
+                if role == "host":
+                    committed_state["host_slots"][component] = assignment_id
                 committed_state["active"][role] = assignment_id
                 committed_state["highest_catalog_revision"] = catalog.payload["catalog_revision"]
                 committed_state["highest_catalog_sha256"] = catalog.document_sha256
@@ -580,6 +633,8 @@ class ArtifactInstaller:
             raise ArtifactInstallError("role must be stopped before deactivation")
         with self._mutating(), self._locked():
             state = self._load_state()
+            if role == "host":
+                state["host_slots"] = {name: None for name in state["host_slots"]}
             state["active"][role] = None
             self._write_state(state)
 
@@ -591,7 +646,10 @@ class ArtifactInstaller:
             record = state["installations"].get(assignment_id)
             if record is None:
                 return False
-            if state["active"].get(record["role"]) == assignment_id:
+            active = (assignment_id in state["host_slots"].values()
+                      if record["role"] == "host"
+                      else state["active"].get(record["role"]) == assignment_id)
+            if active:
                 raise ArtifactInstallError("active installation cannot be removed")
             root_fd = open_private_directory(self.root, uid=self.uid)
             try:
@@ -611,7 +669,10 @@ class ArtifactInstaller:
         with self._locked():
             state = self._load_state()
             record = state["installations"].get(assignment_id)
-            if record is None or state["active"].get(role) != assignment_id:
+            active_id = (state["host_slots"].get(record.get("component"))
+                         if record is not None and role == "host"
+                         else state["active"].get(role))
+            if record is None or record.get("role") != role or active_id != assignment_id:
                 raise ArtifactInstallError("no active approved artifact installation for role")
             view = AssignedArtifactView(self, assignment_id, account_id=account_id,
                                         device_id=device_id, role=role, now=now)

@@ -140,8 +140,11 @@ class AssignedArtifactView:
     def _verify_unlocked(self, state, record):
         if self.role not in {"host", "coordinator"}:
             raise AssignedArtifactError("consumer roles do not load model artifacts")
+        active_id = (state["host_slots"].get(record.get("component"))
+                     if self.role == "host" and type(state.get("host_slots")) is dict
+                     else state["active"].get(self.role))
         if (record["role"] != self.role
-                or state["active"].get(self.role) != self.assignment_id
+                or active_id != self.assignment_id
                 or state["installations"].get(self.assignment_id) != record):
             raise AssignedArtifactError("assignment is not the active role installation")
         directory = self.installer.root / record["directory"]
@@ -168,6 +171,10 @@ class AssignedArtifactView:
                     or assignment.payload["manifest_fingerprint"] != record["manifest_fingerprint"]):
                 raise AssignedArtifactError("installed catalog does not match persistent anti-rollback state")
             component = assignment.payload["component"]
+            if record["component"] != component:
+                raise AssignedArtifactError("installed component differs from signed assignment")
+            if self.role == "host" and state["host_slots"].get(component) != self.assignment_id:
+                raise AssignedArtifactError("host assignment is not active in its signed component slot")
             names = required_artifact_names(self.role, component)
             if record["files"] != sorted(set(names) | {
                     "signed-catalog.json", "signed-assignment.json"}):

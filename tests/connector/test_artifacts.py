@@ -545,9 +545,11 @@ class AssignedRuntimeIdentityTests(unittest.TestCase):
 
     def test_open_view_now_is_only_the_initial_validation_snapshot(self):
         assignment_id = f"asg_{'7' * 32}"
-        record = {"role": "host"}
+        record = {"role": "host", "component": "worker-1"}
         state = {"installations": {assignment_id: record},
-                 "active": {"host": assignment_id, "coordinator": None}}
+                 "active": {"host": assignment_id, "coordinator": None},
+                 "host_slots": {"worker-1": assignment_id,
+                                "worker-2": None, "worker-3": None}}
         clock = {"now": _NOW}
         installer = SimpleNamespace(
             _locked=lambda: nullcontext(),
@@ -626,10 +628,16 @@ class AssignedRuntimeIdentityTests(unittest.TestCase):
                 assignment = verifier.verify_assignment(
                     assignment_bytes, catalog, account_id=_ACCOUNT,
                     device_id=_DEVICE, role=role, now=_NOW)
-                record = {"role": role}
+                record = {"role": role, "component": component}
                 state = {"installations": {assignment_id: record},
-                         "active": {"host": None, "coordinator": None}}
-                state["active"][role] = assignment_id
+                         "active": {"host": None, "coordinator": None},
+                         "host_slots": {"worker-1": None, "worker-2": None,
+                                        "worker-3": None}}
+                if role == "host":
+                    state["host_slots"][component] = assignment_id
+                    state["active"][role] = assignment_id
+                else:
+                    state["active"][role] = assignment_id
                 installer = SimpleNamespace(
                     _locked=lambda: nullcontext(),
                     _load_state=lambda: state,
@@ -763,6 +771,67 @@ class ArtifactInstallerTests(unittest.TestCase):
         state = reopened._load_state()
         self.assertEqual(state["highest_catalog_revision"], 1)
         self.assertEqual(state["active"]["host"], result.assignment_id)
+
+    def test_three_host_components_share_one_store_and_activate_exact_slots(self):
+        installed = {}
+        for index, component in enumerate(("worker-1", "worker-2", "worker-3"), 1):
+            catalog_bytes, assignment_bytes, retriever = self._install_input(
+                component=component, assignment_id=f"asg_{index:032x}")
+            installed[component] = self.installer.install(
+                catalog_bytes, assignment_bytes, retriever, account_id=_ACCOUNT,
+                device_id=_DEVICE, role="host")
+        state = self.installer._load_state()
+        self.assertEqual(state["host_slots"], {
+            name: installed[name].assignment_id for name in installed})
+        self.assertEqual(len(state["installations"]), 3)
+        self.assertEqual(self.installer._used_bytes(state),
+                         sum(item["accounted_bytes"] for item in state["installations"].values()))
+
+        replacement_inputs = self._install_input(
+            component="worker-2", assignment_id=f"asg_{'f' * 32}")
+        replacement = self.installer.install(
+            *replacement_inputs[:2], replacement_inputs[2], account_id=_ACCOUNT,
+            device_id=_DEVICE, role="host")
+        state = self.installer._load_state()
+        self.assertEqual(state["host_slots"]["worker-1"], installed["worker-1"].assignment_id)
+        self.assertEqual(state["host_slots"]["worker-2"], replacement.assignment_id)
+        self.assertEqual(state["host_slots"]["worker-3"], installed["worker-3"].assignment_id)
+        with self.assertRaises(ArtifactInstallError):
+            self.installer.remove_installation(installed["worker-1"].assignment_id,
+                                               compute_stopped=True)
+        with self.assertRaises(ArtifactInstallError):
+            self.installer.remove_installation(installed["worker-3"].assignment_id,
+                                               compute_stopped=True)
+        self.installer.deactivate("host", compute_stopped=True)
+        self.assertEqual(set(self.installer._load_state()["host_slots"].values()), {None})
+
+    def test_v1_state_requires_explicit_guarded_migration(self):
+        catalog_bytes, assignment_bytes, retriever = self._install_input(
+            assignment_id=f"asg_{'a' * 32}")
+        result = self.installer.install(catalog_bytes, assignment_bytes, retriever,
+                                        account_id=_ACCOUNT, device_id=_DEVICE, role="host")
+        state = self.installer._load_state()
+        legacy = copy.deepcopy(state)
+        legacy["version"] = 1
+        legacy.pop("host_slots")
+        from steamboat_connector.storage import atomic_write_json
+        atomic_write_json(self.root / artifacts_module.INSTALL_STATE_FILENAME, legacy)
+        with self.assertRaisesRegex(ArtifactInstallError, "explicit migration"):
+            ArtifactInstaller(
+                self.root, self.verifier, disk_ceiling_bytes=64 * 1024 * 1024,
+                disk_headroom_bytes=16 * 1024 * 1024, wall_clock=lambda: _NOW,
+                read_only=True)
+        migration_owner = ArtifactInstaller(
+            self.root, self.verifier, disk_ceiling_bytes=64 * 1024 * 1024,
+            disk_headroom_bytes=16 * 1024 * 1024, wall_clock=lambda: _NOW)
+        with self.assertRaisesRegex(ArtifactInstallError, "explicit migration"):
+            migration_owner._load_state()
+        migrated = migration_owner.migrate_state_v1()
+        self.assertEqual(migrated["version"], 2)
+        self.assertEqual(migrated["host_slots"]["worker-1"], result.assignment_id)
+        self.assertEqual(migrated["highest_catalog_revision"], legacy["highest_catalog_revision"])
+        self.assertEqual(migrated["installations"], legacy["installations"])
+        self.assertEqual(migrated["reservations"], legacy["reservations"])
 
     def test_existing_install_revalidates_after_cross_process_lock_wait(self):
         inputs = self._install_input(assignment_id=f"asg_{'1' * 32}")
@@ -1821,9 +1890,11 @@ class AssignedModelIntegrationTests(unittest.TestCase):
                         path = directory / name
                         path.write_bytes(data)
                         os.chmod(path, 0o600)
-                    record = {"role": "host"}
+                    record = {"role": "host", "component": component}
                     state = {"installations": {assignment_id: record},
-                             "active": {"host": assignment_id, "coordinator": None}}
+                             "active": {"host": assignment_id, "coordinator": None},
+                             "host_slots": {name: assignment_id if name == component else None
+                                            for name in ("worker-1", "worker-2", "worker-3")}}
                     installer = SimpleNamespace(
                         _locked=lambda: nullcontext(),
                         _load_state=lambda: state,
