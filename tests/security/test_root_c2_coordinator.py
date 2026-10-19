@@ -175,7 +175,8 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
         self.addCleanup(store.close)
         payload = json.loads(self.fx.active)["payload"]
         payload["revision"] += 1
-        payload["issued_at"] = int(self.fx.wall)
+        # Preserve the original valid issuance time so this tests the expiry
+        # floor and the first widened-uncertainty guard remains admissible.
         payload["expires_at"] = int(self.fx.wall) + 40
         short_head = sign_snapshot(payload, self.fx.fx.new_snapshot_key)
         binding.install_policy(short_head)

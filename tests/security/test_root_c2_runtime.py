@@ -148,7 +148,8 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
                            uncertainty_seconds=lambda: self.uncertainty)
         group_ttl = 300 if self._testMethodName in {
             "test_channel_wall_expiry_rejects_clock_drift_even_before_monotonic_deadline",
-            "test_final_uncertainty_deadline_is_retained_across_clock_drift"} else 60
+            "test_final_uncertainty_deadline_is_retained_across_clock_drift",
+            "test_final_uncertainty_retains_channel_monotonic_deadline"} else 60
         if self._testMethodName == "test_final_uncertainty_retains_group_policy_deadline":
             group_ttl = 70
         self._build(group_ttl=group_ttl)
@@ -498,7 +499,8 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         self.addCleanup(store.close)
         payload = json.loads(self.active)["payload"]
         payload["revision"] += 1
-        payload["issued_at"] = int(self.wall)
+        # Keep the original valid issuance time. The widened uncertainty on
+        # the final guard must cross expiry, not fail a not-before check.
         payload["expires_at"] = int(self.wall) + 40
         short_head = sign_snapshot(payload, self.fx.new_snapshot_key)
         binding.install_policy(short_head)
