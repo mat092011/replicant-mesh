@@ -56,7 +56,7 @@ class _IngressState:
     lock: threading.RLock = field(default_factory=threading.RLock)
     closed: bool = False
     faulted: bool = False
-    next_sequence: int = 1
+    next_sequence: dict = field(default_factory=lambda: {"data": 1, "control": 1})
     last_heartbeat: float = 0.0
     deadline: float = 0.0
 
@@ -304,7 +304,7 @@ class GatewayWorkerIngress:
 
     def heartbeat(self, generation: str, sequence: int):
         with self._state.lock:
-            self._consume_locked(generation, sequence)
+            self._consume_locked(generation, sequence, "control")
             try:
                 _view, _worker, _gateway, sample = self._policy_and_worker()
                 if (sample.monotonic >= self._state.deadline
@@ -318,17 +318,18 @@ class GatewayWorkerIngress:
                                    else "gateway-clock-fault")
                 raise GatewayIngressError("gateway heartbeat could not be accepted") from error
 
-    def _consume_locked(self, generation, sequence):
+    def _consume_locked(self, generation, sequence, lane):
         if self._state.closed or self._state.faulted:
             raise GatewayIngressError("gateway TLS generation is closed")
-        if (generation != self.stream_generation
-                or type(sequence) is not int or sequence != self._state.next_sequence
+        if (generation != self.stream_generation or lane not in {"data", "control"}
+                or type(sequence) is not int or sequence != self._state.next_sequence[lane]
                 or sequence > MAX_FRAME_SEQUENCE):
             self._close_locked("gateway-invalid-frame")
             raise GatewayIngressError("gateway frame generation or sequence is invalid")
-        self._state.next_sequence += 1
+        self._state.next_sequence[lane] += 1
 
-    def verify_operation(self, envelope, metadata, raw_request_bytes, frame_sequence):
+    def verify_operation(self, envelope, metadata, raw_request_bytes, frame_sequence,
+                         wire_lane):
         with self._state.lock:
             try:
                 _view, _worker, _gateway, sample = self._policy_and_worker()
@@ -336,12 +337,18 @@ class GatewayWorkerIngress:
                         or sample.monotonic - self._state.last_heartbeat
                         >= HEARTBEAT_TIMEOUT_SECONDS):
                     raise GatewayIngressError("gateway ingress is unavailable")
-                self._consume_locked(self.stream_generation, frame_sequence)
+                if (wire_lane not in {"data", "control"}
+                        or type(frame_sequence) is not int
+                        or frame_sequence != self._state.next_sequence.get(wire_lane)):
+                    self._close_locked("gateway-invalid-frame")
+                    raise GatewayIngressError("gateway lane sequence is invalid")
                 delegation = self.verifier.verify(
                     envelope, gateway_peer_certificate_pem=self.gateway_certificate_pem,
                     metadata=metadata, request_bytes=raw_request_bytes,
                     expected_stream_generation=self.stream_generation,
-                    expected_frame_sequence=frame_sequence)
+                    expected_frame_sequence=frame_sequence,
+                    expected_lane=wire_lane)
+                self._consume_locked(self.stream_generation, frame_sequence, wire_lane)
                 if delegation.ingress_identity != self.ingress_identity:
                     raise GatewayIngressError("delegation escaped its TLS generation")
                 _view, _worker, _gateway, sample = self._policy_and_worker()

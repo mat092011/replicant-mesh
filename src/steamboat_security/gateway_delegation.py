@@ -35,7 +35,7 @@ from .errors import SecurityError
 from .ids import validate_boot, validate_id
 from .authorization import LocalIdentity
 
-DOMAIN = b"steamboat-gateway-delegation-v1\0"
+DOMAIN = b"steamboat-gateway-delegation-v2\0"
 MAX_DELEGATION_BYTES = 32 * 1024
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_DELEGATION_SECONDS = 300
@@ -46,7 +46,7 @@ _FIELDS = frozenset({
     "gateway_certificate_sha256", "actor_certificate_base64",
     "coordinator_boot_id", "tenant_account_id", "target_device_id",
     "worker_boot_id", "assignment_id", "model_id", "stream_generation",
-    "frame_sequence", "service", "method", "binding_sha256",
+    "lane", "frame_sequence", "service", "method", "binding_sha256",
     "request_sha256", "issued_at", "expires_at",
 })
 _ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
@@ -59,8 +59,10 @@ class DelegationError(SecurityError):
 def _validate_payload(payload):
     if type(payload) is not dict or set(payload) != _FIELDS:
         raise DelegationError("delegation payload has unknown or missing fields")
-    if type(payload["version"]) is not int or payload["version"] != 1:
+    if type(payload["version"]) is not int or payload["version"] != 2:
         raise DelegationError("unsupported delegation version")
+    if type(payload["lane"]) is not str or payload["lane"] not in {"data", "control"}:
+        raise DelegationError("invalid delegation lane")
     if type(payload["policy_revision"]) is not int or payload["policy_revision"] < 1:
         raise DelegationError("invalid policy revision")
     if type(payload["frame_sequence"]) is not int or not 1 <= payload["frame_sequence"] <= 2**63 - 1:
@@ -197,7 +199,8 @@ class GatewayDelegationVerifier:
         self.endpoint_host, self.endpoint_port = endpoint_host, endpoint_port
 
     def _verify(self, envelope, *, gateway_peer_certificate_pem, metadata,
-                request_bytes, expected_stream_generation, expected_frame_sequence):
+                request_bytes, expected_stream_generation, expected_frame_sequence,
+                expected_lane):
         if type(envelope) is not bytes or not 1 <= len(envelope) <= MAX_DELEGATION_BYTES:
             raise DelegationError("delegation envelope exceeds its byte bound")
         if type(request_bytes) is not bytes or len(request_bytes) > MAX_REQUEST_BYTES:
@@ -258,6 +261,11 @@ class GatewayDelegationVerifier:
             raise DelegationError("gateway signature does not verify under authenticated TLS leaf") from error
 
         binding = parse_metadata(WORKER_SERVICE, payload["method"], metadata)
+        expected_method_lane = ("control" if payload["method"] in
+                                {"CloseSession", "CancelSession", "SessionStatus"}
+                                else "data")
+        if payload["lane"] != expected_method_lane or expected_lane != expected_method_lane:
+            raise DelegationError("signed, wire, and method lanes differ")
         if (payload["service"] != WORKER_SERVICE
                 or payload["binding_sha256"] != hashlib.sha256(binding.encoded).hexdigest()
                 or payload["request_sha256"] != hashlib.sha256(request_bytes).hexdigest()):
@@ -346,13 +354,15 @@ class GatewayDelegationVerifier:
         return out
 
     def verify(self, envelope, *, gateway_peer_certificate_pem, metadata,
-               request_bytes, expected_stream_generation, expected_frame_sequence):
+               request_bytes, expected_stream_generation, expected_frame_sequence,
+               expected_lane):
         try:
             return self._verify(
                 envelope, gateway_peer_certificate_pem=gateway_peer_certificate_pem,
                 metadata=metadata, request_bytes=request_bytes,
                 expected_stream_generation=expected_stream_generation,
-                expected_frame_sequence=expected_frame_sequence)
+                expected_frame_sequence=expected_frame_sequence,
+                expected_lane=expected_lane)
         except DelegationError:
             raise
         except Exception as error:

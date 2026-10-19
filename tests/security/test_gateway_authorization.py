@@ -69,6 +69,7 @@ class GatewayAuthorizationTests(unittest.TestCase):
             session_bindings=self.ingress_fixture.sessions,
             worker_request_type=PortableParsedRequest)
         self.next_sequence = 1
+        self.lane_sequences = {"data": 1, "control": 1}
 
     def _snapshot_payload(self, *, revision=1, grants=None, revoked_serials=()):
         f = self.fixture
@@ -149,13 +150,19 @@ class GatewayAuthorizationTests(unittest.TestCase):
         raw_bytes = payload.SerializeToString(deterministic=True) if raw_bytes is None else raw_bytes
         ingress = ingress or self.ingress_fixture.ingress
         if sequence is None:
-            sequence = self.next_sequence
-            self.next_sequence += 1
+            lane = ("control" if method in {"CloseSession", "CancelSession", "SessionStatus"}
+                    else "data")
+            sequence = self.lane_sequences[lane]
+            self.lane_sequences[lane] += 1
+        else:
+            lane = ("control" if method in {"CloseSession", "CancelSession", "SessionStatus"}
+                    else "data")
         envelope = self.fixture.make_delegation(changes={
             "policy_revision": ingress.policy_revision,
             "policy_digest": ingress.policy_digest,
             "stream_generation": ingress.stream_generation,
             "frame_sequence": sequence, "service": WORKER_SERVICE,
+            "lane": lane,
             "method": method,
             "binding_sha256": hashlib.sha256(binding_bytes).hexdigest(),
             "request_sha256": hashlib.sha256(raw_bytes).hexdigest(),
@@ -163,7 +170,7 @@ class GatewayAuthorizationTests(unittest.TestCase):
         return self.authorizer.authorize_gateway(
             service, method, payload, metadata,
             ingress=ingress, envelope=envelope,
-            request_bytes=raw_bytes, frame_sequence=sequence)
+            request_bytes=raw_bytes, frame_sequence=sequence, wire_lane=lane)
 
     @staticmethod
     def _response(auth, *, lease="lease_token_0123456789", reclaimed=False):
@@ -236,6 +243,46 @@ class GatewayAuthorizationTests(unittest.TestCase):
         with self.assertRaises(CredentialError):
             self._authorize_gateway(operation_id="op_" + "9" * 32)
 
+    def test_c1_denial_consumes_signed_data_lane_attempt(self):
+        self._install_snapshot(grants=[])
+        ingress = self.ingress_fixture.ingress
+        with self.assertRaises(ScopeError):
+            self._authorize_gateway()
+        self.assertEqual(ingress._state.next_sequence["data"], 2)
+        self.assertEqual(ingress._state.next_sequence["control"], 1)
+
+    def test_cross_lane_operation_id_replay_uses_shared_c1_table(self):
+        op_id = "op_" + "c" * 32
+        opened = self._authorize_gateway("OpenSession", operation_id=op_id)
+        with self.assertRaises(ScopeError):
+            self._authorize_gateway("CancelSession", operation_id=op_id,
+                                    payload=self._payload(
+                                        "CancelSession", lease_token="lease_token_0123456789"))
+        self.assertEqual(self.ingress_fixture.ingress._state.next_sequence["data"], 2)
+        self.assertEqual(self.ingress_fixture.ingress._state.next_sequence["control"], 2)
+        opened.fail(cache_may_exist=False)
+
+    def test_preopen_cancel_is_denied_and_late_step_after_cancel_stays_terminal(self):
+        with self.assertRaises(SessionError):
+            self._authorize_gateway("CancelSession", payload=self._payload(
+                "CancelSession", lease_token="lease_token_0123456789"))
+        opened = self._authorize_gateway(operation_id="op_" + "a" * 32)
+        opened.complete(self._response(opened))
+        fields = dict(parse_metadata(WORKER_SERVICE, "OpenSession",
+                                     self.fixture.metadata).fields)
+        fields["operation_id"] = "op_" + "d" * 32
+        cancel = self._authorize_gateway(
+            "CancelSession", payload=self._payload(
+                "CancelSession", lease_token="lease_token_0123456789"),
+            binding_bytes=encode_binding(WORKER_SERVICE, "CancelSession", fields))
+        cancel.complete(self._response(cancel, reclaimed=True))
+        fields["operation_id"] = "op_" + "e" * 32
+        step = self._payload("Step", lease_token="lease_token_0123456789")
+        with self.assertRaises(SessionError):
+            self._authorize_gateway(
+                "Step", payload=step,
+                binding_bytes=encode_binding(WORKER_SERVICE, "Step", fields))
+
     def test_raw_payload_mismatch_rejects_and_closes_the_ingress(self):
         payload = self._payload()
         with self.assertRaises(BindingError):
@@ -253,7 +300,7 @@ class GatewayAuthorizationTests(unittest.TestCase):
             self.authorizer.authorize_gateway(
                 WORKER_SERVICE, "OpenSession", self._payload(), self.fixture.metadata,
                 ingress=SimpleNamespace(), envelope=b"x", request_bytes=b"x",
-                frame_sequence=1)
+                frame_sequence=1, wire_lane="data")
 
     def test_replay_uses_shared_c1_replay_table_and_direct_cannot_adopt_gateway_session(self):
         fields = dict(parse_metadata(WORKER_SERVICE, "OpenSession",

@@ -11,7 +11,7 @@ from unittest.mock import patch
 from datetime import datetime, timezone
 
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from steamboat_security.authorization import LocalIdentity
@@ -23,6 +23,7 @@ from steamboat_security.channel_certificates import (issue_channel_certificate,
 from steamboat_security.channel_policy import ChannelPolicyStore, sign_channel_policy
 from steamboat_security.clock import Clock, ClockSample
 from steamboat_security.codec import METADATA_KEY, WORKER_SERVICE, encode_binding
+from steamboat_security.codec import canonical_json
 from steamboat_security.errors import SecurityError
 from steamboat_security.gateway_delegation import (DOMAIN, DelegationError,
     GatewayDelegationVerifier, sign_gateway_delegation)
@@ -140,14 +141,17 @@ class GatewayDelegationTests(unittest.TestCase):
 
     def make_delegation(self, *, changes=None, signer=None):
         payload = {
-            "version": 1, "policy_revision": self.view.revision,
+            "version": 2, "policy_revision": self.view.revision,
             "policy_digest": self.view.policy_digest, "gateway_id": "gw-east",
             "gateway_certificate_sha256": self.payload["gateways"][0]["certificate_sha256"],
             "actor_certificate_base64": base64.b64encode(self.actor_pem).decode("ascii"),
             "coordinator_boot_id": COORD_BOOT, "tenant_account_id": ACTOR_ACCOUNT,
             "target_device_id": WORKER_DEVICE, "worker_boot_id": WORKER_BOOT,
             "assignment_id": ASSIGNMENT, "model_id": MODEL,
-            "stream_generation": GENERATION, "frame_sequence": 1,
+            "stream_generation": GENERATION,
+            "lane": ("control" if (changes or {}).get("method", "OpenSession") in
+                     {"CloseSession", "CancelSession", "SessionStatus"} else "data"),
+            "frame_sequence": 1,
             "service": WORKER_SERVICE, "method": "OpenSession",
             "binding_sha256": hashlib.sha256(self.binding).hexdigest(),
             "request_sha256": hashlib.sha256(self.request).hexdigest(),
@@ -160,7 +164,8 @@ class GatewayDelegationTests(unittest.TestCase):
         args = dict(gateway_peer_certificate_pem=self.gateway_pem,
                     metadata=self.metadata, request_bytes=self.request,
                     expected_stream_generation=GENERATION,
-                    expected_frame_sequence=1)
+                    expected_frame_sequence=1,
+                    expected_lane="data")
         args.update(kwargs)
         return self.verifier.verify(self.delegation if envelope is None else envelope, **args)
 
@@ -169,7 +174,7 @@ class GatewayDelegationTests(unittest.TestCase):
         self.assertEqual(verified.ingress_identity,
             ("gateway-v1", self.payload["gateways"][0]["certificate_sha256"], GENERATION))
         self.assertTrue(verified.assert_live(self.verifier))
-        self.assertEqual(DOMAIN, b"steamboat-gateway-delegation-v1\0")
+        self.assertEqual(DOMAIN, b"steamboat-gateway-delegation-v2\0")
 
     def test_describe_binding_accepts_both_schema_forms_and_still_pins_route(self):
         base = {
@@ -236,7 +241,7 @@ class GatewayDelegationTests(unittest.TestCase):
     def test_envelope_canonicality_signature_domain_and_key_binding(self):
         valid = self.delegation
         for raw in (valid + b" ", b"x" * 32769,
-                    valid.replace(b'"version":1', b'"version":true', 1)):
+                    valid.replace(b'"version":2', b'"version":true', 1)):
             with self.subTest(length=len(raw)), self.assertRaises(SecurityError):
                 self.verify(raw)
         other = generate_private_key_pem()
@@ -251,6 +256,32 @@ class GatewayDelegationTests(unittest.TestCase):
         envelope["signature"] = base64.b64encode(encode_dss_signature(r, order - s)).decode()
         with self.assertRaises(SecurityError):
             self.verify(json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode())
+
+    def test_version_one_and_previous_domain_have_no_fallback(self):
+        payload = json.loads(self.delegation)["payload"]
+        legacy = dict(payload, version=1)
+        with self.assertRaises(SecurityError):
+            self.verify(canonical_json({
+                "payload": legacy,
+                "signature": json.loads(self.delegation)["signature"],
+            }))
+
+        key = serialization.load_pem_private_key(self.gateway_key, password=None)
+        signature = key.sign(
+            b"steamboat-gateway-delegation-v1\0" + canonical_json(payload),
+            ec.ECDSA(hashes.SHA256()))
+        from cryptography.hazmat.primitives.asymmetric.utils import (
+            decode_dss_signature, encode_dss_signature)
+        r, s = decode_dss_signature(signature)
+        order = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+        if s > order // 2:
+            signature = encode_dss_signature(r, order - s)
+        old_domain = canonical_json({
+            "payload": payload,
+            "signature": base64.b64encode(signature).decode("ascii"),
+        })
+        with self.assertRaises(SecurityError):
+            self.verify(old_domain)
 
     def test_policy_replacement_and_clock_uncertainty_widening_fail_closed(self):
         verified = self.verify()

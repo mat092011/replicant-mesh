@@ -187,12 +187,12 @@ class _IncomingAuthorizer:
             peer_certificate_pem=peer_certificate_pem)
 
     def authorize_gateway(self, *, service, method, payload, metadata, ingress,
-                          envelope, request_bytes, frame_sequence):
+                          envelope, request_bytes, frame_sequence, wire_lane):
         """Admit a gateway request through the core Authorizer's owned ingress."""
         return self._bridge._authorize(
             service=service, method=method, payload=payload, metadata=metadata,
             ingress=ingress, envelope=envelope, request_bytes=request_bytes,
-            frame_sequence=frame_sequence)
+            frame_sequence=frame_sequence, wire_lane=wire_lane)
 
 
 class _BoundWorkerHandler:
@@ -476,7 +476,7 @@ class SecureWorkerRuntimeBridge:
 
     def _authorize(self, *, service, method, payload, metadata,
                    peer_certificate_pem=None, ingress=None, envelope=None,
-                   request_bytes=None, frame_sequence=None):
+                   request_bytes=None, frame_sequence=None, wire_lane=None):
         self._assert_loop()
         if service != WORKER_SERVICE:
             raise RuntimeBindingError("runtime bridge accepts only the worker service")
@@ -492,7 +492,7 @@ class SecureWorkerRuntimeBridge:
                 core_authorization = self.authorizer_core.authorize_gateway(
                     service, method, payload, metadata, ingress=ingress,
                     envelope=envelope, request_bytes=request_bytes,
-                    frame_sequence=frame_sequence)
+                    frame_sequence=frame_sequence, wire_lane=wire_lane)
                 if core_authorization.payload is not payload:
                     raise RuntimeBindingError(
                         "gateway authorization changed the captured parsed Request object")

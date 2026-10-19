@@ -597,7 +597,8 @@ class Authorizer:
 
     def authorize_gateway(self, service: str, method: str, payload: Any,
                           metadata, *, ingress, envelope: bytes,
-                          request_bytes: bytes, frame_sequence: int) -> Authorization:
+                          request_bytes: bytes, frame_sequence: int,
+                          wire_lane: str) -> Authorization:
         """Admit a single delegated request from one owned gateway TLS stream.
 
         This method is the only core boundary for gateway requests. It mints
@@ -635,7 +636,7 @@ class Authorizer:
             # precedes admission or observes and invalidates the completed claim.
             with ingress.admission_transaction():
                 guard = ingress.verify_operation(
-                    envelope, metadata, request_bytes, frame_sequence)
+                    envelope, metadata, request_bytes, frame_sequence, wire_lane)
                 if type(guard) is not GatewayOperationGuard:
                     raise GatewayIngressError(
                         "ingress did not mint its concrete operation guard")

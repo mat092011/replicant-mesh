@@ -57,9 +57,12 @@ separate control lane lets a cleanup reply complete while a large Step response
 is still fragmented. HELLO/CLOSE are at most 4 KiB and HEARTBEAT at most 64
 bytes. Those control messages are single logical messages; they may be
 fragmented where necessary. Step and renewal cannot borrow cleanup credit.
-Transport fragment counters and signed logical-operation counters are distinct;
-neither is reconstructed from the other, and both must be validated by their
-respective owners before dispatch.
+The transport fragment counter is global to the TLS generation and remains
+strictly increasing across all fragment kinds and lanes. Signed logical
+operation counters are separate: delegation v2 has independent data and control
+counters, each beginning at one for each ingress generation. Neither counter is
+reconstructed from the other; each owner validates its own counter before
+dispatch. Heartbeats share the control FIFO and logical counter.
 
 ## Queues, cancellation and accounting
 

@@ -60,13 +60,19 @@ class GatewayRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         raw = payload.SerializeToString(deterministic=True)
         ingress = ingress or f.ingress_fixture.ingress
         if sequence is None:
-            sequence = f.next_sequence
-            f.next_sequence += 1
+            lane = ("control" if method in {"CloseSession", "CancelSession", "SessionStatus"}
+                    else "data")
+            sequence = f.lane_sequences[lane]
+            f.lane_sequences[lane] += 1
+        else:
+            lane = ("control" if method in {"CloseSession", "CancelSession", "SessionStatus"}
+                    else "data")
         changes = {
             "policy_revision": ingress.policy_revision,
             "policy_digest": ingress.policy_digest,
             "stream_generation": ingress.stream_generation,
             "frame_sequence": sequence,
+            "lane": lane,
             "service": WORKER_SERVICE,
             "method": method,
             "binding_sha256": hashlib.sha256(binding).hexdigest(),
@@ -78,7 +84,7 @@ class GatewayRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         authorization = self.bridge.incoming_authorizer.authorize_gateway(
             service=WORKER_SERVICE, method=method, payload=payload,
             metadata=metadata, ingress=ingress, envelope=envelope,
-            request_bytes=raw, frame_sequence=sequence)
+            request_bytes=raw, frame_sequence=sequence, wire_lane=lane)
         self.assertIs(authorization._operation.request, payload)
         return payload, authorization
 
@@ -355,20 +361,24 @@ class GatewayRuntimeNativeHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         def admit(method, request, binding):
             raw = request.SerializeToString(deterministic=True)
-            sequence = f.next_sequence
-            f.next_sequence += 1
+            lane = ("control" if method in {"CloseSession", "CancelSession", "SessionStatus"}
+                    else "data")
+            sequence = f.lane_sequences[lane]
+            f.lane_sequences[lane] += 1
             envelope = f.fixture.make_delegation(changes={
                 "policy_revision": ingress.policy_revision,
                 "policy_digest": ingress.policy_digest,
                 "stream_generation": ingress.stream_generation,
                 "frame_sequence": sequence, "service": WORKER_SERVICE,
+                "lane": lane,
                 "method": method, "binding_sha256": hashlib.sha256(binding).hexdigest(),
                 "request_sha256": hashlib.sha256(raw).hexdigest(),
             })
             auth = bridge.incoming_authorizer.authorize_gateway(
                 service=WORKER_SERVICE, method=method, payload=request,
                 metadata=(("steamboat-binding-bin", binding),), ingress=ingress,
-                envelope=envelope, request_bytes=raw, frame_sequence=sequence)
+                envelope=envelope, request_bytes=raw, frame_sequence=sequence,
+                wire_lane=lane)
             pending.append(auth)
             return auth
 

@@ -446,6 +446,72 @@ class GatewayIngressTests(unittest.TestCase):
         with self.assertRaises(GatewayIngressError):
             self.ingress.heartbeat(self.ingress.stream_generation, 1)
 
+    def test_control_heartbeats_do_not_advance_first_data_attempt(self):
+        for sequence in range(1, 19):
+            self.assertTrue(self.ingress.heartbeat(
+                self.ingress.stream_generation, sequence))
+        envelope = self.fixture.make_delegation(changes={
+            "policy_revision": self.ingress.policy_revision,
+            "policy_digest": self.ingress.policy_digest,
+            "stream_generation": self.ingress.stream_generation,
+            "frame_sequence": 1,
+            "lane": "data",
+        })
+        guard = self.ingress.verify_operation(
+            envelope, self.fixture.metadata, self.fixture.request, 1, "data")
+        self.assertTrue(guard.assert_live())
+
+    def test_lane_sequence_accepts_exact_maximum_then_retires_without_wrap(self):
+        from steamboat_security.gateway_ingress import MAX_FRAME_SEQUENCE
+        self.ingress._state.next_sequence["control"] = MAX_FRAME_SEQUENCE
+        self.assertTrue(self.ingress.heartbeat(
+            self.ingress.stream_generation, MAX_FRAME_SEQUENCE))
+        with self.assertRaises(GatewayIngressError):
+            self.ingress.heartbeat(self.ingress.stream_generation, MAX_FRAME_SEQUENCE + 1)
+        self.assertTrue(self.ingress._state.closed)
+
+    def test_wire_lane_mismatch_retires_generation_before_guard(self):
+        envelope = self.fixture.make_delegation(changes={
+            "policy_revision": self.ingress.policy_revision,
+            "policy_digest": self.ingress.policy_digest,
+            "stream_generation": self.ingress.stream_generation,
+            "frame_sequence": 1,
+            "lane": "data",
+        })
+        with self.assertRaises(GatewayIngressError):
+            self.ingress.verify_operation(
+                envelope, self.fixture.metadata, self.fixture.request, 1, "control")
+        self.assertTrue(self.ingress._state.closed)
+        self.assertEqual(len(self.ingress._guards), 0)
+
+    def test_signed_lane_mismatch_retires_generation(self):
+        envelope = self.fixture.make_delegation(changes={
+            "policy_revision": self.ingress.policy_revision,
+            "policy_digest": self.ingress.policy_digest,
+            "stream_generation": self.ingress.stream_generation,
+            "frame_sequence": 1,
+            "lane": "control",
+        })
+        with self.assertRaises(GatewayIngressError):
+            self.ingress.verify_operation(
+                envelope, self.fixture.metadata, self.fixture.request, 1, "data")
+        self.assertTrue(self.ingress._state.closed)
+
+    def test_same_lane_logical_replay_retires_generation(self):
+        envelope = self.fixture.make_delegation(changes={
+            "policy_revision": self.ingress.policy_revision,
+            "policy_digest": self.ingress.policy_digest,
+            "stream_generation": self.ingress.stream_generation,
+            "frame_sequence": 1,
+            "lane": "data",
+        })
+        self.ingress.verify_operation(
+            envelope, self.fixture.metadata, self.fixture.request, 1, "data")
+        with self.assertRaises(GatewayIngressError):
+            self.ingress.verify_operation(
+                envelope, self.fixture.metadata, self.fixture.request, 1, "data")
+        self.assertTrue(self.ingress._state.closed)
+
     def test_late_heartbeat_cannot_revive_timed_out_stream_before_poll(self):
         self.fixture.mono += 60.001
         self.fixture.wall += 60.001
@@ -465,7 +531,7 @@ class GatewayIngressTests(unittest.TestCase):
         })
         with self.assertRaises(GatewayIngressError):
             self.ingress.verify_operation(
-                envelope, self.fixture.metadata, self.fixture.request, 1)
+                envelope, self.fixture.metadata, self.fixture.request, 1, "data")
         self.assertTrue(self.ingress._state.closed)
         self.assertEqual(len(self.ingress._guards), 0)
 
@@ -482,7 +548,7 @@ class GatewayIngressTests(unittest.TestCase):
         })
         with self.assertRaises(GatewayIngressError):
             self.ingress.verify_operation(
-                envelope, self.fixture.metadata, self.fixture.request, 1)
+                envelope, self.fixture.metadata, self.fixture.request, 1, "data")
         self.assertTrue(self.ingress._state.closed)
         self.assertEqual(len(self.ingress._guards), 0)
 
@@ -579,7 +645,7 @@ class GatewayIngressTests(unittest.TestCase):
             "frame_sequence": 1,
         })
         guard = self.ingress.verify_operation(
-            envelope, self.fixture.metadata, self.fixture.request, 1)
+            envelope, self.fixture.metadata, self.fixture.request, 1, "data")
         self.assertTrue(guard.assert_live())
         self.assertGreater(guard.deadline_monotonic, self.fixture.mono)
         self.ingress.close()
@@ -594,7 +660,7 @@ class GatewayIngressTests(unittest.TestCase):
             "frame_sequence": 1,
         })
         guard = self.ingress.verify_operation(
-            envelope, self.fixture.metadata, self.fixture.request, 1)
+            envelope, self.fixture.metadata, self.fixture.request, 1, "data")
         self.fixture.clock._uncertainty = lambda: (_ for _ in ()).throw(
             RuntimeError("clock source unavailable"))
         with self.assertRaises(GatewayIngressError):
