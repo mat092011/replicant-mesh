@@ -23,10 +23,16 @@ cleanup is confirmed or the supervising process is reaped. The caller retains
 the inherited child pin set through process reaping; this assembler never closes
 those descriptors. It fences every constructed bridge before beginning bounded
 cleanup, then spends one shared five-second deadline across bridge and handler
-shutdown. After that cleanup is confirmed, it drops its
-resident model, executor, and bridge references before releasing the selected-
-root borrow. That does not establish process RSS reclamation; the supervisor
-must still reap the child process.
+shutdown. After that cleanup is confirmed, it retains the model, executor, and
+bridge references until selected-root lease retirement is confirmed, then drops
+them. The five-second close budget includes waiting for another close
+operation to release the close lock and retiring the child-binding lease. Lease
+exit runs in one retained worker-thread task because it can wait on the selected
+root store lock. If that task has not completed within the budget, close raises
+and keeps the task, lease, pins, handlers, and bridges owned; it never retries
+an uncertain lease exit. A close-lock timeout fences bridges immediately and
+retains all owners. This does not establish process RSS reclamation; the
+supervisor must still reap the child process.
 
 This is an in-process model/runtime assembly layer. It does not start a process,
 open a network listener, publish readiness, claim a role, or wire transport

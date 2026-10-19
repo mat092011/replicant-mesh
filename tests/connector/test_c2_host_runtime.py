@@ -7,6 +7,7 @@ import gc
 import json
 import os
 import stat
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 import subprocess
@@ -435,6 +436,112 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                 runtime._authorizers.clear()
                 runtime._sessions.clear()
                 runtime._lease.__exit__(None, None, None)
+                runtime._lease = None
+                runtime._binding = None
+                runtime._child_pins = None
+                runtime._installer = None
+
+    async def test_close_lock_contention_is_inside_budget_and_fences_owners(self):
+        with tempfile.TemporaryDirectory(prefix="c2-host-runtime-close-lock-") as scratch:
+            os.chmod(scratch, 0o700)
+            with self.resources(scratch) as (_fx, child_owner, child_pins, installer):
+                runtime = await build_c2_host_runtime(child_owner, child_pins, installer,
+                    owner_policy=self.owner_policy(),
+                    component_allocations=self.allocations())
+                bridge = runtime._bridges["worker-1"]
+                handler = runtime._handlers["worker-1"]
+                lease = runtime._lease
+                runtime._close_lock.acquire()
+                started = asyncio.get_running_loop().time()
+                try:
+                    with self.assertRaisesRegex(C2HostRuntimeError,
+                            "close lock remained busy"):
+                        await runtime.close(0.05)
+                finally:
+                    runtime._close_lock.release()
+                elapsed = asyncio.get_running_loop().time() - started
+                self.assertLess(elapsed, 0.5)
+                self.assertTrue(runtime._invalidated.is_set())
+                self.assertTrue(bridge._runtime_invalidated.is_set())
+                self.assertIs(runtime._bridges["worker-1"], bridge)
+                self.assertIs(runtime._handlers["worker-1"], handler)
+                self.assertIs(runtime._lease, lease)
+                self.assertIsNone(runtime._lease_exit_task)
+                self.assertTrue(await runtime.close(5.0))
+
+    async def test_child_owner_lock_retirement_is_off_loop_bounded_and_single_attempt(self):
+        with tempfile.TemporaryDirectory(prefix="c2-host-runtime-lease-retire-") as scratch:
+            os.chmod(scratch, 0o700)
+            with self.resources(scratch) as (_fx, child_owner, child_pins, installer):
+                runtime = await build_c2_host_runtime(child_owner, child_pins, installer,
+                    owner_policy=self.owner_policy(),
+                    component_allocations=self.allocations())
+                lease = runtime._lease
+                entered = threading.Event()
+                release = threading.Event()
+
+                def hold_owner_lock():
+                    with child_owner._lock:
+                        entered.set()
+                        if not release.wait(5.0):
+                            raise AssertionError("test failed to release child owner lock")
+
+                holder = threading.Thread(target=hold_owner_lock, daemon=True)
+                holder.start()
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2.0))
+                ticks = 0
+                finished = asyncio.Event()
+
+                async def heartbeat():
+                    nonlocal ticks
+                    while not finished.is_set():
+                        ticks += 1
+                        await asyncio.sleep(0.001)
+
+                pulse = asyncio.create_task(heartbeat())
+                started = asyncio.get_running_loop().time()
+                try:
+                    close_task = asyncio.create_task(runtime.close(0.75))
+                    while runtime._lease_exit_task is None and not close_task.done():
+                        await asyncio.sleep(0.001)
+                    self.assertIsNotNone(runtime._lease_exit_task,
+                        "close did not reach the actual child-binding lease retirement")
+                    with self.assertRaisesRegex(C2HostRuntimeError,
+                            "cleanup is uncertain"):
+                        await close_task
+                finally:
+                    release.set()
+                    holder.join(2.0)
+                    finished.set()
+                    await pulse
+                elapsed = asyncio.get_running_loop().time() - started
+                self.assertLess(elapsed, 1.25)
+                self.assertGreater(ticks, 1, "event loop stalled during lease retirement")
+                task = runtime._lease_exit_task
+                self.assertIsNotNone(task)
+                self.assertFalse(task.done())
+                self.assertEqual(runtime._state, "faulted")
+                self.assertIs(runtime._lease, lease)
+                self.assertIsNotNone(runtime._binding)
+                self.assertIsNotNone(runtime._child_pins)
+                self.assertIsNotNone(runtime._installer)
+                self.assertEqual(child_pins._state, "open")
+
+                self.assertFalse(holder.is_alive())
+                self.assertTrue(await asyncio.wait_for(asyncio.shield(task), 2.0))
+                with self.assertRaisesRegex(C2HostRuntimeError, "cleanup is uncertain"):
+                    await runtime.close(1.0)
+                self.assertIs(runtime._lease_exit_task, task)
+                self.assertIs(runtime._lease, lease)
+
+                # Retain checks above exercise the failure contract; now finish
+                # already-confirmed child cleanup solely to release this fixture.
+                runtime._cleanup_tasks.clear()
+                runtime._lease_exit_task = None
+                runtime._bridges.clear()
+                runtime._handlers.clear()
+                runtime._authorizers.clear()
+                runtime._sessions.clear()
                 runtime._lease = None
                 runtime._binding = None
                 runtime._child_pins = None

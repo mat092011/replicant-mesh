@@ -31,6 +31,12 @@ from steamboat_runtime.secure_worker_runtime import SecureWorkerRuntimeBridge
 _ALLOCATION_FIELDS = frozenset({"sessions", "kv_bytes", "cache_positions", "queued_calls"})
 
 
+def _exit_owned_binding_lease(lease):
+    """Retire one captured binding lease on a worker thread."""
+    lease.__exit__(None, None, None)
+    return True
+
+
 class C2HostRuntimeError(StorageError):
     """C2 host runtime assembly or confirmed shutdown failed closed."""
 
@@ -237,6 +243,7 @@ class C2HostRuntime:
         self._close_error = None
         self._close_lock = asyncio.Lock()
         self._cleanup_tasks = []
+        self._lease_exit_task = None
         binding.subscribe_teardown(self._binding_invalidated)
 
     @property
@@ -271,13 +278,25 @@ class C2HostRuntime:
     async def close(self, grace_seconds=5.0):
         if (type(grace_seconds) not in (int, float) or not 0 < grace_seconds <= 5.0):
             raise ValueError("host runtime shutdown grace must be in (0, 5]")
-        async with self._close_lock:
+        deadline = self._loop.time() + float(grace_seconds)
+        try:
+            await asyncio.wait_for(self._close_lock.acquire(), timeout=float(grace_seconds))
+        except asyncio.TimeoutError as error:
+            # Fencing is synchronous and does not depend on acquiring the
+            # cleanup lock. Do not mutate cleanup ownership while another
+            # close attempt may still be using it.
+            self._invalidated.set()
+            self._fence_bridges("C2 host runtime close lock remained busy")
+            self._close_error = error
+            raise C2HostRuntimeError(
+                "host runtime close lock remained busy; retain owners until process reap") from error
+        try:
             if self._state == "closed":
                 return True
             if self._state == "faulted":
                 raise C2HostRuntimeError("host runtime cleanup is uncertain") from self._close_error
             self._state = "closing"
-            deadline = self._loop.time() + float(grace_seconds)
+            self._invalidated.set()
             bridge = None
             bridges = []
             handler = None
@@ -338,15 +357,42 @@ class C2HostRuntime:
                                 "assigned worker handler did not confirm shutdown")
                     self._cleanup_tasks.clear()
 
-                # Drop every resident model/executor path before releasing the
-                # selected-root borrow. This does not prove process RSS reclaim.
+                # Lease retirement can wait on the selected-root store lock.
+                # Run exactly one exit off-loop and retain both task and model
+                # owners until that ownership transition is confirmed.
+                lease_task = self._lease_exit_task
+                if lease_task is None:
+                    lease_task = asyncio.create_task(asyncio.to_thread(
+                        _exit_owned_binding_lease, self._lease))
+                    self._lease_exit_task = lease_task
+                remaining = deadline - self._loop.time()
+                if remaining <= 0:
+                    raise C2HostRuntimeError(
+                        "host child-binding lease retirement exceeded the close budget")
+                _done, lease_pending = await asyncio.wait((lease_task,), timeout=remaining)
+                if lease_pending:
+                    raise C2HostRuntimeError(
+                        "host child-binding lease retirement remains in progress")
+                if lease_task.cancelled():
+                    raise C2HostRuntimeError(
+                        "host child-binding lease retirement task was cancelled")
+                lease_error = lease_task.exception()
+                if lease_error is not None:
+                    raise C2HostRuntimeError(
+                        "host child-binding lease retirement failed") from lease_error
+                if lease_task.result() is not True:
+                    raise C2HostRuntimeError(
+                        "host child-binding lease retirement did not confirm")
+
+                # Drop every resident model/executor path only after confirmed
+                # lease retirement. This does not prove process RSS reclaim.
+                self._cleanup_tasks.clear()
+                self._lease_exit_task = None
                 self._bridges.clear()
                 self._handlers.clear()
                 self._authorizers.clear()
                 self._sessions.clear()
                 del bridge, bridges, handler, handlers, done, pending, task
-                lease = self._lease
-                lease.__exit__(None, None, None)
                 self._lease = None
                 self._binding = None
                 self._child_pins = None
@@ -358,6 +404,8 @@ class C2HostRuntime:
                 self._state = "faulted"
                 raise C2HostRuntimeError(
                     "host runtime cleanup is uncertain; retain owners until process reap") from error
+        finally:
+            self._close_lock.release()
 
 
 async def build_c2_host_runtime(child_binding_owner, child_pin_set, installer, *,
