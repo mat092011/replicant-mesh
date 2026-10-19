@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from steamboat_security.codec import canonical_json
 from steamboat_security.errors import CredentialError, SnapshotError
 from steamboat_security.root_c2_coordinator import (
     C2CoordinatorRuntimeBinding, _FIELDS, _read_header,
@@ -152,6 +151,21 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
         self.fx._private(key_path, original + b"\n")
         with self.assertRaises(CredentialError):
             binding.assert_live()
+        self.assertEqual(len(events), 1)
+
+    def test_concurrent_invalidation_blocks_guard_return(self):
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        events = []
+        binding.subscribe_teardown(events.append)
+        original = binding._selected_policy
+        def invalidate_during_guard(*args, **kwargs):
+            result = original(*args, **kwargs)
+            binding.invalidate("concurrent invalidation")
+            return result
+        with patch.object(binding, "_selected_policy", side_effect=invalidate_during_guard):
+            with self.assertRaisesRegex(CredentialError, "concurrent invalidation"):
+                binding.assert_live()
         self.assertEqual(len(events), 1)
 
     def test_expiry_during_final_protected_io_invalidates(self):
