@@ -6,6 +6,7 @@ from unittest import mock
 
 from steamboat_connector import channel_wire as wire
 from steamboat_connector.channel_client import CoordinatorChannelClient
+from steamboat_connector.channel_stream import ChannelStreamError
 from steamboat_runtime.protocol.errors import ProtocolError
 from steamboat_runtime.protocol.wire import Request, Response, serialize_message
 from steamboat_security.outbound import AuthorizationWatcher
@@ -207,7 +208,12 @@ class CoordinatorChannelRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(ChannelStream, "pop_message", pop_then_invalidate):
             for _ in range(500):
-                self.fx.fx.coordinator_server_stream.pump()
+                try:
+                    self.fx.fx.coordinator_server_stream.pump()
+                except ChannelStreamError:
+                    if not self.client._runtime_invalidated.is_set():
+                        raise
+                    break
                 if call.done():
                     break
                 await asyncio.sleep(0.001)
@@ -248,7 +254,13 @@ class CoordinatorChannelRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch("steamboat_connector.channel_client.parse_message",
                         side_effect=parse_and_signal):
             for _ in range(500):
-                self.fx.fx.coordinator_server_stream.pump()
+                try:
+                    self.fx.fx.coordinator_server_stream.pump()
+                except ChannelStreamError:
+                    if not (parsed.is_set()
+                            and self.client._runtime_invalidated.is_set()):
+                        raise
+                    break
                 if parsed.is_set():
                     break
                 await asyncio.sleep(0.001)
