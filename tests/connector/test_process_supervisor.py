@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import threading
 import time
 import unittest
+import uuid
 from unittest import mock
 
 from steamboat_connector.process_supervisor import (ProcessRoleBackend,
@@ -59,6 +60,33 @@ class FakeCgroup:
         self.create_release = None
         self.attach_entered = None
         self.attach_release = None
+        self.attach_checked_entered = None
+        self.attach_checked_release = None
+        self.state_lock = threading.RLock()
+
+    def _write_atomic(self, path, contents):
+        path = Path(path)
+        temporary = path.with_name(
+            f".{path.name}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(contents, encoding="ascii")
+            deadline = time.monotonic() + 0.1
+            while True:
+                try:
+                    temporary.replace(path)
+                    break
+                except PermissionError:
+                    # Windows readers can briefly deny replacement while their
+                    # regular-file handle is open; cgroupfs does not have this
+                    # behavior, but the fixture still needs complete snapshots.
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.001)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
     def create_group(self, name, policy, role):
         if self.create_entered is not None:
@@ -66,7 +94,7 @@ class FakeCgroup:
             self.create_release.wait(2)
         self.group = self.root / name
         self.group.mkdir()
-        (self.group / "cgroup.events").write_text("populated 0\n", encoding="ascii")
+        self._write_atomic(self.group / "cgroup.events", "populated 0\n")
         (self.group / "cgroup.procs").write_text("", encoding="ascii")
         self.groups.append(self.group)
         return self.group
@@ -77,31 +105,42 @@ class FakeCgroup:
             self.attach_release.wait(2)
         if self.fail_attach:
             raise OSError("attach refused")
-        self.attached = True
-        # Popen.poll() mirrors CPython: it returns None without reaping while
-        # _waitpid_lock is held by the supervisor across PID placement.
-        if process.returncode is not None:
-            self.set_empty(group)
-            (Path(group) / "cgroup.procs").write_text("", encoding="ascii")
-            return
-        (Path(group) / "cgroup.events").write_text("populated 1\n", encoding="ascii")
-        (Path(group) / "cgroup.procs").write_text(str(process.pid), encoding="ascii")
+        with self.state_lock:
+            # Popen.poll() mirrors CPython: it returns None without reaping
+            # while _waitpid_lock is held by the supervisor across placement.
+            eligible = process.returncode is None
+        if self.attach_checked_entered is not None:
+            self.attach_checked_entered.set()
+            self.attach_checked_release.wait(2)
+        with self.state_lock:
+            # Revalidate the observation at the publication point. A TERM
+            # between eligibility and placement must not resurrect an exited
+            # fake child in cgroup.events.
+            if not eligible or process.returncode is not None:
+                self._write_atomic(Path(group) / "cgroup.events", "populated 0\n")
+                (Path(group) / "cgroup.procs").write_text("", encoding="ascii")
+                return
+            self.attached = True
+            self._write_atomic(Path(group) / "cgroup.events", "populated 1\n")
+            (Path(group) / "cgroup.procs").write_text(str(process.pid), encoding="ascii")
 
     def set_empty(self, group=None):
-        (Path(group or self.group) / "cgroup.events").write_text(
-            "populated 0\n", encoding="ascii")
+        with self.state_lock:
+            self._write_atomic(Path(group or self.group) / "cgroup.events",
+                               "populated 0\n")
 
     def remove_empty_group(self, group):
         group = Path(group)
-        if not ProcessRoleBackend._events_populated(group):
-            return False
-        for name in ("cgroup.events", "cgroup.procs"):
-            try:
-                (group / name).unlink()
-            except FileNotFoundError:
-                pass
-        group.rmdir()
-        return not group.exists()
+        with self.state_lock:
+            if not ProcessRoleBackend._events_populated(group):
+                return False
+            for name in ("cgroup.events", "cgroup.procs"):
+                try:
+                    (group / name).unlink()
+                except FileNotFoundError:
+                    pass
+            group.rmdir()
+            return not group.exists()
 
 
 class FakeProcess:
@@ -134,12 +173,14 @@ class FakeProcess:
             return self.returncode
 
     def on_signal(self, sig, *, kill_descendants=True):
-        if sig == signal.SIGTERM and self.ignore_term:
-            return
-        if sig in (signal.SIGTERM, 9):
-            self.returncode = 0
-        if sig in (signal.SIGTERM, 9) and kill_descendants:
-            self.cgroup.set_empty(self.group)
+        with self.cgroup.state_lock:
+            if sig == signal.SIGTERM and self.ignore_term:
+                return
+            if sig in (signal.SIGTERM, 9):
+                self.returncode = 0
+            if sig in (signal.SIGTERM, 9) and kill_descendants:
+                self.cgroup._write_atomic(
+                    Path(self.group) / "cgroup.events", "populated 0\n")
 
 
 class ProcessSupervisorTests(unittest.TestCase):
@@ -560,9 +601,9 @@ class ProcessSupervisorTests(unittest.TestCase):
 
         def killpg(pid, sig):
             process = next(item for item in holder.values() if item.pid == pid)
-            signals.append((process.args[0][4], sig))
             if sig == 9:
                 process.on_signal(sig)
+            signals.append((process.args[0][4], sig))
 
         with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
                         side_effect=spawn), mock.patch(
@@ -670,10 +711,10 @@ class ProcessSupervisorTests(unittest.TestCase):
 
     def test_request_stop_interrupts_attach_and_final_stop_reclaims(self):
         holder, popen, _ = self._spawn_patch()
-        attach_entered = threading.Event()
-        attach_release = threading.Event()
-        self.cgroup.attach_entered = attach_entered
-        self.cgroup.attach_release = attach_release
+        attach_checked_entered = threading.Event()
+        attach_checked_release = threading.Event()
+        self.cgroup.attach_checked_entered = attach_checked_entered
+        self.cgroup.attach_checked_release = attach_checked_release
         outcome = {}
         signals = []
 
@@ -688,14 +729,40 @@ class ProcessSupervisorTests(unittest.TestCase):
             thread = threading.Thread(target=lambda: outcome.setdefault(
                 "started", self.backend.start("host", sample_policy())))
             thread.start()
-            self.assertTrue(attach_entered.wait(1))
+            self.assertTrue(attach_checked_entered.wait(1))
             self.assertEqual(self.backend.request_stop(["host"]), {"host": True})
-            attach_release.set()
+            attach_checked_release.set()
             thread.join(2)
             self.assertFalse(thread.is_alive())
             self.assertFalse(outcome["started"])
             gate_write.assert_not_called()
-            self.assertTrue(self.backend.stop(["host"], 0.2)["host"])
+            owned = self.backend._owned.get("host")
+            stopped = self.backend.stop(["host"], 0.2)["host"]
+            if not stopped:
+                intent = self.backend._start_intents.get("host")
+                process = None if owned is None else owned.process
+                try:
+                    events = (None if owned is None else
+                              (owned.group / "cgroup.events").read_text(
+                                  encoding="ascii"))
+                except OSError as error:
+                    events = f"read failed: {error!r}"
+                intent_state = (None if intent is None else {
+                    "finished": intent.finished,
+                    "cancelled": intent.cancelled.is_set(),
+                    "final_stop_requested": intent.final_stop_requested,
+                    "group": intent.group,
+                })
+                self.fail(
+                    "final stop did not reclaim: "
+                    f"status={self.backend.status()!r}, "
+                    f"owned_is_current={self.backend._owned.get('host') is owned}, "
+                    f"process_returncode={None if process is None else process.returncode!r}, "
+                    f"leader_reaped={None if owned is None else owned.leader_reaped!r}, "
+                    f"reaped_event={None if owned is None else owned.reaped_event.is_set()!r}, "
+                    f"term_sent={None if owned is None else owned.term_sent!r}, "
+                    f"events={events!r}, "
+                    f"intent={intent_state!r}")
         self.assertIn(signal.SIGTERM, signals)
         self.assertNotIn(9, signals)
 
