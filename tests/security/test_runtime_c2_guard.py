@@ -309,8 +309,67 @@ class RuntimeC2GuardTests(unittest.IsolatedAsyncioTestCase):
         locker.join(1)
         caller.join(1)
         await asyncio.sleep(0)
-        self.assertTrue(self.handler.requires_restart)
+        self.assertTrue(self.bridge._runtime_fence_applied)
+        self.assertFalse(self.handler.requires_restart)
         self.assertNotIn("private detail", self.bridge.status()["fault"])
+
+    async def test_off_loop_invalidation_does_not_wait_for_wake_lock(self):
+        self.bridge._wake_lock.acquire()
+        self.addCleanup(lambda: self.bridge._wake_lock.release()
+                        if self.bridge._wake_lock.locked() else None)
+        finished = threading.Event()
+        result = []
+
+        def invalidate():
+            result.append(self.bridge.request_runtime_invalidation("wake lock test"))
+            finished.set()
+
+        thread = threading.Thread(target=invalidate, daemon=True)
+        thread.start()
+        self.assertTrue(finished.wait(1))
+        self.assertFalse(result[0])  # optional wake was skipped; sticky event remains
+        self.assertTrue(self.bridge.unavailable)
+        self.bridge._wake_lock.release()
+        await asyncio.wait_for(self._wait_for_runtime_fence(), 1)
+        self.assertTrue(self.bridge._runtime_fence_applied)
+
+    async def _wait_for_runtime_fence(self):
+        while not self.bridge._runtime_fence_applied:
+            await asyncio.sleep(0.005)
+
+    async def test_c2_fence_applies_once_and_maintenance_keeps_bounded_cadence(self):
+        sweeps = []
+        original = self.bridge._sweep_once
+
+        def counted_sweep():
+            sweeps.append(1)
+            original()
+
+        self.bridge._sweep_once = counted_sweep
+        self.bridge.request_runtime_invalidation("cadence test")
+        await asyncio.wait_for(self._wait_for_runtime_fence(), 1)
+        await asyncio.wait_for(self._wait_for_sweep_count(sweeps, 3), 1)
+        self.assertEqual(sweeps.count(1), len(sweeps))
+        self.assertFalse(self.bridge._unconfirmed_cleanup)
+        self.assertFalse(self.bridge._unavailable)
+        self.assertTrue(self.bridge.unavailable)
+        self.assertTrue(await self.bridge.stop(grace_seconds=1))
+        self.assertTrue(self.bridge.status()["cleanup_confirmed"])
+
+    async def test_real_c1_sweep_fault_stays_unconfirmed_after_c2_fence(self):
+        self.bridge.request_runtime_invalidation("C1 fault regression")
+        await asyncio.wait_for(self._wait_for_runtime_fence(), 1)
+        with mock.patch.object(
+                self.bridge.authorizer_core.clock, "sample",
+                side_effect=RuntimeError("injected C1 clock failure")):
+            self.bridge._sweep_once()
+        self.assertTrue(self.bridge.unavailable)
+        self.assertTrue(self.bridge._unconfirmed_cleanup)
+        self.assertFalse(self.bridge.status()["cleanup_confirmed"])
+
+    async def _wait_for_sweep_count(self, values, count):
+        while len(values) < count:
+            await asyncio.sleep(0.005)
 
 
 if __name__ == "__main__":

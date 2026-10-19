@@ -365,11 +365,7 @@ class WorkerChannelRpc:
                     lambda task, owner=capture_owner: self._release_finished(task, owner))
             if not transferred:
                 try:
-                    await self.bridge.wait_for_authorized_reclamation(authorization)
-                    result = authorization.close()
-                    if inspect.isawaitable(result):
-                        await result
-                    self.bridge.confirm_authorization_retirement(authorization)
+                    await self._retire_authorization(authorization)
                 except BaseException:
                     # Ownership is uncertain; keep the slot and byte charge
                     # permanently rather than admitting replacement work.
@@ -383,17 +379,36 @@ class WorkerChannelRpc:
         # successful authorization retirement before releasing the reservation.
         try:
             await _wait_owned_tasks(tasks)
-            await self.bridge.wait_for_authorized_reclamation(
-                capture_owner.authorization)
-            result = capture_owner.authorization.close()
-            if inspect.isawaitable(result):
-                await result
-            self.bridge.confirm_authorization_retirement(
-                capture_owner.authorization)
+            await self._retire_authorization(capture_owner.authorization)
         except BaseException:
             self._stuck_captures.add(capture_owner)
             raise
         self._release(capture_owner.is_control, capture_owner.reservation)
+
+    async def _retire_authorization(self, authorization):
+        """Observe reclamation, then attempt the single close even on failure.
+
+        A failed observer cannot justify releasing the capture. It also must
+        not prevent the real C1 authorization from receiving its one cleanup
+        attempt, which can allow a healthy bridge to finish reconciliation.
+        """
+        observation_error = None
+        try:
+            await self.bridge.wait_for_authorized_reclamation(authorization)
+        except BaseException as error:
+            observation_error = error
+        close_error = None
+        try:
+            result = authorization.close()
+            if inspect.isawaitable(result):
+                await result
+        except BaseException as error:
+            close_error = error
+        if close_error is not None:
+            raise close_error
+        if observation_error is not None:
+            raise observation_error
+        self.bridge.confirm_authorization_retirement(authorization)
 
     def _release_finished(self, task, capture_owner):
         self._retained_releases.discard(task)

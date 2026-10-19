@@ -19,12 +19,18 @@ maintenance.
 `request_runtime_invalidation(reason)` is the synchronous, thread-safe teardown
 hook for a C2 binding subscriber. It sets a sticky invalidation event before
 returning, so subsequent authorization and liveness checks fail immediately.
-It coalesces owner-loop fencing work and does not wait for bridge, lifecycle,
-filesystem, or inference locks. The supplied reason is never retained or
-logged. The actual C1 session invalidation and `WorkerHandler` cleanup run on
-the bridge's owning event loop. If that loop cannot accept the callback, the
-bridge remains unavailable and cleanup stays unconfirmed; callers must retain
-the bridge and its owners for supervision.
+It makes a best-effort, nonblocking wake attempt; if the wake lock is busy, the
+sticky event is still observed at the bounded maintenance cadence. The C2
+invalidation is applied once on the owner loop and does not mark the C1
+authorizer or handler unhealthy by itself. The supplied reason is never
+retained or logged. C1 session invalidation and `WorkerHandler` cleanup run on
+the bridge's owning event loop. Actual C1 cleanup errors still leave cleanup
+unconfirmed.
+
+Worker RPC cleanup attempts its one C1 authorization close even when the
+reclamation observer fails. It retains the bounded request capture and fails
+the stream if reclamation or post-close retirement cannot be confirmed; a
+close attempt alone is not evidence that cleanup completed.
 
 The post-completion guard is intentionally fail-closed: if the C1 authorization
 has already committed but the selected C2 binding expires during completion,

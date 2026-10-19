@@ -340,6 +340,7 @@ class SecureWorkerRuntimeBridge:
         self._runtime_invalidated = threading.Event()
         self._runtime_invalidation_reason = ""
         self._runtime_fence_scheduled = False
+        self._runtime_fence_applied = False
         self._wake_lock = threading.Lock()
         self._wake_scheduled = False
         self._loop = None
@@ -394,18 +395,30 @@ class SecureWorkerRuntimeBridge:
         loop = self._loop
         if loop is None:
             return False
-        with self._wake_lock:
+        # Teardown subscribers must never wait behind an owner-loop wake
+        # callback. The sticky Event is the durable signal; maintenance will
+        # observe it even if this optional wake cannot be queued.
+        if not self._wake_lock.acquire(blocking=False):
+            return False
+        try:
             if self._runtime_fence_scheduled:
                 return True
             self._runtime_fence_scheduled = True
+        finally:
+            self._wake_lock.release()
         try:
             loop.call_soon_threadsafe(self._apply_runtime_invalidation)
             return True
         except BaseException:
-            with self._wake_lock:
-                self._runtime_fence_scheduled = False
-            self._callback_fault.set()
-            self._unconfirmed_cleanup = True
+            if self._wake_lock.acquire(blocking=False):
+                try:
+                    self._runtime_fence_scheduled = False
+                finally:
+                    self._wake_lock.release()
+            # Failure to notify is not a C1 cleanup failure: the sticky event
+            # remains set and the bounded maintenance cadence observes it.
+            if self._loop is None:
+                return False
             return False
 
     def _apply_runtime_invalidation(self):
@@ -414,9 +427,29 @@ class SecureWorkerRuntimeBridge:
             return
         with self._wake_lock:
             self._runtime_fence_scheduled = False
-        if self._runtime_invalidated.is_set():
-            self._fence(self._runtime_invalidation_reason
-                        or "C2 runtime binding guard failed")
+        if not self._runtime_invalidated.is_set() or self._runtime_fence_applied:
+            return
+        # This is a selected C2 authority teardown, not evidence that the
+        # underlying C1 authorizer or WorkerHandler cleanup is unhealthy.
+        self._runtime_fence_applied = True
+        try:
+            self.session_bindings.invalidate_all("selected-runtime-binding-unavailable")
+        except BaseException:
+            self._unconfirmed_cleanup = True
+            self._fence("selected runtime binding cleanup could not be confirmed")
+            return
+        for owner in tuple(self._owners.values()):
+            owner.invalidated = True
+            owner.invalidation_reason = "selected C2 runtime binding teardown"
+            if owner.invalidation_event is not None:
+                owner.invalidation_event.set()
+            try:
+                self._handler.invalidate_for_authorization(owner.session_id)
+            except BaseException:
+                self._unconfirmed_cleanup = True
+                self._fence("selected runtime binding cleanup could not be confirmed")
+                return
+        self._signal_wake()
 
     def _check_runtime_guard(self):
         """Run the optional selected-C2 check without holding bridge locks."""
@@ -488,7 +521,6 @@ class SecureWorkerRuntimeBridge:
                 raise RuntimeBindingError(
                     "reclamation wait authorization is not the current bridge operation")
         self._assert_loop()
-        self._check_runtime_guard()
         owner = operation.owner
         if owner is None or not owner.invalidated:
             return False
@@ -507,7 +539,8 @@ class SecureWorkerRuntimeBridge:
             raise RuntimeBridgeUnavailable("worker reclamation bounds are invalid")
         deadline = time.monotonic() + float(grace) + min(float(sweep), 5.0) + 1.0
         while True:
-            if (self._closed or self.unavailable or self._unconfirmed_cleanup
+            if (self._closed or self._unavailable or self._callback_fault.is_set()
+                    or self._unconfirmed_cleanup
                     or self._handler.requires_restart):
                 raise RuntimeBridgeUnavailable(
                     "worker session reclamation is unconfirmed")
@@ -515,7 +548,8 @@ class SecureWorkerRuntimeBridge:
             # Notice processing can itself fence the bridge (for example, a
             # bounded notice queue fault). Never treat the pre-processing
             # health sample as proof that cleanup remains trustworthy.
-            if (self._closed or self.unavailable or self._unconfirmed_cleanup
+            if (self._closed or self._unavailable or self._callback_fault.is_set()
+                    or self._unconfirmed_cleanup
                     or self._handler.requires_restart):
                 raise RuntimeBridgeUnavailable(
                     "worker session reclamation is unconfirmed")
@@ -529,7 +563,8 @@ class SecureWorkerRuntimeBridge:
                     "worker invalidated owner identity changed during reclamation")
             if not self._handler_owns_session(owner):
                 self._reconcile()
-                if (self._closed or self.unavailable or self._unconfirmed_cleanup
+                if (self._closed or self._unavailable or self._callback_fault.is_set()
+                        or self._unconfirmed_cleanup
                         or self._handler.requires_restart):
                     raise RuntimeBridgeUnavailable(
                         "worker session reclamation was not confirmed")
@@ -561,10 +596,10 @@ class SecureWorkerRuntimeBridge:
                 raise RuntimeBindingError(
                     "retirement confirmation requires the exact closed authorization")
         self._assert_loop()
-        self._check_runtime_guard()
         self._process_notices()
         self._reconcile()
-        if (self._closed or self.unavailable or self._unconfirmed_cleanup
+        if (self._closed or self._unavailable or self._callback_fault.is_set()
+                or self._unconfirmed_cleanup
                 or self._handler.requires_restart):
             raise RuntimeBridgeUnavailable(
                 "authorization retirement remains unconfirmed")
@@ -1046,7 +1081,12 @@ class SecureWorkerRuntimeBridge:
 
     def _sweep_once(self):
         try:
-            self._check_runtime_guard()
+            if not self._runtime_invalidated.is_set():
+                try:
+                    self._check_runtime_guard()
+                except RuntimeBridgeUnavailable:
+                    if not self._runtime_invalidated.is_set():
+                        raise
             sample = self.authorizer_core.clock.sample()
             self._expire_drain(sample)
             self.authorizer_core.snapshot_store.current(sample=sample)

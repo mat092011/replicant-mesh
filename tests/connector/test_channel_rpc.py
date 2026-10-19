@@ -717,6 +717,48 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service._data_bytes, _DATA_CAPTURE_BYTES)
         self.assertIn(second_capture, service._stuck_captures)
 
+    async def test_rpc_attempts_single_close_after_reclamation_observer_fault(self):
+        from types import SimpleNamespace
+        from steamboat_connector.channel_rpc import WorkerChannelRpc, _RpcCaptureOwner
+
+        order = []
+
+        class TestBridge:
+            authorizer_core = SimpleNamespace(local_identity=SimpleNamespace(
+                boot_id=self.fx.worker_boot_id))
+
+            async def wait_for_authorized_reclamation(self, authorization):
+                order.append("wait")
+                raise RuntimeError("observer unavailable after C2 fence")
+
+            def confirm_authorization_retirement(self, authorization):
+                order.append("confirm")
+
+        class Authorization:
+            def __init__(self):
+                self.close_count = 0
+
+            def close(self):
+                self.close_count += 1
+                order.append("close")
+
+        service = WorkerChannelRpc(
+            stream=self.fx.worker_client_stream, bridge=TestBridge(),
+            data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
+            control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
+        authorization = Authorization()
+        capture = _RpcCaptureOwner(None, None, None, authorization, False,
+                                   _DATA_CAPTURE_BYTES)
+        service._data_count = 1
+        service._data_bytes = _DATA_CAPTURE_BYTES
+        with self.assertRaisesRegex(RuntimeError, "observer unavailable"):
+            await service._release_after((), capture)
+        self.assertEqual(order, ["wait", "close"])
+        self.assertEqual(authorization.close_count, 1)
+        self.assertEqual(service._data_count, 1)
+        self.assertEqual(service._data_bytes, _DATA_CAPTURE_BYTES)
+        self.assertIn(capture, service._stuck_captures)
+
 
 if __name__ == "__main__":
     unittest.main()
