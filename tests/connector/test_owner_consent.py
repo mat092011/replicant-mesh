@@ -53,6 +53,33 @@ def _cross_process_disable(root, contended, acquired, release, finished):
         fcntl.flock = original
 
 
+def _open_store_fifo_race(root, result):
+    original_stat = os.stat
+    injected = False
+
+    def racing_stat(path, *args, **kwargs):
+        nonlocal injected
+        if (not injected and path == consent_module.STATE_NAME
+                and kwargs.get("dir_fd") is not None):
+            info = original_stat(path, *args, **kwargs)
+            dir_fd = kwargs["dir_fd"]
+            os.replace(consent_module.STATE_NAME, "owner-consent.saved",
+                       src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            os.mkfifo(consent_module.STATE_NAME, 0o600, dir_fd=dir_fd)
+            injected = True
+            return info
+        return original_stat(path, *args, **kwargs)
+
+    try:
+        with mock.patch.object(consent_module.os, "stat", side_effect=racing_stat):
+            store = OwnerConsentStore(root, expected_uid=os.geteuid(),
+                                      account_id=ACCOUNT, device_id=DEVICE)
+            store.close()
+        result.put("opened" if not injected else "race-not-rejected")
+    except BaseException as error:
+        result.put(f"{type(error).__name__}:{error}")
+
+
 class OwnerConsentParserTests(unittest.TestCase):
     def test_canonical_snapshot_round_trip_and_principal_binding(self):
         encoded = consent_module._canonical(consent_module._document(
@@ -114,7 +141,7 @@ class OwnerConsentTests(unittest.TestCase):
             with self.assertRaises(StorageError):
                 with store.begin_start(("coordinator",), cancel_event=threading.Event()):
                     pass
-            with self.assertRaises(StorageError):
+            with self.assertRaises(ValueError):
                 with store.begin_start((), cancel_event=threading.Event()):
                     pass
             with store.begin_start(("host",), cancel_event=threading.Event()) as start:
@@ -193,7 +220,18 @@ class OwnerConsentTests(unittest.TestCase):
         with self.store() as store:
             store.set_role_enabled("host", True)
             cancel = threading.Event()
-            entered, done = threading.Event(), threading.Event()
+            entered, waiting, done = threading.Event(), threading.Event(), threading.Event()
+
+            class ObservedCondition:
+                def __init__(self, wrapped): self.wrapped = wrapped
+                def __enter__(self): self.wrapped.__enter__(); return self
+                def __exit__(self, *args): return self.wrapped.__exit__(*args)
+                def wait(self, timeout=None):
+                    waiting.set()
+                    return self.wrapped.wait(timeout)
+                def notify_all(self): return self.wrapped.notify_all()
+
+            store._lifetime = ObservedCondition(store._lifetime)
 
             def disable():
                 entered.set()
@@ -204,6 +242,7 @@ class OwnerConsentTests(unittest.TestCase):
                 worker = threading.Thread(target=disable)
                 worker.start()
                 self.assertTrue(entered.wait(5))
+                self.assertTrue(waiting.wait(5), "disable did not block on owner serialization")
                 cancel.set()
                 self.assertTrue(cancel.is_set())
                 self.assertFalse(done.is_set())
@@ -211,7 +250,7 @@ class OwnerConsentTests(unittest.TestCase):
             self.assertFalse(worker.is_alive())
             self.assertTrue(done.is_set())
             self.assertEqual(store.snapshot().enabled_roles, ())
-            self.assertEqual(store.snapshot().epoch, 4)
+            self.assertEqual(store.snapshot().epoch, 3)
 
     def test_cross_process_lock_serializes_role_change_with_start_context(self):
         with self.store() as store:
@@ -246,6 +285,63 @@ class OwnerConsentTests(unittest.TestCase):
         store.close()
         with self.assertRaises(StorageError):
             self.store()
+
+    def test_post_replace_root_fsync_failure_fences_reopen_and_already_open_store(self):
+        second = self.store()
+
+        def fail(step):
+            if step == "state.replace.root.fsync":
+                raise OSError("injected post-replace root fsync failure")
+
+        first = self.store(_fault_hook=fail)
+        with self.assertRaises(StorageError):
+            first.set_role_enabled("host", True)
+        with self.assertRaises(StorageError):
+            first.snapshot()
+        with self.assertRaises(StorageError):
+            second.snapshot()
+        first.close()
+        second.close()
+        with self.assertRaises(StorageError):
+            self.store()
+
+    def test_already_open_store_rejects_unexpected_temporary_namespace_entry(self):
+        first, second = self.store(), self.store()
+        debris = self.root / ".owner-consent-tmp-unexpected"
+        debris.write_bytes(b"partial")
+        os.chmod(debris, 0o600)
+        try:
+            for store in (first, second):
+                with self.assertRaises(StorageError):
+                    store.snapshot()
+        finally:
+            debris.unlink()
+            first.close()
+            second.close()
+
+    def test_fifo_replacement_after_stat_is_rejected_without_blocking(self):
+        fifo = self.root / consent_module.STATE_NAME
+        ctx = multiprocessing.get_context("fork")
+        result = ctx.Queue()
+        child = ctx.Process(target=_open_store_fifo_race, args=(str(self.root), result))
+        try:
+            child.start()
+            child.join(5)
+            if child.is_alive():
+                child.terminate()
+                child.join(5)
+                self.fail("constructor blocked opening substituted FIFO")
+            self.assertEqual(child.exitcode, 0)
+            self.assertTrue(result.get(timeout=2).startswith("StorageError:"))
+        finally:
+            if child.is_alive():
+                child.terminate()
+                child.join(5)
+            if os.path.lexists(fifo):
+                fifo.unlink()
+            saved = self.root / "owner-consent.saved"
+            if saved.exists():
+                os.replace(saved, fifo)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ MAX_EPOCH = (1 << 63) - 1
 ROLES = ("consumer", "coordinator", "host")
 STATE_NAME = "owner-consent.json"
 LOCK_NAME = "owner-consent.lock"
+PENDING_NAME = "owner-consent.pending"
 _FIELDS = {"domain", "version", "account_id", "device_id", "epoch",
            "enabled_roles", "sha256"}
 
@@ -188,7 +189,6 @@ class OwnerConsentStore:
         try:
             with self._operation():
                 with self._file_lock():
-                    self._scan_names()
                     self._read_owned()
         except BaseException:
             fd, self._fd = self._fd, -1
@@ -267,17 +267,28 @@ class OwnerConsentStore:
         if self._owner_thread != threading.get_ident():
             raise StorageError("owner consent root descriptor is not owned by this operation")
         fd = None
+        lock_fd = None
         try:
             import fcntl
+            before = os.stat(LOCK_NAME, dir_fd=self._fd, follow_symlinks=False)
+            _check_inode(before, self._uid)
             fd = os.open(LOCK_NAME, os.O_RDWR | os.O_NOFOLLOW
                          | getattr(os, "O_CLOEXEC", 0), dir_fd=self._fd)
-            _check_inode(os.fstat(fd), self._uid)
+            lock_fd = fd
+            opened = os.fstat(fd)
+            _check_inode(opened, self._uid)
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise StorageError("owner consent lock identity changed during open")
             fcntl.flock(fd, fcntl.LOCK_EX)
+            current = os.stat(LOCK_NAME, dir_fd=self._fd, follow_symlinks=False)
+            if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+                raise StorageError("owner consent lock identity changed while waiting")
             _check_inode(os.fstat(self._fd), self._uid, directory=True)
+            self._scan_names()
         except BaseException as error:
-            if fd is not None:
+            if lock_fd is not None:
                 try:
-                    owned, fd = fd, None
+                    owned, lock_fd = lock_fd, None
                     _close_once(owned)
                 except BaseException:
                     self._unknown = True
@@ -287,7 +298,7 @@ class OwnerConsentStore:
         try:
             yield
         finally:
-            owned, fd = fd, -1
+            owned, lock_fd = lock_fd, None
             try:
                 fcntl.flock(owned, fcntl.LOCK_UN)
             except OSError:
@@ -302,9 +313,15 @@ class OwnerConsentStore:
 
     def _read_owned(self):
         try:
+            before = os.stat(STATE_NAME, dir_fd=self._fd, follow_symlinks=False)
+            _check_inode(before, self._uid)
             fd = os.open(STATE_NAME, os.O_RDONLY | os.O_NOFOLLOW
+                         | getattr(os, "O_NONBLOCK", 0)
                          | getattr(os, "O_CLOEXEC", 0), dir_fd=self._fd)
-            _check_inode(os.fstat(fd), self._uid)
+            opened = os.fstat(fd)
+            _check_inode(opened, self._uid)
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise StorageError("owner consent state identity changed during open")
             chunks, remaining = [], MAX_STATE_BYTES + 1
             while remaining:
                 chunk = os.read(fd, remaining)
@@ -335,7 +352,20 @@ class OwnerConsentStore:
         temp = f".owner-consent-tmp-{secrets.token_hex(8)}"
         fd = None
         created = False
+        pending_fd = None
+        pending_created = False
         try:
+            pending_fd = os.open(PENDING_NAME,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                | getattr(os, "O_CLOEXEC", 0), 0o600, dir_fd=self._fd)
+            pending_created = True
+            _check_inode(os.fstat(pending_fd), self._uid)
+            self._step("state.pending.file.fsync")
+            os.fsync(pending_fd)
+            owned, pending_fd = pending_fd, None
+            _close_once(owned)
+            self._step("state.pending.root.fsync")
+            os.fsync(self._fd)
             fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
                          | getattr(os, "O_CLOEXEC", 0), 0o600, dir_fd=self._fd)
             created = True
@@ -353,15 +383,24 @@ class OwnerConsentStore:
             _close_once(owned)
             self._step("state.replace")
             os.replace(temp, STATE_NAME, src_dir_fd=self._fd, dst_dir_fd=self._fd)
-            self._step("state.root.fsync")
+            self._step("state.replace.root.fsync")
+            os.fsync(self._fd)
+            os.unlink(PENDING_NAME, dir_fd=self._fd)
+            self._step("state.commit.root.fsync")
             os.fsync(self._fd)
         except BaseException as error:
-            # Once a temp inode exists, the visible/recoverable outcome may be
-            # ambiguous. Latch this instance and leave debris for operator review.
-            if created:
+            # Once the durable pending fence exists, the visible/recoverable
+            # outcome may be ambiguous. Latch and leave debris for inspection.
+            if created or pending_created:
                 self._unknown = True
             if fd is not None:
                 owned, fd = fd, None
+                try:
+                    _close_once(owned)
+                except BaseException:
+                    self._unknown = True
+            if pending_fd is not None:
+                owned, pending_fd = pending_fd, None
                 try:
                     _close_once(owned)
                 except BaseException:
