@@ -151,10 +151,13 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         group_ttl = 300 if self._testMethodName in {
             "test_channel_wall_expiry_rejects_clock_drift_even_before_monotonic_deadline",
             "test_final_uncertainty_deadline_is_retained_across_clock_drift",
+            "test_final_uncertainty_retains_channel_monotonic_deadline",
             "test_initial_uncertainty_retains_channel_monotonic_deadline",
             "test_first_selected_view_uncertainty_deadline_is_retained",
             "test_selected_head_mismatch_retains_deadline_before_refresh"} else 60
-        if self._testMethodName == "test_final_uncertainty_retains_group_policy_deadline":
+        if self._testMethodName in {
+            "test_final_uncertainty_retains_group_policy_deadline",
+            "test_initial_uncertainty_retains_group_policy_deadline"}:
             group_ttl = 70
         self._build(group_ttl=group_ttl)
 
@@ -559,6 +562,32 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
             binding.assert_live()
         self.assertEqual(len(calls), 1)
 
+    def test_final_uncertainty_retains_group_policy_deadline(self):
+        self.wall += 30
+        self.mono += 30
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        calls = []
+        binding.subscribe_teardown(calls.append)
+        original_read = runtime_module.safe_read
+        reads = 0
+        def widen_on_final_read(*args, **kwargs):
+            nonlocal reads
+            result = original_read(*args, **kwargs)
+            reads += 1
+            if reads == 22:
+                self.uncertainty = 20.0
+            return result
+        with patch.object(runtime_module, "safe_read", side_effect=widen_on_final_read):
+            binding.assert_live()
+        self.assertEqual(reads, 22)
+        self.uncertainty = 0.0
+        self.wall += 1
+        self.mono += 21
+        with self.assertRaisesRegex(CredentialError, "group policy expired"):
+            binding.assert_live()
+        self.assertEqual(len(calls), 1)
+
     def test_initial_uncertainty_retains_channel_monotonic_deadline(self):
         self.wall += 30
         self.mono += 30
@@ -580,6 +609,32 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         with patch.object(binding, "_check_deadlines", side_effect=restore_after_initial_sample):
             binding.assert_live()
         self.assertEqual(checks, 3)
+        self.wall += 51
+        self.mono += 71
+        with self.assertRaisesRegex(CredentialError, "channel certificate expired"):
+            binding.assert_live()
+        self.assertEqual(len(calls), 1)
+
+    def test_final_uncertainty_retains_channel_monotonic_deadline(self):
+        self.wall += 30
+        self.mono += 30
+        store, binding = self._load()
+        self.addCleanup(store.close)
+        calls = []
+        binding.subscribe_teardown(calls.append)
+        original_read = runtime_module.safe_read
+        reads = 0
+        def widen_on_final_read(*args, **kwargs):
+            nonlocal reads
+            result = original_read(*args, **kwargs)
+            reads += 1
+            if reads == 22:
+                self.uncertainty = 20.0
+            return result
+        with patch.object(runtime_module, "safe_read", side_effect=widen_on_final_read):
+            binding.assert_live()
+        self.assertEqual(reads, 22)
+        self.uncertainty = 0.0
         self.wall += 51
         self.mono += 71
         with self.assertRaisesRegex(CredentialError, "channel certificate expired"):
