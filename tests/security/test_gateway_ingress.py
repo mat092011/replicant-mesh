@@ -4,6 +4,7 @@ import ssl
 import threading
 import tempfile
 import unittest
+import copy
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +14,9 @@ from steamboat_security.certificates import (certificate_sha256,
     generate_private_key_pem, public_key_sha256, serial_hex)
 from steamboat_security.channel_certificates import (issue_channel_certificate,
     make_channel_csr)
+from steamboat_security.channel_tls import (MAX_CHUNK_BYTES,
+    MAX_HANDSHAKE_BYTES, OwnedWorkerTLS, OwnedWorkerTLSError,
+    _valid_endpoint_host)
 from steamboat_security.channel_policy import sign_channel_policy
 from steamboat_security.gateway_ingress import (GatewayIngressError,
     GatewayWorkerIngress)
@@ -60,11 +64,11 @@ class GatewayIngressTests(unittest.TestCase):
         self.worker_cert_file = None
         self.worker_key_file = None
         self.ca_file = None
-        self.ssl_object = self._make_tls_client()
+        self.tls_owner = self._make_tls_client()
         self.sessions = SessionBindings(clock=self.fixture.clock)
         self.ingress = GatewayWorkerIngress.from_tls(
-            self.ssl_object, verifier=self.fixture.verifier, sessions=self.sessions,
-            gateway_id="gw-east", local_worker_channel_certificate_pem=self.worker_channel)
+            self.tls_owner, verifier=self.fixture.verifier, sessions=self.sessions,
+            gateway_id="gw-east")
 
     def tearDown(self):
         delegation_tests.NOW = self._prior_delegation_now
@@ -88,55 +92,195 @@ class GatewayIngressTests(unittest.TestCase):
         self.worker_cert_file = self._write(self.worker_channel)
         self.worker_key_file = self._write(self.worker_channel_key)
         self.ca_file = self._write(f.gateway_ca)
-        client_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH,
-                                                    cafile=self.ca_file)
-        client_context.load_cert_chain(self.worker_cert_file, self.worker_key_file)
         server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         server_context.verify_mode = ssl.CERT_REQUIRED
         server_context.load_cert_chain(self.gateway_cert_file,
                                        self._write(f.gateway_key))
         server_context.load_verify_locations(cafile=self.ca_file)
         ci, co, si, so = ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO()
-        client = client_context.wrap_bio(ci, co, server_side=False,
-                                         server_hostname=hostname)
         server = server_context.wrap_bio(si, so, server_side=True)
-        client_done = server_done = False
-        for _ in range(20):
-            if not client_done:
-                try:
-                    client.do_handshake()
-                    client_done = True
-                except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
-                    pass
-            if co.pending:
-                si.write(co.read())
-            if not server_done:
-                try:
-                    server.do_handshake()
-                    server_done = True
-                except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
-                    pass
-            if so.pending:
-                ci.write(so.read())
-            if client_done and server_done:
-                return client
+        owner = OwnedWorkerTLS.connect(
+            worker_certificate_pem=self.worker_channel,
+            worker_private_key_pem=self.worker_channel_key,
+            gateway_ca_pem=self.fixture.gateway_ca,
+            endpoint_host=hostname, endpoint_port=443, clock=self.fixture.clock)
+        for _ in range(30):
+            outgoing = owner.take_encrypted()
+            if outgoing:
+                si.write(outgoing)
+            try:
+                server.do_handshake()
+            except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                pass
+            response = so.read() if so.pending else b""
+            if response:
+                owner.feed_encrypted(response)
+            else:
+                owner.do_handshake()
+            if owner.handshake_complete:
+                return owner
         raise AssertionError("MemoryBIO TLS handshake did not complete")
 
     def test_real_mutual_tls_connection_binds_policy_and_unique_generation(self):
-        self.assertIs(type(self.ssl_object), ssl.SSLObject)
-        self.assertFalse(self.ssl_object.server_side)
-        self.assertTrue(self.ssl_object.context.check_hostname)
+        self.assertIs(type(self.tls_owner), OwnedWorkerTLS)
+        self.assertTrue(self.tls_owner.handshake_complete)
+        sent, received = self.tls_owner.byte_counts
+        self.assertGreater(sent, 0)
+        self.assertGreater(received, 0)
         self.assertEqual(self.ingress.policy_revision, 2)
         self.assertEqual(len(self.ingress.stream_generation), 32)
         self.assertEqual(self.ingress.ingress_identity[0], "gateway-v1")
         self.assertFalse(self.ingress.poll_unavailable())
+        self.assertTrue(_valid_endpoint_host("2001:db8::1"))
+        self.assertFalse(_valid_endpoint_host("https://gateway.example.net"))
+        self.assertFalse(_valid_endpoint_host("*.example.net"))
+        self.assertTrue(_valid_endpoint_host("2001:db8::1"))
+        self.assertFalse(_valid_endpoint_host("https://gateway.example.net"))
+        self.assertFalse(_valid_endpoint_host("*.example.net"))
 
     def test_wrong_endpoint_tls_handshake_is_rejected(self):
-        with self.assertRaises(ssl.SSLCertVerificationError):
+        with self.assertRaises(OwnedWorkerTLSError):
             self._make_tls_client("other.example.net")
             # A TLS client that does not validate the fixed gateway endpoint
             # cannot reach the ingress constructor.
             raise AssertionError("wrong endpoint unexpectedly passed TLS")
+
+    def test_owned_tls_requires_matching_client_leaf_and_private_key(self):
+        with self.assertRaises(OwnedWorkerTLSError):
+            OwnedWorkerTLS.connect(
+                worker_certificate_pem=self.worker_channel,
+                worker_private_key_pem=generate_private_key_pem(),
+                gateway_ca_pem=self.fixture.gateway_ca,
+                endpoint_host="gateway.example.net", endpoint_port=443,
+                clock=self.fixture.clock)
+        with self.assertRaises(OwnedWorkerTLSError):
+            OwnedWorkerTLS.connect(
+                worker_certificate_pem=b"", worker_private_key_pem=self.worker_channel_key,
+                gateway_ca_pem=self.fixture.gateway_ca,
+                endpoint_host="gateway.example.net", endpoint_port=443,
+                clock=self.fixture.clock)
+
+    def test_wrong_worker_certificate_cannot_become_ingress(self):
+        wrong_key = generate_private_key_pem()
+        identity = dict(self.fixture.payload["workers"][0])
+        wrong_identity = {
+            "account_id": identity["account_id"], "device_id": "dev_" + "f" * 32,
+            "host_serial": identity["host_serial"],
+            "credential_epoch": identity["host_credential_epoch"],
+        }
+        csr = make_channel_csr(wrong_key, kind="worker_stream", identity=wrong_identity)
+        wrong_cert = issue_channel_certificate(
+            self.fixture.gateway_ca, self.fixture.gateway_ca_key, csr,
+            kind="worker_stream", identity=wrong_identity,
+            now=datetime.fromtimestamp(delegation_tests.NOW, timezone.utc),
+            lifetime_seconds=800)
+        file = self._write(wrong_cert)
+        key_file = self._write(wrong_key)
+        owner = self._make_tls_client_with_credential(wrong_cert, wrong_key, file, key_file)
+        with self.assertRaises(GatewayIngressError):
+            GatewayWorkerIngress.from_tls(
+                owner, verifier=self.fixture.verifier,
+                sessions=self.sessions, gateway_id="gw-east")
+        self.assertFalse(owner.handshake_complete)
+        owner.close()
+
+    def _make_tls_client_with_credential(self, certificate, key, cert_file, key_file):
+        f = self.fixture
+        server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.verify_mode = ssl.CERT_REQUIRED
+        server_context.load_cert_chain(self.gateway_cert_file,
+                                       self._write(f.gateway_key))
+        server_context.load_verify_locations(cafile=self.ca_file)
+        si, so = ssl.MemoryBIO(), ssl.MemoryBIO()
+        server = server_context.wrap_bio(si, so, server_side=True)
+        owner = OwnedWorkerTLS.connect(
+            worker_certificate_pem=certificate, worker_private_key_pem=key,
+            gateway_ca_pem=f.gateway_ca, endpoint_host="gateway.example.net",
+            endpoint_port=443, clock=f.clock)
+        for _ in range(30):
+            encrypted = owner.take_encrypted()
+            if encrypted:
+                si.write(encrypted)
+            try:
+                server.do_handshake()
+            except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                pass
+            response = so.read() if so.pending else b""
+            if response:
+                owner.feed_encrypted(response)
+            else:
+                owner.do_handshake()
+            if owner.handshake_complete:
+                return owner
+        return owner
+
+    def test_incomplete_and_closed_owned_tls_cannot_create_ingress(self):
+        owner = OwnedWorkerTLS.connect(
+            worker_certificate_pem=self.worker_channel,
+            worker_private_key_pem=self.worker_channel_key,
+            gateway_ca_pem=self.fixture.gateway_ca,
+            endpoint_host="gateway.example.net", endpoint_port=443,
+            clock=self.fixture.clock)
+        with self.assertRaises(GatewayIngressError):
+            GatewayWorkerIngress.from_tls(owner, verifier=self.fixture.verifier,
+                                          sessions=self.sessions, gateway_id="gw-east")
+        owner.close()
+        with self.assertRaises(OwnedWorkerTLSError):
+            owner.feed_encrypted(b"x")
+
+    def test_owned_tls_chunk_and_handshake_deadline_bounds_are_sticky(self):
+        owner = OwnedWorkerTLS.connect(
+            worker_certificate_pem=self.worker_channel,
+            worker_private_key_pem=self.worker_channel_key,
+            gateway_ca_pem=self.fixture.gateway_ca,
+            endpoint_host="gateway.example.net", endpoint_port=443,
+            clock=self.fixture.clock)
+        with self.assertRaises(OwnedWorkerTLSError):
+            owner.feed_encrypted(b"x" * (MAX_CHUNK_BYTES + 1))
+        with self.assertRaises(OwnedWorkerTLSError):
+            owner.do_handshake()
+        self.assertLessEqual(MAX_HANDSHAKE_BYTES, 128 * 1024)
+        owner = OwnedWorkerTLS.connect(
+            worker_certificate_pem=self.worker_channel,
+            worker_private_key_pem=self.worker_channel_key,
+            gateway_ca_pem=self.fixture.gateway_ca,
+            endpoint_host="gateway.example.net", endpoint_port=443,
+            clock=self.fixture.clock)
+        self.fixture.mono += 10
+        with self.assertRaises(OwnedWorkerTLSError):
+            owner.do_handshake()
+        with self.assertRaises(OwnedWorkerTLSError):
+            owner.do_handshake()
+
+    @unittest.skipUnless(__import__("os").name == "posix", "POSIX file modes only")
+    def test_tls_credential_files_are_removed_before_connection_is_returned(self):
+        import os
+        import tempfile
+        from unittest.mock import patch
+        from steamboat_security import channel_tls
+        before = set(os.listdir(tempfile.gettempdir()))
+        observed = []
+        original_remove = channel_tls.shutil.rmtree
+        def observe_remove(path, *args, **kwargs):
+            if os.path.basename(path).startswith("steamboat-channel-"):
+                modes = {os.path.basename(item): os.stat(os.path.join(path, item)).st_mode & 0o777
+                         for item in os.listdir(path)}
+                observed.append((os.stat(path).st_mode & 0o777, modes))
+            return original_remove(path, *args, **kwargs)
+        with patch.object(channel_tls.shutil, "rmtree", side_effect=observe_remove):
+            owner = OwnedWorkerTLS.connect(
+                worker_certificate_pem=self.worker_channel,
+                worker_private_key_pem=self.worker_channel_key,
+                gateway_ca_pem=self.fixture.gateway_ca,
+                endpoint_host="gateway.example.net", endpoint_port=443,
+                clock=self.fixture.clock)
+        after = set(os.listdir(tempfile.gettempdir()))
+        self.assertEqual({name for name in after - before
+                          if name.startswith("steamboat-channel-")}, set())
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0][0], 0o700)
+        self.assertEqual(set(observed[0][1].values()), {0o600})
+        owner.close()
 
     def test_global_sequence_replay_permanently_closes_generation(self):
         with self.assertRaises(GatewayIngressError):
@@ -215,6 +359,44 @@ class GatewayIngressTests(unittest.TestCase):
         self.assertTrue(self.ingress._state.closed)
         self.assertTrue(self.ingress.poll_unavailable())
 
+    def test_admission_transaction_serializes_close_until_claim_work_finishes(self):
+        entered = threading.Event()
+        release = threading.Event()
+        closed = threading.Event()
+        errors = []
+
+        def admit():
+            try:
+                with self.ingress.admission_transaction():
+                    entered.set()
+                    self.assertTrue(release.wait(2))
+            except Exception as error:
+                errors.append(error)
+
+        admission = threading.Thread(target=admit)
+        admission.start()
+        self.assertTrue(entered.wait(2))
+        closer = threading.Thread(target=lambda: (self.ingress.close(), closed.set()))
+        closer.start()
+        self.assertFalse(closed.wait(0.05))
+        release.set()
+        admission.join(2)
+        closer.join(2)
+        self.assertFalse(admission.is_alive())
+        self.assertFalse(closer.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(closed.is_set())
+        self.assertTrue(self.ingress._state.closed)
+
+    def test_admission_transaction_performs_final_policy_check(self):
+        with self.assertRaises(GatewayIngressError):
+            with self.ingress.admission_transaction():
+                replacement = dict(self.fixture.payload)
+                replacement["revision"] = 3
+                self.fixture.policy_store.install(sign_channel_policy(
+                    replacement, delegation_tests.private_pem(self.fixture.operator_key)))
+        self.assertTrue(self.ingress._state.closed)
+
     def test_operation_guard_is_owned_and_tracks_ingress_liveness(self):
         envelope = self.fixture.make_delegation(changes={
             "policy_revision": self.ingress.policy_revision,
@@ -251,28 +433,36 @@ class GatewayIngressTests(unittest.TestCase):
     def test_wrong_gateway_id_and_fabricated_ssl_object_are_rejected(self):
         with self.assertRaises(GatewayIngressError):
             GatewayWorkerIngress.from_tls(
-                self.ssl_object, verifier=self.fixture.verifier,
-                sessions=self.sessions, gateway_id="gw-other",
-                local_worker_channel_certificate_pem=self.worker_channel)
+            self.tls_owner, verifier=self.fixture.verifier,
+            sessions=self.sessions, gateway_id="gw-other")
         with self.assertRaises(TypeError):
             GatewayWorkerIngress.from_tls(
                 object(), verifier=self.fixture.verifier, sessions=self.sessions,
-                gateway_id="gw-east",
-                local_worker_channel_certificate_pem=self.worker_channel)
+                gateway_id="gw-east")
+        raw_ssl = self.tls_owner._OwnedWorkerTLS__ssl
+        with self.assertRaises(TypeError):
+            GatewayWorkerIngress.from_tls(
+                raw_ssl, verifier=self.fixture.verifier, sessions=self.sessions,
+                gateway_id="gw-east")
+        with self.assertRaises(TypeError):
+            copy.copy(self.tls_owner)
+        fabricated = object.__new__(OwnedWorkerTLS)
+        with self.assertRaises(TypeError):
+            GatewayWorkerIngress.from_tls(
+                fabricated, verifier=self.fixture.verifier, sessions=self.sessions,
+                gateway_id="gw-east")
 
     def test_one_tls_object_cannot_mint_multiple_stream_generations(self):
         with self.assertRaises(GatewayIngressError):
             GatewayWorkerIngress.from_tls(
-                self.ssl_object, verifier=self.fixture.verifier,
-                sessions=self.sessions, gateway_id="gw-east",
-                local_worker_channel_certificate_pem=self.worker_channel)
+                self.tls_owner, verifier=self.fixture.verifier,
+                sessions=self.sessions, gateway_id="gw-east")
 
     def test_old_generation_close_does_not_close_replacement_connection(self):
         replacement_tls = self._make_tls_client()
         replacement = GatewayWorkerIngress.from_tls(
             replacement_tls, verifier=self.fixture.verifier,
-            sessions=self.sessions, gateway_id="gw-east",
-            local_worker_channel_certificate_pem=self.worker_channel)
+            sessions=self.sessions, gateway_id="gw-east")
         self.assertNotEqual(self.ingress.stream_generation,
                             replacement.stream_generation)
         self.ingress.close()

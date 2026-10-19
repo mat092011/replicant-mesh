@@ -1,19 +1,20 @@
 """Authenticated TLS ingress from a configured C2 gateway to one worker.
 
-This is a connection-bound authorization primitive, not a TLS engine, request
-framer, readiness signal, or C1 grant/revocation check. The caller owns the
-already-handshaken SSLObject and must keep this owner alive with bounded
-heartbeat polling. A stream is permanently closed on uncertainty or identity
-change; replacing it requires a new TLS connection and generation.
+This is a connection-bound authorization primitive, not a request framer,
+readiness signal, or C1 grant/revocation check. It accepts only a completed
+OwnedWorkerTLS connection, which created its own private context and selected
+the verified worker certificate for its mTLS client handshake. A stream is
+permanently closed on uncertainty or identity change; replacing it requires a
+new owned TLS connection and generation.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import secrets
-import ssl
 import threading
 import weakref
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from cryptography import x509
@@ -22,6 +23,7 @@ from cryptography.hazmat.primitives import serialization
 from .authorization import LocalIdentity
 from .certificates import certificate_sha256, public_key_sha256, serial_hex
 from .channel_certificates import verify_channel_certificate
+from .channel_tls import OwnedWorkerTLS, is_owned_worker_tls
 from .errors import SecurityError
 from .gateway_delegation import GatewayDelegationVerifier, VerifiedDelegation
 from .sessions import SessionBindings
@@ -35,6 +37,7 @@ MAX_FRAME_SEQUENCE = 2**63 - 1
 HEARTBEAT_TIMEOUT_SECONDS = 60.0
 _TLS_OWNER_LOCK = threading.Lock()
 _TLS_OWNERS = weakref.WeakKeyDictionary()
+_TLS_CLAIMED = object()
 
 
 def _pem_from_der(der: bytes) -> bytes:
@@ -81,27 +84,27 @@ class GatewayWorkerIngress:
         raise TypeError("use GatewayWorkerIngress.from_tls()")
 
     @classmethod
-    def from_tls(cls, ssl_object, *, verifier: GatewayDelegationVerifier,
-                 sessions: SessionBindings, gateway_id: str,
-                 local_worker_channel_certificate_pem: bytes):
-        if type(ssl_object) is not ssl.SSLObject:
-            raise TypeError("a real completed TLS SSLObject is required")
+    def from_tls(cls, tls_owner, *, verifier: GatewayDelegationVerifier,
+                 sessions: SessionBindings, gateway_id: str):
+        if not is_owned_worker_tls(tls_owner):
+            raise TypeError("a genuine owned worker TLS connection is required")
+        if not tls_owner.handshake_complete:
+            raise GatewayIngressError("owned worker TLS handshake is incomplete")
         if (type(verifier) is not GatewayDelegationVerifier
                 or type(sessions) is not SessionBindings
                 or sessions.clock is not verifier.clock
                 or type(verifier.local_identity) is not LocalIdentity):
             raise TypeError("ingress requires exact verifier, session, and identity owners")
-        context = ssl_object.context
-        if (ssl_object.server_side is not False
-                or ssl_object.server_hostname != verifier.endpoint_host
-                or context.verify_mode is not ssl.CERT_REQUIRED
-                or context.check_hostname is not True):
-            raise GatewayIngressError("TLS object is not a verified client connection to the fixed endpoint")
+        if (tls_owner.endpoint_host != verifier.endpoint_host
+                or tls_owner.endpoint_port != verifier.endpoint_port
+                or tls_owner.clock is not verifier.clock):
+            raise GatewayIngressError("owned TLS connection differs from fixed verifier endpoint")
         with _TLS_OWNER_LOCK:
-            if ssl_object in _TLS_OWNERS:
+            if tls_owner in _TLS_OWNERS:
                 raise GatewayIngressError("TLS connection already has an ingress owner")
+            _TLS_OWNERS[tls_owner] = _TLS_CLAIMED
         try:
-            peer_pem = _pem_from_der(ssl_object.getpeercert(binary_form=True))
+            peer_pem = _pem_from_der(tls_owner.peer_certificate_der)
             view, sample = verifier.policy_store.current_with_sample()
             gateway = view.gateway(gateway_id)
             local = verifier.local_identity
@@ -128,6 +131,7 @@ class GatewayWorkerIngress:
                     or gateway["endpoint_host"] != verifier.endpoint_host
                     or gateway["endpoint_port"] != verifier.endpoint_port):
                 raise GatewayIngressError("TLS gateway certificate is not current-policy pinned")
+            local_worker_channel_certificate_pem = tls_owner.selected_local_certificate_pem
             worker_cert = verify_channel_certificate(
                 local_worker_channel_certificate_pem, verifier.gateway_ca_pem,
                 kind="worker_stream", expected_identity={
@@ -149,7 +153,7 @@ class GatewayWorkerIngress:
             if deadline <= sample.monotonic:
                 raise GatewayIngressError("gateway ingress has no conservative live interval")
             ingress = cls.__new__(cls)
-            ingress._ssl_object = ssl_object
+            ingress._tls_owner = tls_owner
             ingress.verifier = verifier
             ingress.sessions = sessions
             ingress.clock = verifier.clock
@@ -170,13 +174,19 @@ class GatewayWorkerIngress:
             ingress._guards = weakref.WeakSet()
             ingress._fault_reason = None
             with _TLS_OWNER_LOCK:
-                if ssl_object in _TLS_OWNERS:
-                    raise GatewayIngressError("TLS connection already has an ingress owner")
-                _TLS_OWNERS[ssl_object] = ingress.stream_generation
+                _TLS_OWNERS[tls_owner] = ingress.stream_generation
             return ingress
         except GatewayIngressError:
+            tls_owner.close()
+            with _TLS_OWNER_LOCK:
+                if _TLS_OWNERS.get(tls_owner) is _TLS_CLAIMED:
+                    _TLS_OWNERS.pop(tls_owner, None)
             raise
         except Exception as error:
+            tls_owner.close()
+            with _TLS_OWNER_LOCK:
+                if _TLS_OWNERS.get(tls_owner) is _TLS_CLAIMED:
+                    _TLS_OWNERS.pop(tls_owner, None)
             raise GatewayIngressError("gateway TLS ingress could not be authorized") from error
 
     def _policy_and_worker(self):
@@ -210,7 +220,10 @@ class GatewayWorkerIngress:
             self._state.closed = True
             self._state.faulted = True
             self._fault_reason = reason
-            return self.sessions.invalidate_ingress(self.ingress_identity, reason)
+            try:
+                self._tls_owner.close()
+            finally:
+                return self.sessions.invalidate_ingress(self.ingress_identity, reason)
         return 0
 
     def close(self, reason="gateway-stream-lost"):
@@ -221,6 +234,43 @@ class GatewayWorkerIngress:
             raise ValueError("gateway ingress close reason is not in the bounded vocabulary")
         with self._state.lock:
             return self._close_locked(reason)
+
+    @contextmanager
+    def admission_transaction(self):
+        """Serialize local C1 admission and claim creation against stream loss.
+
+        The caller must keep the block to bounded local C1 snapshot checks and
+        SessionBindings operations. Network I/O and model execution do not
+        belong under the ingress lock. C1 exceptions propagate unchanged;
+        normal exit performs a final ingress liveness check before unlocking.
+        """
+        with self._state.lock:
+            try:
+                _view, _worker, _gateway, sample = self._policy_and_worker()
+                self._check_ingress_sample_locked(sample)
+            except Exception as error:
+                self._close_locked(self._liveness_close_reason(error))
+                raise GatewayIngressError("gateway ingress is unavailable for admission") from error
+            yield
+            try:
+                _view, _worker, _gateway, sample = self._policy_and_worker()
+                self._check_ingress_sample_locked(sample)
+            except Exception as error:
+                self._close_locked(self._liveness_close_reason(error))
+                raise GatewayIngressError("gateway ingress expired during admission") from error
+
+    def _check_ingress_sample_locked(self, sample):
+        if (sample.monotonic >= self._state.deadline
+                or sample.monotonic - self._state.last_heartbeat
+                >= HEARTBEAT_TIMEOUT_SECONDS):
+            raise GatewayIngressError("gateway heartbeat or ingress deadline expired")
+
+    @staticmethod
+    def _liveness_close_reason(error):
+        message = str(error)
+        return ("gateway-heartbeat-timeout" if "heartbeat" in message
+                else "gateway-policy-changed" if "policy" in message
+                else "gateway-clock-fault")
 
     def poll_unavailable(self):
         """Bounded liveness poll for an integration-owned <=5s monitor loop."""

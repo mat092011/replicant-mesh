@@ -295,8 +295,7 @@ class GatewayAuthorizationTests(unittest.TestCase):
         from steamboat_security.gateway_ingress import GatewayWorkerIngress
         new_ingress = GatewayWorkerIngress.from_tls(
             new_tls, verifier=self.fixture.verifier,
-            sessions=self.ingress_fixture.sessions, gateway_id="gw-east",
-            local_worker_channel_certificate_pem=self.ingress_fixture.worker_channel)
+            sessions=self.ingress_fixture.sessions, gateway_id="gw-east")
         fields = dict(parse_metadata(WORKER_SERVICE, "OpenSession",
                                      self.fixture.metadata).fields)
         fields["operation_id"] = "op_" + "4" * 32

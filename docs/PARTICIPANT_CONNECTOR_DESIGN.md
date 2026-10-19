@@ -50,6 +50,18 @@ status, work permission or delegation authority. Explicit operator policy must
 pin its identity and certificate and authorize its purpose. C1 leaves cannot
 substitute for channel leaves or vice versa.
 
+The worker-side TLS owner loads its private key and certificate into a private
+TLS 1.2/1.3 client context, verifies the configured gateway CA and fixed endpoint,
+and keeps the SSLObject private. It accepts bounded MemoryBIO input and output
+chunks (16 KiB), bounds each pending BIO to 64 KiB, and limits handshake traffic
+to 128 KiB and ten monotonic seconds. Credential files are created in a 0700
+temporary directory with 0600 files and removed after OpenSSL loads them. The
+completed owner exposes the actual peer certificate and the exact worker leaf
+selected by its own context; gateway ingress accepts this owner rather than a
+caller-supplied SSLObject plus a claimed local certificate. This transport
+primitive does not provide sockets, wire framing, aggregate traffic quotas, or
+channel readiness. POSIX file mode checks remain platform-specific.
+
 ## Trusted terminating gateway
 
 The selected gateway terminates two independently authenticated mTLS hops. A

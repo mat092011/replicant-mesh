@@ -601,15 +601,18 @@ class Authorizer:
         from .gateway_ingress import (GatewayIngressError, GatewayOperationGuard,
                                       GatewayWorkerIngress)
         from .gateway_delegation import GatewayDelegationVerifier
+        from .channel_tls import OwnedWorkerTLS
 
         if type(ingress) is not GatewayWorkerIngress:
             raise GatewayIngressError("an exact owned gateway ingress is required")
         verifier = ingress.verifier
-        tls_object = getattr(ingress, "_ssl_object", None)
+        tls_owner = getattr(ingress, "_tls_owner", None)
         if (type(verifier) is not GatewayDelegationVerifier
-                or type(tls_object) is not ssl.SSLObject
-                or tls_object.server_side is not False
-                or tls_object.server_hostname != verifier.endpoint_host
+                or type(tls_owner) is not OwnedWorkerTLS
+                or not tls_owner.handshake_complete
+                or tls_owner.endpoint_host != verifier.endpoint_host
+                or tls_owner.endpoint_port != verifier.endpoint_port
+                or tls_owner.clock is not self.clock
                 or ingress.clock is not self.clock
                 or verifier.clock is not self.clock
                 or ingress.sessions is not self.session_bindings
