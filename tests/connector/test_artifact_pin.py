@@ -439,6 +439,7 @@ class ArtifactPinCleanupTests(unittest.TestCase):
         close = mock.Mock(side_effect=[OSError("uncertain role close"), None])
         with mock.patch.object(artifact_pin, "fcntl", fake_fcntl), \
                 mock.patch.object(artifact_pin, "_lock", side_effect=[91, 92]), \
+                mock.patch.object(artifact_pin, "_remove_old_pin_record"), \
                 mock.patch("steamboat_runtime.protocol.clock.clock_identity",
                            return_value="test-domain"), \
                 mock.patch.object(artifact_pin.os, "close", close):
@@ -446,6 +447,8 @@ class ArtifactPinCleanupTests(unittest.TestCase):
                 artifact_pin.RuntimeArtifactPin.acquire(
                     view, clock=clock, boot_id="d" * 32)
             owner = raised.exception.pin_owner
+            view._locked_manifest.assert_called_once_with()
+            self.assertEqual(str(raised.exception.__cause__), "inactive")
             self.assertEqual(owner._state, "faulted")
             self.assertEqual(owner._close_outcomes["role_fd"], "unknown")
             self.assertEqual(owner._close_outcomes["global_fd"], "closed")
