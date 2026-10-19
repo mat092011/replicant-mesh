@@ -203,11 +203,18 @@ class C2LaunchClaimStore:
             self._ensure_lock()
             with self._lock(): self._scan()
         except BaseException:
-            os.close(self._fd); self._fd = -1
+            fd, self._fd = self._fd, -1
+            try: os.close(fd)
+            except OSError: self._unknown = True
             raise
 
     def close(self):
-        if getattr(self, "_fd", -1) >= 0: os.close(self._fd); self._fd = -1
+        fd, self._fd = getattr(self, "_fd", -1), -1
+        if fd >= 0:
+            try: os.close(fd)
+            except OSError:
+                self._unknown = True
+                raise
     def __enter__(self): return self
     def __exit__(self, *_): self.close()
     def _step(self, name):
@@ -222,7 +229,12 @@ class C2LaunchClaimStore:
             _check_inode(os.fstat(fd), self._uid)
             os.fsync(fd); os.fsync(self._fd)
         except OSError as error: raise StorageError("C2 claim lock durability failed") from error
-        finally: os.close(fd)
+        finally:
+            owned, fd = fd, -1
+            try: os.close(owned)
+            except OSError:
+                self._unknown = True
+                raise
 
     @contextmanager
     def _lock(self):
@@ -234,8 +246,17 @@ class C2LaunchClaimStore:
             yield
         except OSError as error: raise StorageError("C2 claim lock is unsafe") from error
         finally:
-            try: fcntl.flock(fd, fcntl.LOCK_UN)
-            finally: os.close(fd)
+            owned, fd = fd, -1
+            try:
+                try: fcntl.flock(owned, fcntl.LOCK_UN)
+                except OSError:
+                    self._unknown = True
+                    raise
+            finally:
+                try: os.close(owned)
+                except OSError:
+                    self._unknown = True
+                    raise
 
     def _scan(self):
         names = set(os.listdir(self._fd))
@@ -252,7 +273,12 @@ class C2LaunchClaimStore:
                     _check_inode(os.fstat(fd), self._uid)
                     raw = os.read(fd, MAX_CLAIM_BYTES + 1)
                     if len(raw) > MAX_CLAIM_BYTES or os.read(fd, 1): raise StorageError("C2 claim too large")
-                finally: os.close(fd)
+                finally:
+                    owned, fd = fd, -1
+                    try: os.close(owned)
+                    except OSError:
+                        self._unknown = True
+                        raise
             except OSError as error: raise StorageError("C2 claim cannot be read safely") from error
             total += len(raw)
             if total > MAX_CLAIM_SCAN_BYTES: raise StorageError("C2 claim scan exceeds 1 MiB")
@@ -263,6 +289,8 @@ class C2LaunchClaimStore:
 
     def claim(self, *, selector_sha256, activation_manifest_sha256, generation_sha256,
               new_role_launch_specs, new_host_group_scopes, fresh_selected_validator):
+        if self._fd < 0 or self._unknown:
+            raise StorageError("C2 claim store is closed or latched")
         generation = _hash(generation_sha256, "generation hash")
         specs = tuple(parse_role_launch_spec(role_launch_document(x)) for x in new_role_launch_specs) if type(new_role_launch_specs) is tuple else new_role_launch_specs
         groups = tuple(parse_c2_host_group_scope(x.to_document()) for x in new_host_group_scopes) if type(new_host_group_scopes) is tuple else new_host_group_scopes
@@ -305,11 +333,16 @@ class C2LaunchClaimStore:
                     n = os.write(fd, view)
                     if n <= 0: raise OSError("no write progress")
                     view = view[n:]
-                self._step("claim.file.fsync"); os.fsync(fd); os.close(fd); fd = None
+                self._step("claim.file.fsync"); os.fsync(fd)
+                closing, fd = fd, None
+                os.close(closing)
                 self._step("claim.root.fsync"); os.fsync(self._fd)
             except BaseException as error:
-                if fd is not None: os.close(fd)
                 if created: self._unknown = True
+                if fd is not None:
+                    closing, fd = fd, None
+                    try: os.close(closing)
+                    except OSError: self._unknown = True
                 if isinstance(error, OSError): raise StorageError("C2 claim write outcome is unconfirmed") from error
                 raise
         return C2LaunchClaimReceipt(record, hashlib.sha256(encoded).hexdigest(), filename)

@@ -7,6 +7,7 @@ import os
 import multiprocessing
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +21,7 @@ from steamboat_security.root_c2_launch_claim import (
     C2LaunchClaimRecord, C2LaunchClaimStore,
     c2_launch_claim_document, parse_c2_launch_claim,
 )
+import steamboat_security.root_c2_launch_claim as c2_claim_module
 from steamboat_security.root_transition_launch import role_launch_document
 
 
@@ -197,6 +199,125 @@ class C2ClaimFixture(unittest.TestCase):
         outside_target.write_bytes(b"{}"); os.chmod(outside_target, 0o600)
         (root / receipt.filename).symlink_to(outside_target)
         with self.assertRaises(StorageError): C2LaunchClaimStore(root, expected_uid=os.geteuid())
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX descriptor semantics")
+    def test_claim_close_failure_consumes_fd_number_and_latches_before_cleanup(self):
+        root = Path(self.fx_case.temp.name) / "claims-close-fault"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        args = dict(selector_sha256=self.cohort.selector_sha256,
+            activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+            generation_sha256=self.cohort.generation_sha256,
+            new_role_launch_specs=self.cohort.new_specs,
+            new_host_group_scopes=self.cohort.new_groups)
+        store = C2LaunchClaimStore(root, expected_uid=os.geteuid())
+        original_close = os.close
+        replacement = os.open(os.devnull, os.O_RDONLY)
+        armed = {"value": False, "fd": None}
+
+        def hook(label):
+            if label == "claim.file.fsync": armed["value"] = True
+
+        store._fault_hook = hook
+        def close_then_reuse(fd):
+            if armed["value"]:
+                armed["value"] = False
+                original_close(fd)
+                os.dup2(replacement, fd)
+                armed["fd"] = fd
+                raise OSError("close completed, reporting failure")
+            return original_close(fd)
+
+        try:
+            with mock.patch.object(c2_claim_module.os, "close", close_then_reuse):
+                with self.assertRaises(StorageError):
+                    store.claim(**args, fresh_selected_validator=self._trusted_validator)
+                self.assertTrue(store._unknown)
+                with self.assertRaises(StorageError):
+                    store.claim(**args, fresh_selected_validator=self._trusted_validator)
+            self.assertIsNotNone(armed["fd"])
+            os.fstat(armed["fd"])
+        finally:
+            store.close()
+            if armed["fd"] is not None: original_close(armed["fd"])
+            original_close(replacement)
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX descriptor semantics")
+    def test_store_close_failure_cannot_close_reused_descriptor_on_retry(self):
+        root = Path(self.fx_case.temp.name) / "claims-root-close-fault"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        store = C2LaunchClaimStore(root, expected_uid=os.geteuid())
+        original_close = os.close
+        replacement = os.open(os.devnull, os.O_RDONLY)
+        target = store._fd
+        reused = {"value": False}
+
+        def close_then_reuse(fd):
+            if fd == target and not reused["value"]:
+                reused["value"] = True
+                original_close(fd)
+                os.dup2(replacement, fd)
+                raise OSError("root close completed, reporting failure")
+            return original_close(fd)
+
+        try:
+            with mock.patch.object(c2_claim_module.os, "close", close_then_reuse):
+                with self.assertRaises(OSError): store.close()
+                self.assertEqual(store._fd, -1)
+                self.assertTrue(store._unknown)
+                store.close()
+                with self.assertRaises(StorageError):
+                    store.claim(selector_sha256="a" * 64,
+                        activation_manifest_sha256="b" * 64,
+                        generation_sha256=self.cohort.generation_sha256,
+                        new_role_launch_specs=self.cohort.new_specs,
+                        new_host_group_scopes=self.cohort.new_groups,
+                        fresh_selected_validator=self._trusted_validator)
+            os.fstat(target)
+        finally:
+            if store._fd >= 0: store.close()
+            original_close(target)
+            original_close(replacement)
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX descriptor semantics")
+    def test_lock_close_failure_latches_after_claim_without_reclosing_reused_fd(self):
+        root = Path(self.fx_case.temp.name) / "claims-lock-close-fault"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        args = dict(selector_sha256=self.cohort.selector_sha256,
+            activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+            generation_sha256=self.cohort.generation_sha256,
+            new_role_launch_specs=self.cohort.new_specs,
+            new_host_group_scopes=self.cohort.new_groups)
+        store = C2LaunchClaimStore(root, expected_uid=os.geteuid())
+        original_close = os.close
+        replacement = os.open(os.devnull, os.O_RDONLY)
+        armed = {"value": False, "fd": None}
+
+        def hook(label):
+            if label == "claim.root.fsync": armed["value"] = True
+
+        store._fault_hook = hook
+        def close_then_reuse(fd):
+            if armed["value"]:
+                armed["value"] = False
+                original_close(fd)
+                os.dup2(replacement, fd)
+                armed["fd"] = fd
+                raise OSError("lock close completed, reporting failure")
+            return original_close(fd)
+
+        try:
+            with mock.patch.object(c2_claim_module.os, "close", close_then_reuse):
+                with self.assertRaises(OSError):
+                    store.claim(**args, fresh_selected_validator=self._trusted_validator)
+                self.assertTrue(store._unknown)
+                with self.assertRaises(StorageError):
+                    store.claim(**args, fresh_selected_validator=self._trusted_validator)
+            self.assertIsNotNone(armed["fd"])
+            os.fstat(armed["fd"])
+        finally:
+            store.close()
+            if armed["fd"] is not None: original_close(armed["fd"])
+            original_close(replacement)
 
 
 if __name__ == "__main__": unittest.main()
