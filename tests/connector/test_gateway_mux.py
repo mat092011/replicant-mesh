@@ -341,11 +341,14 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
 
     def test_legacy_describe_binding_selects_exact_second_boot_from_protobuf(self):
         mux = self._mux()
-        fields, _metadata, _old_binding = self.fx._binding_metadata(
-            "Describe", operation_id=new_id("op"), request_id=new_id("req"),
-            session_id="")
-        fields.pop("worker_boot_id")
-        fields.pop("assignment_id")
+        fields = {
+            "binding_version": 1, "operation_id": new_id("op"),
+            "account_id": self.fx.actor_record["account_id"],
+            "device_id": self.fx.actor_record["device_id"],
+            "role": "personal_coordinator",
+            "credential_epoch": self.fx.actor_record["credential_epoch"],
+            "target_device_id": self.fx.device_id,
+        }
         binding = encode_binding(WORKER_SERVICE, "Describe", fields)
         request = Request(protocol_version=PROTOCOL_VERSION,
                           manifest_fingerprint=self.fx.model_id,
