@@ -517,7 +517,9 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
 
         def pump_service():
             try:
-                service.pump_once()
+                while service._accepting:
+                    service.pump_once()
+                    time.sleep(0.001)
             except BaseException as error:
                 errors.append(error)
 
@@ -538,6 +540,77 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         self.assertTrue(service._resources_closed)
         self.assertIsNone(service.multiplexer)
         self.assertEqual(service._workers, {})
+        self.assertEqual(service.pending_channels, 1)
+
+    def test_stop_during_router_registration_retires_late_registration(self):
+        service = self._service(expected=((self.fx.device_id, self.fx.worker_boot_id),))
+        self._worker_client(self.fx.worker_boot_id)
+        self._coordinator_client()
+        entered = __import__("threading").Event()
+        release = __import__("threading").Event()
+        errors = []
+        from steamboat_connector.gateway_router import GatewayRouter
+        original_router_register = GatewayRouter.register_worker
+
+        def blocked_register(router, stream):
+            result = original_router_register(router, stream)
+            entered.set()
+            if not release.wait(2.0):
+                raise TimeoutError("test did not release router-registration barrier")
+            return result
+
+        def pump_service():
+            try:
+                while service._accepting:
+                    service.pump_once()
+                    time.sleep(0.001)
+            except BaseException as error:
+                errors.append(error)
+
+        def pump_clients():
+            for index, item in enumerate(tuple(self.clients)):
+                owner, driver, hello, stream, sock, ingress = item
+                if (not owner.handshake_complete or stream is None
+                        and (driver.pending_plaintext_bytes
+                             or driver.pending_ciphertext_bytes
+                             or owner.pending_encrypted_bytes)):
+                    driver.pump()
+                if (stream is None and owner.handshake_complete
+                        and not driver.pending_plaintext_bytes
+                        and not driver.pending_ciphertext_bytes
+                        and not owner.pending_encrypted_bytes):
+                    stream = ChannelStream(
+                        driver, hello,
+                        writer_reservation_bytes=(writer_reservation_overhead_bytes()
+                            + wire.MAX_BUNDLE_BYTES
+                            + 8 * wire.MAX_CONTROL_BUNDLE_BYTES),
+                        decoded_byte_capacity=wire.MAX_BUNDLE_BYTES,
+                        tls_owner_reservation_bytes=TLS_OWNER_MIN_RESERVATION_BYTES)
+                    self.clients[index] = (owner, driver, hello, stream, sock, ingress)
+                    self._client_cleanup[id(driver)]["stream"] = stream
+                if stream is not None:
+                    stream.pump()
+
+        service_thread = __import__("threading").Thread(
+            target=pump_service, daemon=True)
+        with patch.object(GatewayRouter, "register_worker", new=blocked_register):
+            service_thread.start()
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and not entered.is_set():
+                pump_clients()
+                time.sleep(0.001)
+            self.assertTrue(entered.wait(1.0),
+                            "genuine worker HELLO did not reach router registration")
+            service.stop()
+            self.assertFalse(service._resources_closed)
+            release.set()
+            service_thread.join(2.0)
+        self.assertFalse(service_thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(service._resources_closed)
+        self.assertEqual(service._workers, {})
+        self.assertIsNone(service.multiplexer)
+        self.assertEqual(service.router._workers, {})
         self.assertEqual(service.pending_channels, 1)
 
     def test_coordinator_tls_on_worker_listener_is_rejected_by_fixed_purpose(self):

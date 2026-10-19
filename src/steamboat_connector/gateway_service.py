@@ -74,6 +74,7 @@ class _Accepted:
     hello: object | None = None
     stream: ChannelStream | None = None
     identity: tuple | None = None
+    registration: object | None = None
     close_started: bool = False
     close_complete: bool = False
 
@@ -349,40 +350,77 @@ class GatewayService:
         stream = pending.stream
         if not stream.transport_bootstrap_complete:
             return False
+        if not self._accepting:
+            return False
         registration = stream.registration
+        if not self._accepting:
+            return False
         if pending.purpose == "worker":
             if type(registration) is not RegisteredWorker:
                 self._fail("worker HELLO did not produce a genuine registration")
             identity = registration.identity
+            if not self._accepting:
+                return False
             key = identity[1:3]
             if key not in self.expected_workers:
                 self._fail("worker HELLO tuple is outside the fixed invited cohort")
             if key in self._workers:
                 self._fail("duplicate worker boot cannot replace the captured generation")
+            with self._stop_lock:
+                if not self._accepting:
+                    return False
+            # Keep the capability rooted in the pending owner before invoking
+            # the router callback; a callback that faults after mutation is
+            # still retired by the finalizer.
+            pending.registration = registration
             self.router.register_worker(stream)
-            self._workers[key] = (registration, stream, pending)
+            if not self._accepting:
+                return False
         else:
             if type(registration) is not RegisteredCoordinator:
                 self._fail("coordinator HELLO did not produce a genuine registration")
             identity = registration.identity
+            if not self._accepting:
+                return False
             if (identity[2] != self.coordinator_boot_id
                     or identity[3] != self.tenant_account_id):
                 self._fail("coordinator HELLO identity differs from the fixed cohort")
             if self._coordinator is not None:
                 self._fail("coordinator generation replacement is forbidden")
-            self._coordinator = (registration, stream, pending)
-        self._accepted.remove(pending)
-        if self._coordinator is not None and len(self._workers) == len(self.expected_workers):
+        # Publication is the only section serialized with Stop. All liveness,
+        # identity, router, and mux callbacks run outside this short lock.
+        with self._stop_lock:
+            if not self._accepting:
+                return False
+            if pending.purpose == "worker":
+                self._workers[key] = (registration, stream, pending)
+            else:
+                self._coordinator = (registration, stream, pending)
+            self._accepted.remove(pending)
+            make_mux = (self._coordinator is not None
+                        and len(self._workers) == len(self.expected_workers)
+                        and self.multiplexer is None)
+        if make_mux:
+            with self._stop_lock:
+                if not self._accepting:
+                    return False
             actual = set(self._workers)
             if actual != set(self.expected_workers):
                 self._fail("authenticated worker cohort differs from exact expected tuples")
-            self.multiplexer = GatewayChannelMultiplexer(
+            mux = self._make_multiplexer(
                 coordinator_stream=self._coordinator[1],
                 worker_streams=tuple(self._workers[key][1] for key in self.expected_workers),
                 router=self.router,
                 data_capture_reservation_bytes=9 * _RELAY_CAPTURE_BYTES,
                 control_capture_reservation_bytes=8 * _CONTROL_CAPTURE_BYTES)
+            # A factory can return after Stop; capture its ownership before
+            # allowing the pump to quiesce so the finalizer can retire it.
+            with self._stop_lock:
+                self.multiplexer = mux
         return True
+
+    def _make_multiplexer(self, **kwargs):
+        return GatewayChannelMultiplexer(**kwargs)
 
     def pump_once(self):
         """Accept/pump a bounded number of pending channels, then mux if committed."""
@@ -527,6 +565,12 @@ class GatewayService:
             return
         pending.close_started = True
         try:
+            if pending.registration is not None:
+                removed = self.router.remove_worker(pending.registration)
+                if removed:
+                    self._check_cleanup_state(pending.stream)
+                    pending.close_complete = True
+                    return
             if pending.stream is not None:
                 pending.stream.close()
                 self._check_cleanup_state(pending.stream)
