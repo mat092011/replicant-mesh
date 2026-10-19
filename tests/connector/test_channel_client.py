@@ -1,6 +1,7 @@
 """Coordinator SDK checks over the genuine two-hop TLS/HELLO fixture."""
 import asyncio
 import secrets
+import time
 import unittest
 from unittest import mock
 
@@ -11,13 +12,14 @@ from steamboat_connector.channel_client import (
     _DATA_CAPTURE, _DATA_SLOTS,
 )
 from steamboat_runtime.protocol.wire import Request, Response, serialize_message
-from steamboat_runtime.protocol.secure_transport import (
-    AuthorizationRevoked, SecureTaskPending,
-)
+from steamboat_runtime.protocol.secure_transport import SecureTaskPending
 from steamboat_runtime.protocol.errors import ProtocolError
+from steamboat_runtime.participant_context import TrustedRequestContext
 from steamboat_security.outbound import AuthorizationWatcher
 from steamboat_security.errors import SessionError
+from steamboat_security.ids import new_id
 from tests.connector import test_gateway_router as gateway_router_tests
+from tests.security import test_identity_core as identity_tests
 
 
 class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
@@ -32,12 +34,57 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
         # protobuf, so configure the same genuine C1 authorizer accordingly.
         self.fx.base.adapter.worker_request_type = Request
         self.client = None
+        self._call_tasks = []
+        self._release_events = []
+
+    def _track_call(self, awaitable):
+        task = asyncio.create_task(awaitable)
+        self._call_tasks.append(task)
+        return task
+
+    def _unique_context(self, *, hard_lifetime):
+        base = self.fx.base
+        fixture = base.fx
+        authorizer, _ = fixture.coordinator_authorizer(
+            time_source=base.time_source, store=base.snapshot_store)
+        request_id, session_id, route_id, operation_id = (
+            new_id("req"), new_id("ses"), new_id("route"), new_id("op"))
+        fields = {
+            "binding_version": 1, "operation_id": operation_id,
+            "account_id": identity_tests.ACCOUNT_A,
+            "device_id": identity_tests.DEVICE_CONSUMER,
+            "role": "consumer", "credential_epoch": 1,
+            "target_device_id": identity_tests.DEVICE_COORDINATOR,
+            "request_id": request_id,
+        }
+        authorization = authorizer.authorize(
+            "steamboat.v1.Coordinator", "Generate",
+            {"input_ids": [1], "new_tokens": 1, "timeout_seconds": 20,
+             "capture_logits": False},
+            fixture.metadata("steamboat.v1.Coordinator", "Generate", fields),
+            fixture.credentials["consumer"]["certificate"])
+        return TrustedRequestContext(
+            tenant_account_id=identity_tests.ACCOUNT_A, request_id=request_id,
+            session_id=session_id, route_id=route_id,
+            coordinator_boot_id=identity_tests.BOOT_COORDINATOR,
+            route_epoch=1, attempt=1, authorization=authorization,
+            hard_monotonic_deadline=time.monotonic() + hard_lifetime)
 
     async def asyncTearDown(self):
+        for release in self._release_events:
+            release.set()
+        active = [task for task in self._call_tasks if not task.done()]
+        for task in active:
+            task.cancel()
+        if self._call_tasks:
+            await asyncio.gather(*self._call_tasks, return_exceptions=True)
         if self.client is not None:
+            retirements = tuple(self.client._retirement_tasks)
+            if retirements:
+                await asyncio.gather(*retirements, return_exceptions=True)
             try:
                 await self.client.close()
-            except ChannelClientOwnershipUncertain:
+            except (ChannelClientOwnershipUncertain, SecureTaskPending):
                 pass
 
     def _client(self, *, data_bytes=None, control_bytes=None):
@@ -68,7 +115,7 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
         context = self.fx.base.adapter.create_bootstrap_context()
         request = Request(protocol_version=1, manifest_fingerprint=self.fx.model_id,
                           worker_boot_id=self.fx.worker_boot_id, timeout_ms=5000)
-        call = asyncio.create_task(self.client.execute(
+        call = self._track_call(self.client.execute(
             "Describe", request, trusted_request_context=context))
         server_request = await self._server_request(
             call, description="Describe request")
@@ -112,7 +159,7 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
         context = self.fx.base.adapter.create_bootstrap_context()
         request = Request(protocol_version=1, manifest_fingerprint=self.fx.model_id,
                           worker_boot_id=self.fx.worker_boot_id, timeout_ms=5000)
-        call = asyncio.create_task(self.client.execute(
+        call = self._track_call(self.client.execute(
             "Describe", request, trusted_request_context=context))
         incoming = await self._server_request(call, description="stream-loss request")
         self.fx.coordinator_server_stream.close()
@@ -203,6 +250,7 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
             return captured["auth"]
 
         release = asyncio.Event()
+        self._release_events.append(release)
         async def remote_owner():
             await release.wait()
 
@@ -249,12 +297,15 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
         request = Request(protocol_version=1, manifest_fingerprint=self.fx.model_id,
                           worker_boot_id=self.fx.worker_boot_id, timeout_ms=5000)
         release = asyncio.Event()
+        receipt = asyncio.Event()
+        self._release_events.append(release)
         captured, children = {}, []
 
         async def remote_owner():
             await release.wait()
 
         async def watcher(_authorization):
+            await receipt.wait()
             child = asyncio.create_task(remote_owner())
             children.append(child)
             await asyncio.sleep(0)
@@ -268,7 +319,7 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(self.client.authorizer, "authorize_gateway_outbound",
                                side_effect=capture_auth):
-            call = asyncio.create_task(self.client.execute(
+            call = self._track_call(self.client.execute(
                 "Describe", request, trusted_request_context=context))
             pending_error = None
             received = False
@@ -276,6 +327,7 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
                 self.fx.coordinator_server_stream.pump()
                 if self.fx.coordinator_server_stream.pop_message() is not None:
                     received = True
+                    receipt.set()
                     break
                 if call.done():
                     try:
@@ -314,8 +366,8 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_expired_call_does_not_block_independent_context_or_control_cleanup(self):
         self.client = self._client()
-        short_context = self.fx.base._make_context(hard_lifetime=0.4)
-        long_context = self.fx.base._make_context(hard_lifetime=30)
+        short_context = self._unique_context(hard_lifetime=2)
+        long_context = self._unique_context(hard_lifetime=30)
 
         def open_request(context):
             return Request(protocol_version=1, manifest_fingerprint=self.fx.model_id,
@@ -323,16 +375,16 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
                            session_id=context.session_id, timeout_ms=5000,
                            max_positions=8, lifetime_ms=20000, idle_lease_ms=10000)
 
-        short_call = asyncio.create_task(self.client.execute(
+        short_call = self._track_call(self.client.execute(
             "OpenSession", open_request(short_context),
             trusted_request_context=short_context))
-        long_call = asyncio.create_task(self.client.execute(
+        long_call = self._track_call(self.client.execute(
             "OpenSession", open_request(long_context),
             trusted_request_context=long_context))
         short_wire = await self._server_request(short_call, description="short OpenSession")
         long_wire = await self._server_request(long_call, description="long OpenSession")
-        await asyncio.sleep(0.45)
-        with self.assertRaises((SessionError, AuthorizationRevoked)):
+        self.fx.base.time_source.advance(3)
+        with self.assertRaises(SessionError):
             await asyncio.wait_for(short_call, timeout=2)
         self.assertFalse(self.client._unavailable)
 
@@ -366,7 +418,7 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
             protocol_version=1, manifest_fingerprint=self.fx.model_id,
             worker_boot_id=self.fx.worker_boot_id, session_id=long_context.session_id,
             lease_token=opened.lease_token, timeout_ms=5000)
-        close_call = asyncio.create_task(self.client.execute(
+        close_call = self._track_call(self.client.execute(
             "CloseSession", close_request, trusted_request_context=long_context))
         close_wire = await self._server_request(close_call, description="CloseSession")
         self.assertEqual(close_wire.kind, wire.CONTROL)
@@ -386,6 +438,46 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
                 break
             await asyncio.sleep(0.001)
         self.assertEqual((await asyncio.wait_for(close_call, timeout=2)).code, "OK")
+
+    async def test_dispatched_request_timeout_retains_late_response_tombstone(self):
+        self.client = self._client()
+        request = Request(protocol_version=1, manifest_fingerprint=self.fx.model_id,
+                          worker_boot_id=self.fx.worker_boot_id, timeout_ms=200)
+        call = self._track_call(self.client.execute(
+            "Describe", request,
+            trusted_request_context=self.fx.base.adapter.create_bootstrap_context()))
+        timed_out_wire = await self._server_request(call, description="timed Describe")
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(call, timeout=2)
+        self.assertEqual(self.client._abandoned.get(timed_out_wire.message_id),
+                         ("Describe", wire.RESPONSE, self.client._generation))
+        self.assertFalse(self.client._unavailable)
+
+        next_call = self._track_call(self.client.execute(
+            "Describe", Request(protocol_version=1,
+                                manifest_fingerprint=self.fx.model_id,
+                                worker_boot_id=self.fx.worker_boot_id,
+                                timeout_ms=5000),
+            trusted_request_context=self.fx.base.adapter.create_bootstrap_context()))
+        next_wire = await self._server_request(next_call, description="next Describe")
+        response = Response(protocol_version=1, manifest_fingerprint=self.fx.model_id,
+                            worker_boot_id=self.fx.worker_boot_id, code="OK")
+        self.fx.coordinator_server_stream.enqueue(
+            kind=wire.RESPONSE, message_id=timed_out_wire.message_id,
+            payload=wire.encode_bundle(
+                "Describe", wire.BUNDLE_RESPONSE, fragment_kind=wire.RESPONSE,
+                protobuf=serialize_message(response)))
+        self.fx.coordinator_server_stream.enqueue(
+            kind=wire.RESPONSE, message_id=next_wire.message_id,
+            payload=wire.encode_bundle(
+                "Describe", wire.BUNDLE_RESPONSE, fragment_kind=wire.RESPONSE,
+                protobuf=serialize_message(response)))
+        for _ in range(500):
+            self.fx.coordinator_server_stream.pump()
+            if next_call.done():
+                break
+            await asyncio.sleep(0.001)
+        self.assertEqual((await asyncio.wait_for(next_call, timeout=2)).code, "OK")
 
     async def test_cancellation_fails_dispatched_auth_before_close(self):
         self.client = self._client()
@@ -412,7 +504,7 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(self.client.authorizer, "authorize_gateway_outbound",
                                side_effect=capture_auth):
-            call = asyncio.create_task(self.client.execute(
+            call = self._track_call(self.client.execute(
                 "OpenSession", request, trusted_request_context=context))
             incoming = await self._server_request(
                 call, description="cancellation request")
@@ -427,7 +519,7 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
 
         # A canceled call must not fence another independent request on the
         # still-live genuine HELLO generation.
-        describe = asyncio.create_task(self.client.execute(
+        describe = self._track_call(self.client.execute(
             "Describe", Request(protocol_version=1,
                                 manifest_fingerprint=self.fx.model_id,
                                 worker_boot_id=self.fx.worker_boot_id,
