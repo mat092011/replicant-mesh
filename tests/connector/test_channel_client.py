@@ -2,13 +2,16 @@
 import asyncio
 import secrets
 import unittest
+from unittest import mock
 
 from steamboat_connector import channel_wire as wire
 from steamboat_connector.channel_client import (
-    CoordinatorChannelClient, _CONTROL_CAPTURE, _CONTROL_SLOTS,
+    ChannelClientOwnershipUncertain, CoordinatorChannelClient,
+    _CONTROL_CAPTURE, _CONTROL_SLOTS,
     _DATA_CAPTURE, _DATA_SLOTS,
 )
 from steamboat_runtime.protocol.wire import Request, Response, serialize_message
+from steamboat_runtime.protocol.secure_transport import SecureTaskPending
 from steamboat_security.outbound import AuthorizationWatcher
 from tests.connector import test_gateway_router as gateway_router_tests
 
@@ -24,7 +27,10 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         if self.client is not None:
-            await self.client.close()
+            try:
+                await self.client.close()
+            except ChannelClientOwnershipUncertain:
+                pass
 
     def _client(self, *, data_bytes=None, control_bytes=None):
         return CoordinatorChannelClient(
@@ -101,6 +107,139 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.client._unavailable)
         self.assertEqual(self.client._data_bytes, 0)
         self.assertEqual(self.client._pending, {})
+
+    async def test_close_fault_sticks_capture_and_auth_without_retry(self):
+        self.client = self._client()
+        context = self.fx.base.adapter.create_bootstrap_context()
+        request = Request(protocol_version=1, manifest_fingerprint=self.fx.model_id,
+                          worker_boot_id=self.fx.worker_boot_id, timeout_ms=5000)
+        captured = {}
+        original = self.client.authorizer.authorize_gateway_outbound
+
+        def capture_auth(**kwargs):
+            captured["auth"] = original(**kwargs)
+            return captured["auth"]
+
+        close_calls = []
+        def uncertain_close():
+            close_calls.append(True)
+            raise RuntimeError("injected uncertain C1 close")
+
+        with mock.patch.object(self.client.authorizer, "authorize_gateway_outbound",
+                               side_effect=capture_auth), \
+             mock.patch.object(type(self.client.stream), "enqueue",
+                               side_effect=RuntimeError("injected enqueue fault")):
+            with self.assertRaises(ChannelClientOwnershipUncertain) as caught:
+                await self.client.execute("Describe", request,
+                                          trusted_request_context=context)
+        self.assertIsInstance(caught.exception.__cause__, RuntimeError)
+        self.assertEqual(len(close_calls), 1)
+        self.assertEqual(self.client._data_bytes, _DATA_CAPTURE)
+        self.assertEqual(self.client._data_count, 1)
+        self.assertEqual(len(self.client._owners), 1)
+        owner = next(iter(self.client._owners.values()))
+        self.assertIs(owner["auth"], captured["auth"])
+        self.assertIsNotNone(owner["request"])
+        self.assertIsNotNone(owner["route"])
+        self.assertEqual(owner["state"], "uncertain")
+        with self.assertRaises(ChannelClientOwnershipUncertain):
+            await self.client.close()
+        self.assertEqual(len(close_calls), 1)
+        self.assertFalse(self.client._close_complete)
+
+    async def test_recursive_pending_retains_capture_until_auth_fail_and_close(self):
+        self.client = self._client()
+        context = self.fx.base.adapter.create_bootstrap_context()
+        request = Request(protocol_version=1, manifest_fingerprint=self.fx.model_id,
+                          worker_boot_id=self.fx.worker_boot_id, timeout_ms=5000)
+        captured = {}
+        original = self.client.authorizer.authorize_gateway_outbound
+
+        def capture_auth(**kwargs):
+            captured["auth"] = original(**kwargs)
+            return captured["auth"]
+
+        release = asyncio.Event()
+        async def remote_owner():
+            await release.wait()
+
+        async def child_owner():
+            raise SecureTaskPending((grandchild,))
+
+        grandchild = asyncio.create_task(remote_owner())
+        child = asyncio.create_task(child_owner())
+
+        async def handoff(awaitable, authorization, watcher, **kwargs):
+            kwargs["on_pending"]((child,))
+            pending = SecureTaskPending((child,))
+            pending.authorization_transferred = True
+            raise pending
+
+        with mock.patch.object(self.client.authorizer, "authorize_gateway_outbound",
+                               side_effect=capture_auth), \
+             mock.patch("steamboat_connector.channel_client._run_guarded",
+                        side_effect=handoff):
+            with self.assertRaises(SecureTaskPending):
+                await self.client.execute("Describe", request,
+                                          trusted_request_context=context)
+        self.assertEqual(self.client._data_bytes, _DATA_CAPTURE)
+        self.assertEqual(self.client._data_count, 1)
+        owner = next(iter(self.client._owners.values()))
+        self.assertIs(owner["auth"], captured["auth"])
+        self.assertIsNotNone(owner["request"])
+        self.assertIsNotNone(owner["raw_request"])
+        self.assertNotEqual(owner["state"], "closed")
+        self.assertFalse(owner["auth"]._closed)
+        cleanup = next(iter(self.client._retirement_tasks))
+        release.set()
+        await asyncio.wait_for(cleanup, timeout=2)
+        self.assertEqual(self.client._data_bytes, 0)
+        self.assertEqual(self.client._data_count, 0)
+        self.assertEqual(self.client._owners, {})
+        self.assertTrue(captured["auth"]._failed)
+        self.assertTrue(captured["auth"]._closed)
+
+    async def test_cancellation_fails_dispatched_auth_before_close(self):
+        self.client = self._client()
+        context = self.fx.base.context
+        request = Request(protocol_version=1, manifest_fingerprint=self.fx.model_id,
+                          worker_boot_id=self.fx.worker_boot_id,
+                          session_id=context.session_id, timeout_ms=5000,
+                          max_positions=32, lifetime_ms=20000, idle_lease_ms=10000)
+        captured, events = {}, []
+        original_authorize = self.client.authorizer.authorize_gateway_outbound
+
+        def capture_auth(**kwargs):
+            auth = original_authorize(**kwargs)
+            captured["auth"] = auth
+            original_fail, original_close = auth.fail, auth.close
+            def record_fail(*, cache_may_exist):
+                events.append(("fail", cache_may_exist))
+                return original_fail(cache_may_exist=cache_may_exist)
+            def record_close():
+                events.append(("close",))
+                return original_close()
+            auth.fail, auth.close = record_fail, record_close
+            return auth
+
+        with mock.patch.object(self.client.authorizer, "authorize_gateway_outbound",
+                               side_effect=capture_auth):
+            call = asyncio.create_task(self.client.execute(
+                "OpenSession", request, trusted_request_context=context))
+            for _ in range(500):
+                self.fx.coordinator_server_stream.pump()
+                incoming = self.fx.coordinator_server_stream.pop_message()
+                if incoming is not None:
+                    break
+                await asyncio.sleep(0.001)
+            else:
+                self.fail("coordinator did not receive the authorized request")
+            call.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await call
+        self.assertEqual(events, [("fail", True), ("close",)])
+        self.assertEqual(self.client._data_bytes, 0)
+        self.assertEqual(self.client._owners, {})
 
     async def test_unknown_message_id_and_wrong_response_method_are_rejected(self):
         self.client = self._client()

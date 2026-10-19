@@ -28,10 +28,13 @@ The generation uses a monotonic, nonzero 128-bit message-ID allocator and
 retires before integer wrap. It never retries uncertain mutations. Cancellation
 or channel/policy loss fences the generation; pending callers fail and retain
 their authorization/capture ownership until local operation cleanup finishes.
-`close()` is bounded and reports `SecureTaskPending` if that ownership remains
-live. Before copying a caller's protobuf, the adapter checks serialized size,
-timeout and the request tensor's three-dimension structural limit. It also
-preflights raw response bytes before protobuf parsing.
+`close()` is bounded and reports `SecureTaskPending` while tasks still own work.
+If authorization failure or close itself is uncertain, the adapter retains that
+operation and its charged capture permanently, fences the generation, and
+reports `ChannelClientOwnershipUncertain`; it never retries the close. Before
+copying a caller's protobuf, the adapter checks serialized size, timeout and the
+request tensor's three-dimension structural limit. It preflights raw response
+bytes before protobuf parsing.
 
 Focused fixture tests are in `tests/connector/test_channel_client.py` and use
 the existing genuine two-hop TLS/HELLO fixture. They establish local adapter

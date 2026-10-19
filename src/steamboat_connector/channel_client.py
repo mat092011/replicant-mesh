@@ -35,6 +35,10 @@ class SecureWorkerClientProtocol(Protocol):
     async def close(self): ...
 
 
+class ChannelClientOwnershipUncertain(RuntimeError):
+    """Authorization cleanup failed; its capture remains reserved permanently."""
+
+
 class CoordinatorChannelClient:
     """Multiplex bounded worker calls over one committed coordinator HELLO stream.
 
@@ -77,13 +81,14 @@ class CoordinatorChannelClient:
         self.control_capture_reservation_bytes = control_capture_reservation_bytes
         self._generation = stream._hello.generation
         self._pending = {}
+        self._owners = {}
         self._next_message_id = 1
         self._data_bytes = self._control_bytes = 0
         self._data_count = self._control_count = 0
         self._lock = asyncio.Lock()
         self._pump_task = None
         self._closed = self._unavailable = self._close_complete = False
-        self._retained, self._active = set(), set()
+        self._retained, self._active, self._retirement_tasks = set(), set(), set()
 
     async def execute(self, method, request, *, trusted_request_context):
         if self._closed or self._unavailable or self.stream.closed:
@@ -107,7 +112,8 @@ class CoordinatorChannelClient:
         response_lane = wire.CONTROL_RESPONSE if is_control else wire.RESPONSE
         message_id = None
         auth = None
-        transferred = completed = reservation_owned = False
+        transferred = completed = reservation_owned = failed = dispatched = False
+        owner = None
         current_task = asyncio.current_task()
         self._active.add(current_task)
         request_deadline = time.monotonic() + request.timeout_ms / 1000
@@ -119,27 +125,36 @@ class CoordinatorChannelClient:
                     raise ProtocolError("EXECUTION_FAILED", "gateway generation message ID space exhausted")
                 message_id = self._next_message_id.to_bytes(16, "big")
                 self._next_message_id += 1
+                owner = {"message_id": message_id, "auth": None,
+                         "request": None, "route": None, "capture": capture,
+                         "control": is_control, "state": "reserved",
+                         "close_attempted": False, "retirement": None}
                 self._reserve_capture(is_control, capture)
                 reservation_owned = True
+                self._owners[message_id] = owner
             # Copy only after the full per-call capture reservation is held.
             source_request = Request()
             source_request.CopyFrom(request)
+            owner["request"] = source_request
             route = self.egress.mint_route_guard(
                 method=method, trusted_request_context=trusted_request_context)
             auth = self.authorizer.authorize_gateway_outbound(
                 service=WORKER_SERVICE, method=method, payload=source_request,
                 trusted_request_context=trusted_request_context,
                 gateway_route=route)
+            owner["auth"], owner["route"], owner["state"] = auth, route, "active"
             async with self._lock:
                 self._assert_live()
                 wire_request = Request()
                 wire_request.CopyFrom(source_request)
+                owner["wire_request"] = wire_request
                 remaining = min(await _maybe_await(auth.remaining_seconds()),
                                 request_deadline - time.monotonic())
                 wire_request.timeout_ms = min(request.timeout_ms, int(remaining * 1000))
                 if wire_request.timeout_ms < 1:
                     raise TimeoutError("authorization expires before dispatch")
                 raw = serialize_message(wire_request, MAX_MESSAGE_BYTES)
+                owner["raw_request"] = raw
                 # Apply a fresh authorization/deadline clip after serialization,
                 # immediately before the one-way mutation can enter the stream.
                 await _maybe_await(auth.assert_live())
@@ -149,11 +164,13 @@ class CoordinatorChannelClient:
                 if wire_request.timeout_ms < 1:
                     raise TimeoutError("authorization expires before dispatch")
                 raw = serialize_message(wire_request, MAX_MESSAGE_BYTES)
+                owner["raw_request"] = raw
                 self.egress.assert_transport_live()
                 route.assert_live()
                 bundle = wire.encode_bundle(
                     method, wire.REQUEST, fragment_kind=lane,
                     binding=auth.binding_bytes, protobuf=raw)
+                owner["bundle"] = bundle
                 future = asyncio.get_running_loop().create_future()
                 self._pending[message_id] = {
                     "future": future, "auth": auth, "method": method,
@@ -162,6 +179,8 @@ class CoordinatorChannelClient:
                     "capture": capture, "response_lane": response_lane,
                 }
                 self.stream.enqueue(kind=lane, message_id=message_id, payload=bundle)
+                dispatched = True
+                owner["dispatched"] = True
                 if self._pump_task is None:
                     self._pump_task = asyncio.create_task(self._pump())
             try:
@@ -170,15 +189,17 @@ class CoordinatorChannelClient:
                     self.authorization_watcher,
                     timeout=wire_request.timeout_ms / 1000,
                     absolute_deadline=request_deadline,
-                    on_pending=self._retain_pending)
+                    on_pending=self._retain_pending,
+                    close_authorization_on_pending=False)
             except SecureTaskPending as error:
                 transferred = error.authorization_transferred
                 self._fence("uncertain call ownership after cancellation")
                 if transferred and reservation_owned:
-                    owner = asyncio.create_task(
-                        self._release_after(error.tasks, is_control, capture))
-                    self._retained.add(owner)
-                    owner.add_done_callback(self._retained.discard)
+                    owner["state"] = "pending"
+                    cleanup_task = asyncio.create_task(
+                        self._release_after(error.tasks, owner, failed=True,
+                                            cache_may_exist=dispatched and method != "Describe"))
+                    self._track_retirement(cleanup_task)
                 raise
             if _correlation != (message_id, self._generation, auth.binding_bytes):
                 raise ProtocolError("EXECUTION_FAILED", "gateway response correlation changed")
@@ -188,27 +209,23 @@ class CoordinatorChannelClient:
             completed = True
             return response
         except asyncio.CancelledError:
+            failed = True
             self._fence("caller canceled an in-flight gateway operation")
             raise
         except BaseException:
-            if auth is not None and not completed and not transferred:
-                try:
-                    await _maybe_await(auth.fail(cache_may_exist=method != "Describe"))
-                except Exception:
-                    pass
+            failed = not completed
             raise
         finally:
             entry = self._pending.pop(message_id, None)
             if entry is not None and not entry["future"].done():
                 entry["future"].cancel()
-            if reservation_owned and not transferred:
-                self._release(is_control, capture)
-            if auth is not None and not transferred:
-                try:
-                    await _maybe_await(auth.close())
-                except Exception:
-                    self._fence("authorization cleanup failed")
-            self._active.discard(current_task)
+            try:
+                if owner is not None and reservation_owned and not transferred:
+                    await self._retire_owner(
+                        owner, failed=failed,
+                        cache_may_exist=dispatched and method != "Describe")
+            finally:
+                self._active.discard(current_task)
 
     async def _pump(self):
         try:
@@ -297,9 +314,61 @@ class CoordinatorChannelClient:
             self._retained.add(task)
             task.add_done_callback(self._retained.discard)
 
-    async def _release_after(self, tasks, control, capture):
+    async def _release_after(self, tasks, owner, *, failed, cache_may_exist):
         await _wait_owned_tasks(tuple(tasks))
-        self._release(control, capture)
+        await self._retire_owner(owner, failed=failed,
+                                  cache_may_exist=cache_may_exist)
+
+    def _track_retirement(self, task):
+        self._retirement_tasks.add(task)
+        self._retained.add(task)
+        def finished(done):
+            self._retirement_tasks.discard(done)
+            self._retained.discard(done)
+            # Consume detached cleanup failures; the operation owner records
+            # them permanently and close() reports the sticky uncertainty.
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+
+    async def _retire_owner(self, owner, *, failed, cache_may_exist):
+        task = owner.get("retirement")
+        if task is None:
+            task = asyncio.create_task(self._finish_owner(
+                owner, failed=failed, cache_may_exist=cache_may_exist))
+            owner["retirement"] = task
+            self._track_retirement(task)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            _retain_tasks((task,))
+            raise
+
+    async def _finish_owner(self, owner, *, failed, cache_may_exist):
+        auth = owner.get("auth")
+        failure_error = None
+        if auth is not None and failed:
+            try:
+                await _maybe_await(auth.fail(cache_may_exist=cache_may_exist))
+            except BaseException as error:
+                failure_error = error
+        close_error = None
+        if auth is not None and not owner["close_attempted"]:
+            owner["close_attempted"] = True
+            owner["state"] = "closing"
+            try:
+                await _maybe_await(auth.close())
+            except BaseException as error:
+                close_error = error
+        if failure_error is not None or close_error is not None:
+            owner["state"] = "uncertain"
+            owner["cleanup_error"] = close_error or failure_error
+            self._fence("outbound authorization cleanup is uncertain")
+            raise ChannelClientOwnershipUncertain(
+                "authorization fail/close did not complete; capture remains owned") from (close_error or failure_error)
+        owner["state"] = "closed"
+        self._release(owner["control"], owner["capture"])
+        self._owners.pop(owner["message_id"], None)
 
     async def close(self):
         if self._close_complete:
@@ -330,5 +399,8 @@ class CoordinatorChannelClient:
                 _retain_tasks(pending)
                 raise SecureTaskPending(pending,
                     "gateway channel still owns pending authorization or captures")
+        if self._owners:
+            raise ChannelClientOwnershipUncertain(
+                "gateway client retains authorization owners with uncertain cleanup")
         self.egress.close()
         self._close_complete = True
