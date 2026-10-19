@@ -305,6 +305,29 @@ class OwnerConsentTests(unittest.TestCase):
         with self.assertRaises(StorageError):
             self.store()
 
+    def test_final_marker_fsync_failure_never_yields_and_reopen_sees_durable_inert_snapshot(self):
+        armed = False
+
+        def fail(step):
+            if armed and step == "state.commit.root.fsync":
+                raise OSError("injected final marker cleanup fsync failure")
+
+        store = self.store(_fault_hook=fail)
+        store.set_role_enabled("host", True)
+        armed = True
+        yielded = []
+        with self.assertRaises(StorageError):
+            with store.begin_start(("host",), cancel_event=threading.Event()) as snapshot:
+                yielded.append(snapshot)
+        self.assertEqual(yielded, [])
+        with self.assertRaises(StorageError):
+            store.snapshot()
+        store.close()
+        with self.store() as reopened:
+            snapshot = reopened.snapshot()
+            self.assertEqual(snapshot.epoch, 2)
+            self.assertEqual(snapshot.enabled_roles, ("host",))
+
     def test_already_open_store_rejects_unexpected_temporary_namespace_entry(self):
         first, second = self.store(), self.store()
         debris = self.root / ".owner-consent-tmp-unexpected"

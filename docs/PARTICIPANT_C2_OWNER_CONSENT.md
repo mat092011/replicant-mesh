@@ -22,9 +22,13 @@ Each state update first durably creates `owner-consent.pending`, then writes and
 fsyncs a temporary snapshot, atomically replaces the current snapshot, fsyncs the
 root directory, removes the pending marker, and fsyncs the root again. Every
 locked operation checks the bounded directory namespace; any pending marker or
-unexpected entry fails closed, including in an already-open store. A fault after
-replacement leaves the marker in place for constructor rejection rather than
-recovering a possibly unconfirmed enabled-role state. Reads use `O_NONBLOCK`,
+unexpected entry fails closed, including in an already-open store. A failure
+before the replacement-directory fsync leaves the pending marker, so reopen
+fails closed. The snapshot has already been confirmed durable before marker
+cleanup begins; a final marker-cleanup fsync failure still fails the live
+operation and latches its instance, but a fresh instance may read that known
+durable inert snapshot if the marker is absent. The start context is never
+yielded on that error. Reads use `O_NONBLOCK`,
 no-follow opens, inode checks, and a strict byte bound so substituted FIFOs do
 not hang startup.
 
