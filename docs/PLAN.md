@@ -1138,3 +1138,18 @@ component-36 inventory. C2.1–C2.6 remain open; full host/coordinator/consumer
 route, actual physical-resource owner and two-host acceptance remain pending.
 See the [component record](experiments/2026-10-19-participant-c2-components.md)
 for source, image and retained attempts.
+
+**C2 channel-client guard, 2026-10-19:** the focused native run passed 56
+unique tests with zero skips/failures/errors in 6.987 seconds, comprising the
+original 45 gateway/cohort/client cases and 11 new runtime-guard cases. The
+guard fences actual minted target proxies through caller delivery and retains
+default C1 behavior. Frozen source digest
+`8f2bfa54138753cf81c8e18d8bdacd29ffc77b6afc6643aefe8148e3ba88f2f8`
+contains 498 files; log SHA-256 is
+`5d3534a3e1507215a5ccc51567c48d8162b8a715608f5163a056baecf6d12303`.
+The initial parent inventory error and two subsequent test expectation errors
+remain recorded in the [component record](experiments/2026-10-19-participant-c2-components.md).
+This is TLS/HELLO and controlled-reply component evidence, not a complete model
+route. The coordinator owner, physical resource controls, management/consumer
+composition and real two-host C2 gate remain pending. C2.1–C2.6 remain open;
+C3 and research statuses are unchanged.

@@ -1336,7 +1336,7 @@ READY was false (3.114 seconds; head
 `a45b7f34267e07c03e710bb5cb2d120b3d5df15d`, digest
 `034d213b1edc6e3ce5000450b06c9cb208d89b7854959453eb2c94f2f6f5debf`, log
 SHA-256 `5349a9b7337d236aa680f609e1d98c76c198b593789053e77be038a5dc85826c`).
-Native2 failed after private stderr exposed an installer/owner memory-cap
+Native2 failed after private stderr exposed an installer/owner disk-budget
 mismatch (installer 256 MiB, signed policy 256 MiB, owner allocation 1 GiB;
 2.923 seconds; head `a90a9bfe11771fc7c8e0fcf655adb452cc566768`, digest
 `a34b5a66c1e551b4407d773186e123b60cbba6a9d3a8c905f4e2fedb9f1e9da0`, log
@@ -1359,3 +1359,44 @@ v1 `PoolControllerLock` untouched; no physical pool is provisioned or enforced
 by this data contract. All C2 checkboxes remain open, C3 is unchanged, and the
 default daemon remains inactive. A full host/coordinator/consumer route and
 real shared-resource owner are still pending.
+
+## Coordinator channel client runtime guard
+
+The optional coordinator channel runtime guard now fences the actual minted
+target proxies through dispatch, response publication and caller delivery. It
+uses a sticky invalidation event and a nonblocking owner-loop wake, rechecks
+authority after asynchronous and authorization cleanup boundaries, and retains
+the genuine default C1 authorizers and watcher lifecycle. Independent source
+review cleared `0bfdc33767e00966ac76503d4fa01a3fa9bb6460` after the earlier
+ordering findings were corrected. The three source commits were integrated
+privately through `0a86054cdcbc3ea75f353214b88fce1904720eeb`.
+
+The final focused native run passed 56 unique tests with zero skips, failures
+or errors in 6.987 seconds (2026-10-19 22:27:43.878–22:27:52.964 UTC). It
+includes the original 45 gateway-egress/cohort/client compatibility tests and
+11 new runtime-guard cases. Frozen source digest
+`8f2bfa54138753cf81c8e18d8bdacd29ffc77b6afc6643aefe8148e3ba88f2f8`
+contains 498 files; log SHA-256 is
+`5d3534a3e1507215a5ccc51567c48d8162b8a715608f5163a056baecf6d12303`.
+The image was
+`sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`,
+with the established 2-CPU, 6-GiB, 256-PID, network-none, read-only, dropped
+capabilities and no-new-privileges controls.
+
+The first parent probe mistakenly omitted two original security modules; its
+strict inventory check refused 36 discovered cases against the required 56,
+so no tests executed (log SHA-256
+`0f3bc1012e69e1ea28d12a0c49f17e8e2ff6a69bc5d3badd3aa107fd694477c7`).
+After restoring that exact scope, native2 executed all 56: 54 passed and two
+new cases errored because the genuine server pump observed the client's
+expected peer closure (7.022 seconds; log SHA-256
+`d8595219ca15de541c0c81ecf8972bc4dc0486066d43a1878177bd060444a320`).
+The final test-only correction accepts closure only after the relevant causal
+invalidation hook; earlier transport failures still fail the cases. Both
+earlier attempts are retained.
+
+These tests use genuine TLS/HELLO and controlled replies. They do not execute
+three model stages or establish a complete C2 route. The separate coordinator
+outbound owner is still under implementation and review; physical resource
+ownership, management/consumer composition and laptop–ZimaBlade C2 acceptance
+remain pending. Every C2 checkbox remains open; C3 is unchanged.
