@@ -318,6 +318,15 @@ class C2HostRuntimeBinding:
                for deadline, expiry in zip(self._channel_deadlines, self._channel_expiries)):
             raise CredentialError("C2 worker channel certificate expired")
 
+    def _retain_group_channel_deadlines(self, sample):
+        # Tighten binding-owned monotonic bounds from the latest wall bound.
+        # This is pure arithmetic under the binding lock; do not add I/O here.
+        self._policy_deadline = min(self._policy_deadline,
+            sample.monotonic + self._policy_expires - sample.latest_wall)
+        self._channel_deadlines = tuple(min(deadline,
+            sample.monotonic + expiry - sample.latest_wall)
+            for deadline, expiry in zip(self._channel_deadlines, self._channel_expiries))
+
     def _check_selected_identity(self, selected, cohort):
         specs = [x for x in cohort.new_specs if x.identity == self._spec.identity]
         if (len(specs) != 1 or not _same_spec(specs[0], self._spec)
@@ -349,6 +358,9 @@ class C2HostRuntimeBinding:
             final_selected, final_cohort = _selected(self._root_store, self._clock)
             self._check_selected_identity(final_selected, final_cohort)
             self._check_protected_files()
+            # Rebuild from the last authenticated selected head. All store
+            # construction and verification precedes the final locked sample.
+            final_policy_store, final_policy_view = self._assert_selected_policy(final_selected, sample)
             if require_local_head:
                 if (local_view is None or local_view.revision != final_selected.selector.policy_revision
                         or local_view.policy_digest != final_selected.selector.policy_digest):
@@ -362,16 +374,18 @@ class C2HostRuntimeBinding:
                 # above and the actual return decision.
                 final_sample = self._clock.sample()
                 self._check_deadlines(final_sample)
-                retained_view = self._deadline_floors.retain(selected_policy_view, final_sample)
+                self._retain_group_channel_deadlines(final_sample)
+                retained_view = self._deadline_floors.retain(final_policy_view, final_sample)
                 if (final_sample.latest_wall >= retained_view.expires_at
                         or final_sample.monotonic >= retained_view.deadline_monotonic):
                     raise SnapshotError("selected C2 policy expired")
                 selected_record = retained_view.credential(self._spec.serial)
                 if selected_record is None:
                     raise CredentialError("C2 host is missing from freshly selected policy")
-                selected_policy_store.assert_credential_live(retained_view, selected_record, final_sample)
+                final_policy_store.assert_credential_live(retained_view, selected_record, final_sample)
                 _check_group_grants(retained_view, final_sample, self._spec, self._scope)
                 if require_local_head:
+                    local_view = self._deadline_floors.retain(local_view, final_sample)
                     if (final_sample.latest_wall >= local_view.expires_at
                             or final_sample.monotonic >= local_view.deadline_monotonic):
                         raise SnapshotError("authorization snapshot expired")

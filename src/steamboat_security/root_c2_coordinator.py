@@ -208,6 +208,7 @@ class C2CoordinatorRuntimeBinding:
                     or final_cohort.activation_manifest_sha256 != self._activation_hash):
                 raise CredentialError("selected C2 coordinator changed during guard")
             self._files_unchanged()
+            final_store, final_view, final_record = self._selected_policy(final_selected)
             if require_local_head and (local_view.revision != final_selected.selector.policy_revision
                     or local_view.policy_digest != final_selected.selector.policy_digest):
                 raise _PolicyRefreshRequired("selected C2 policy advanced; reconcile before admission")
@@ -215,17 +216,18 @@ class C2CoordinatorRuntimeBinding:
                 if self._invalid:
                     raise CredentialError(self._reason or "binding invalidated during guard")
                 sample = self._clock.sample()
-                retained_view = self._deadline_floors.retain(view, sample)
+                retained_view = self._deadline_floors.retain(final_view, sample)
                 if (sample.latest_wall >= retained_view.expires_at
                         or sample.monotonic >= retained_view.deadline_monotonic):
                     raise SnapshotError("selected C2 policy expired")
                 selected_record = retained_view.credential(self._spec.serial)
                 if selected_record is None:
                     raise CredentialError("selected C2 coordinator is missing from policy")
-                store.assert_credential_live(retained_view, selected_record, sample)
+                final_store.assert_credential_live(retained_view, selected_record, sample)
                 _require_current_role_grants(retained_view, sample, selected_record, self._spec,
                     {"model_id": self._model_id, "assignment_id": None})
                 if require_local_head:
+                    local_view = self._deadline_floors.retain(local_view, sample)
                     if (sample.latest_wall >= local_view.expires_at
                             or sample.monotonic >= local_view.deadline_monotonic):
                         raise SnapshotError("local C2 coordinator policy expired")

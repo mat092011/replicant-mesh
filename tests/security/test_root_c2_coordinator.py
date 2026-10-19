@@ -184,8 +184,19 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
 
         uncertainty = [0.0]
         self.fx.clock._uncertainty = lambda: uncertainty[0]
-        uncertainty[0] = 20.0
-        binding.assert_live()
+        import steamboat_security.root_c2_coordinator as coordinator_module
+        original_read = coordinator_module.safe_read
+        reads = 0
+        def widen_after_final_read(*args, **kwargs):
+            nonlocal reads
+            result = original_read(*args, **kwargs)
+            reads += 1
+            if reads == 8:
+                uncertainty[0] = 20.0
+            return result
+        with patch.object(coordinator_module, "safe_read", side_effect=widen_after_final_read):
+            binding.assert_live()
+        self.assertEqual(reads, 8)
         uncertainty[0] = 0.0
         self.fx.wall += 1
         self.fx.mono += 21
