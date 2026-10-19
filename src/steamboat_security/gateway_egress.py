@@ -44,6 +44,14 @@ def _pem_from_der(value):
         raise GatewayEgressError("gateway TLS peer certificate is malformed") from error
 
 
+def _certificate_der(value):
+    try:
+        return x509.load_pem_x509_certificate(value).public_bytes(
+            serialization.Encoding.DER)
+    except Exception as error:
+        raise GatewayEgressError("coordinator TLS client certificate is malformed") from error
+
+
 def _endpoint_names(host):
     try:
         return None, str(ipaddress.ip_address(host))
@@ -131,6 +139,8 @@ class GatewayCoordinatorEgress:
         self._coordinator_identity = self._capture_coordinator_identity()
         self._configured_coordinator_certificate_pem = bytes(
             authorizer.local_identity.certificate_pem)
+        self._configured_coordinator_certificate_der = _certificate_der(
+            self._configured_coordinator_certificate_pem)
         host_dns, host_ip = _endpoint_names(self._gateway_policy["endpoint_host"])
         try:
             self._tls = OwnedWorkerTLS.connect(
@@ -164,7 +174,8 @@ class GatewayCoordinatorEgress:
                 "gateway_id", "clock", "_generation", "_view",
                 "_gateway_policy", "_worker_policy", "_host_dns", "_host_ip",
                 "_gateway_ca_pem", "_tls", "_coordinator_identity",
-                "_configured_coordinator_certificate_pem"}:
+                "_configured_coordinator_certificate_pem",
+                "_configured_coordinator_certificate_der"}:
             raise AttributeError("gateway egress authority and transport are immutable")
         object.__setattr__(self, name, value)
 
@@ -301,8 +312,9 @@ class GatewayCoordinatorEgress:
                 raise GatewayEgressError(
                     "coordinator identity changed; reconnect required")
             if self._tls.handshake_complete:
-                configured = self._tls.configured_local_certificate_pem
-                if configured != self._configured_coordinator_certificate_pem:
+                configured_der = _certificate_der(
+                    self._tls.configured_local_certificate_pem)
+                if configured_der != self._configured_coordinator_certificate_der:
                     raise GatewayEgressError(
                         "TLS client credential changed; reconnect required")
             view, sample = self.policy_store.current_with_sample()

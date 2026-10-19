@@ -459,6 +459,35 @@ class GatewayEgressTests(unittest.TestCase):
                 method="OpenSession", trusted_request_context=self.context)
         self.assertTrue(self.egress._faulted)
 
+    def test_tls_certificate_pem_normalization_accepts_equivalent_and_fences_replacement(self):
+        local = LocalIdentity(
+            self.fx.credentials["coordinator"]["certificate"] + b"\n",
+            identity_tests.BOOT_COORDINATOR, identity_tests.MODEL)
+        adapter = OutboundAuthorizer(
+            local_identity=local, snapshot_store=self.snapshot_store,
+            clock=self.clock, target=self.adapter.target,
+            worker_request_type=outbound_tests.ParsedWorkerRequest,
+            trusted_request_context_type=TrustedRequestContext,
+            allow_bootstrap_describe=True)
+        egress = GatewayCoordinatorEgress.connect(
+            authorizer=adapter, policy_store=self.policy_store,
+            logical_host_certificate_pem=self.fx.credentials["host"]["certificate"],
+            gateway_id="gw-east", gateway_ca_pem=self.gateway_ca,
+            coordinator_private_key_pem=self.fx.credentials["coordinator"]["key"])
+        server, temporary = self._make_server()
+        try:
+            self._finish_handshake(egress, server, temporary)
+            self.assertTrue(egress.handshake_complete)
+            adapter.local_identity = replace(
+                local, certificate_pem=self.fx.credentials["host"]["certificate"])
+            with self.assertRaises(GatewayEgressError):
+                egress.take_encrypted()
+            self.assertTrue(egress._faulted)
+        finally:
+            egress.close()
+            for path in temporary[2]:
+                Path(path).unlink(missing_ok=True)
+
     def test_uncertain_tls_credential_cleanup_is_visible_to_caller(self):
         with mock.patch("steamboat_security.gateway_egress.OwnedWorkerTLS.connect",
                         side_effect=OwnedWorkerTLSError(
