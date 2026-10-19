@@ -12,6 +12,7 @@ import json
 import os
 import re
 import stat
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,9 +21,9 @@ from typing import Callable
 from .codec import canonical_json
 from .errors import BindingError, CredentialError, SnapshotError, StorageError
 from .files import _open_directory_chain
+from .ids import validate_id
 from .root_c2_local_plan import (C2LocalPlan, c2_local_plan_document,
     parse_c2_local_plan)
-from .root_transition_launch import role_launch_document
 
 MAX_CLAIM_BYTES = 64 * 1024
 MAX_CLAIMS = 16
@@ -173,27 +174,66 @@ class C2LocalClaimStore:
             raise StorageError("C2 local claims require POSIX no-follow support")
         if type(expected_uid) is not int or expected_uid != os.geteuid():
             raise StorageError("C2 local claim UID must equal effective UID")
-        if type(account_id) is not str or type(device_id) is not str:
-            raise StorageError("C2 local claim principal must use exact strings")
+        # Validate and pin the local identity before touching the filesystem.
+        account_id = validate_id(account_id, "acct")
+        device_id = validate_id(device_id, "dev")
         self._uid, self._account, self._device = expected_uid, account_id, device_id
         self._fault_hook, self._unknown = _fault_hook, False
+        self._lifetime = threading.Condition(threading.Lock())
+        self._busy = False
+        self._owner_thread = None
+        self._ready = False
         try: self._fd = _open_directory_chain(Path(os.path.abspath(os.fspath(root))), expected_uid=expected_uid)
         except (OSError, TypeError, ValueError) as error:
             raise StorageError("C2 local claim root must be separately provisioned mode 0700") from error
         try:
             self._ensure_lock()
             with self._lock(): self._scan()
+            self._ready = True
         except BaseException:
             fd, self._fd = self._fd, -1
             try: os.close(fd)
             except OSError: self._unknown = True
             raise
 
+    @contextmanager
+    def _operation(self, *, allow_unknown=False, allow_closed=False):
+        """Own the root descriptor for one operation; reject same-thread reentry."""
+        ident = threading.get_ident()
+        with self._lifetime:
+            if self._owner_thread == ident:
+                raise StorageError("C2 local claim operation cannot be reentered")
+            while self._busy:
+                self._lifetime.wait()
+            already_closed = self._fd < 0
+            if already_closed and not allow_closed:
+                raise StorageError("C2 local claim store is closed or latched")
+            if not already_closed and self._unknown and not allow_unknown:
+                raise StorageError("C2 local claim store is closed or latched")
+            if not already_closed:
+                self._busy = True
+                self._owner_thread = ident
+        if already_closed:
+            yield
+            return
+        try:
+            yield
+        finally:
+            with self._lifetime:
+                self._owner_thread = None
+                self._busy = False
+                self._lifetime.notify_all()
+
     def close(self):
-        fd, self._fd = getattr(self, "_fd", -1), -1
-        if fd >= 0:
-            try: os.close(fd)
-            except OSError: self._unknown = True; raise
+        with self._operation(allow_unknown=True, allow_closed=True):
+            fd, self._fd = self._fd, -1
+            if fd < 0:
+                return
+            try:
+                os.close(fd)
+            except BaseException:
+                self._unknown = True
+                raise
     def __enter__(self): return self
     def __exit__(self, *_): self.close()
     def _step(self, name):
@@ -212,6 +252,8 @@ class C2LocalClaimStore:
     @contextmanager
     def _lock(self):
         if self._fd < 0 or self._unknown: raise StorageError("C2 local claim store is closed or latched")
+        if self._ready and self._owner_thread != threading.get_ident():
+            raise StorageError("C2 local claim root descriptor is not owned by this operation")
         import fcntl
         fd = os.open(_LOCK, os.O_RDWR | os.O_NOFOLLOW, dir_fd=self._fd)
         try:
@@ -267,6 +309,10 @@ class C2LocalClaimStore:
             result[name] = record
         return result
     def claim(self, plan, *, fresh_selected_validator):
+        with self._operation():
+            return self._claim_owned(plan, fresh_selected_validator=fresh_selected_validator)
+
+    def _claim_owned(self, plan, *, fresh_selected_validator):
         if self._fd < 0 or self._unknown: raise StorageError("C2 local claim store is closed or latched")
         record = _make_record(plan)
         if (record.account_id, record.device_id) != (self._account, self._device):

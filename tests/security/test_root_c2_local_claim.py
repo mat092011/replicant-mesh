@@ -6,7 +6,9 @@ import json
 import multiprocessing
 import os
 import sys
+import stat
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -75,10 +77,10 @@ class C2LocalClaimTests(unittest.TestCase):
     def claim(self, store, plan):
         return store.claim(plan, fresh_selected_validator=lambda _record: None)
 
-    def changed_plan(self, plan, *, epoch, offset, reuse_child=False):
+    def changed_plan(self, plan, *, epoch, offset, reuse_child=False, admission_increment=1):
         old = plan.enabled_specs[0]
         spec = replace(old, boot_id=f"{int(old.boot_id, 16) + offset:032x}",
-                       admission_epoch=old.admission_epoch + 1)
+                       admission_epoch=old.admission_epoch + admission_increment)
         old_group = plan.enabled_host_groups[0]
         components = tuple(replace(c, worker_boot_id=(
             old_group.components[0].worker_boot_id if reuse_child and i == 0 else
@@ -116,6 +118,14 @@ class C2LocalClaimTests(unittest.TestCase):
                 account_id=self.account, device_id="dev_" + "9" * 32).claim(
                     self.plan(), fresh_selected_validator=lambda _r: None)
 
+    @unittest.skipUnless(os.name == "posix" and hasattr(os, "geteuid"), "native POSIX store")
+    def test_invalid_pinned_identity_is_rejected_before_filesystem_access(self):
+        with mock.patch.object(claim_module, "_open_directory_chain") as open_root:
+            with self.assertRaises(BindingError):
+                C2LocalClaimStore(self.root(), expected_uid=os.geteuid(),
+                    account_id="not-an-account", device_id=self.device)
+            open_root.assert_not_called()
+
     def test_parser_rechecks_recomputed_digest_and_closed_schema(self):
         doc = c2_local_claim_document(claim_module._make_record(self.plan()))
         raw = json.loads(canonical_json(doc))
@@ -140,6 +150,9 @@ class C2LocalClaimTests(unittest.TestCase):
                 self.claim(store, self.changed_plan(initial, epoch=2, offset=10, reuse_child=True))
             with self.assertRaises(BindingError):
                 self.claim(store, self.changed_plan(initial, epoch=1, offset=20))
+            with self.assertRaises(BindingError):
+                self.claim(store, self.changed_plan(initial, epoch=2, offset=25,
+                                                     admission_increment=0))
             self.claim(store, self.changed_plan(initial, epoch=2, offset=30))
             with self.assertRaises(BindingError):
                 self.claim(store, self.changed_plan(initial, epoch=2, offset=40))
@@ -184,6 +197,9 @@ class C2LocalClaimTests(unittest.TestCase):
             with self.assertRaises(StorageError): self.claim(store, self.plan())
             with self.assertRaises(StorageError): self.claim(store, self.plan())
             self.assertTrue(store._unknown)
+        with self.assertRaises(StorageError):
+            C2LocalClaimStore(root, expected_uid=os.geteuid(), account_id=self.account,
+                              device_id=self.device)
 
     @unittest.skipUnless(os.name == "posix", "native POSIX store")
     def test_fsync_and_ambiguous_close_latch_the_store(self):
@@ -194,9 +210,9 @@ class C2LocalClaimTests(unittest.TestCase):
                                device_id=self.device, _fault_hook=fail) as store:
             with self.assertRaises(StorageError): self.claim(store, self.plan())
             self.assertTrue(store._unknown)
-        with self.assertRaises(StorageError):
-            C2LocalClaimStore(root, expected_uid=os.geteuid(), account_id=self.account,
-                              device_id=self.device)
+        with C2LocalClaimStore(root, expected_uid=os.geteuid(), account_id=self.account,
+                               device_id=self.device) as reopened:
+            with self.assertRaises(BindingError): self.claim(reopened, self.plan())
 
         root = self.root("close")
         store = C2LocalClaimStore(root, expected_uid=os.geteuid(),
@@ -224,6 +240,76 @@ class C2LocalClaimTests(unittest.TestCase):
             store.close()
             if armed["fd"] is not None: original_close(armed["fd"])
             original_close(replacement_fd)
+
+    @unittest.skipUnless(os.name == "posix" and hasattr(os, "O_NOFOLLOW"), "native POSIX store")
+    def test_close_waits_for_root_fsync_and_prevents_fd_reuse_during_claim(self):
+        root = self.root("lifetime")
+        store = C2LocalClaimStore(root, expected_uid=os.geteuid(),
+            account_id=self.account, device_id=self.device)
+        root_fd = store._fd
+        fsync_entered, fsync_release = threading.Event(), threading.Event()
+        close_started, close_done = threading.Event(), threading.Event()
+        result, failure, reused_fd = [], [], []
+        original_fsync = os.fsync
+        original_close = os.close
+
+        def blocked_fsync(fd):
+            if fd == root_fd and not fsync_entered.is_set():
+                fsync_entered.set()
+                if not fsync_release.wait(10): raise OSError("test fsync barrier timed out")
+            return original_fsync(fd)
+
+        def do_claim():
+            try: result.append(self.claim(store, self.plan()))
+            except BaseException as error: failure.append(error)
+
+        def do_close_and_reuse():
+            close_started.set()
+            store.close()
+            reused_fd.append(os.open(os.devnull, os.O_RDONLY))
+            close_done.set()
+
+        claimant = threading.Thread(target=do_claim)
+        closer = threading.Thread(target=do_close_and_reuse)
+        try:
+            with mock.patch.object(claim_module.os, "fsync", blocked_fsync):
+                claimant.start()
+                self.assertTrue(fsync_entered.wait(5))
+                closer.start()
+                self.assertTrue(close_started.wait(5))
+                self.assertFalse(close_done.wait(0.1), "close raced an active root fsync")
+                self.assertTrue(stat.S_ISDIR(os.fstat(root_fd).st_mode))
+                fsync_release.set()
+                claimant.join(5); closer.join(5)
+            self.assertFalse(claimant.is_alive())
+            self.assertFalse(closer.is_alive())
+            self.assertFalse(failure)
+            self.assertEqual(len(result), 1)
+            self.assertTrue(close_done.is_set())
+            self.assertEqual(reused_fd, [root_fd])
+            os.fstat(reused_fd[0])
+            with self.assertRaises(StorageError): self.claim(store, self.plan())
+        finally:
+            fsync_release.set()
+            if claimant.is_alive(): claimant.join(5)
+            if closer.is_alive(): closer.join(5)
+            store.close()
+            if reused_fd: original_close(reused_fd[0])
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX store")
+    def test_callback_cannot_reenter_close_or_claim(self):
+        root = self.root("reentrant")
+        with C2LocalClaimStore(root, expected_uid=os.geteuid(), account_id=self.account,
+                               device_id=self.device) as store:
+            rejections = []
+            def callback(_record):
+                for operation in (store.close,
+                    lambda: store.claim(self.plan(), fresh_selected_validator=lambda _r: None)):
+                    with self.assertRaises(StorageError): operation()
+                    rejections.append(True)
+                return None
+            store.claim(self.plan(), fresh_selected_validator=callback)
+            self.assertEqual(len(rejections), 2)
 
     @unittest.skipUnless(os.name == "posix", "native POSIX store")
     def test_entry_count_is_bounded_during_scandir(self):

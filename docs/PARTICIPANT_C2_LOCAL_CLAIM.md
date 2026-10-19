@@ -26,6 +26,9 @@ entries including the lock. A created file is sticky: write, fsync, or close
 uncertainty latches the live store, consumes the descriptor before its one close
 attempt, and never deletes or retries the record. Parsing rechecks canonical
 JSON, closed versioned fields, complete nested local-plan validity and digests.
+Each store instance serializes claim and close over the directory-descriptor
+lifetime: another thread's close waits through the final root fsync, while a
+callback cannot reenter claim or close on that instance.
 
 Before creating the exclusive file, `claim` invokes a fresh synchronous
 validator and accepts exactly `None`; awaitables and all other results reject.
