@@ -1070,3 +1070,12 @@ cancellation regression. The [component record](experiments/2026-10-19-participa
 retains the failure, paired baseline and exact provenance. A fix is in progress;
 these results do not accept C2. C2.1–C2.6, actual fixed-role integration and the
 real C2 route remain open; C3 and research statuses are unchanged.
+
+
+**C2 coordinator compatibility correction, 2026-10-19:** the corrected default
+C1 watcher path passed the formerly failing cancellation control alongside all
+20 guard cases, then all 92 targeted coordinator compatibility tests with zero
+skips in 32.121 seconds. The latter includes real mTLS and model-backed cases
+using the required read-only reference fixture. The [component record](experiments/2026-10-19-participant-c2-components.md)
+retains the original failure and paired controls. Full C1 regression and actual
+C2 role/resource/route integration remain pending; every C2 gate remains open.

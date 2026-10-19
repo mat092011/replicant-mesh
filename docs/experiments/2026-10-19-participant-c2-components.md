@@ -1170,3 +1170,43 @@ c18e6b5261cbde8ff6516c88644119a0c7e8487d82a00e4e14d31484d7dd53b2.
 These remain inert declarations requiring actual protected-material and signed
 route checks. All C2 tasks remain open; fixed-role startup, consumer ownership,
 shared physical resources and real C2 CT-11/CT-13 remain pending. C3 is unchanged.
+
+
+## Coordinator compatibility correction
+
+The default no-guard path now preserves the prior C1 watcher topology.
+Explicit runtime invalidation requires a configured synchronous guard; an
+unsupported no-guard call rejects before changing state. The configured C2
+guard retains the additional watcher owners and their bounded cleanup.
+No cancellation grace was extended and pending roots were not discarded.
+
+The corrected source at ff6cfe4ade52105875bc5b1800cfa6d64de1280b passed
+21 focused tests with zero skips in 0.581 seconds, including the previously
+failing C1 body-cancellation case and all 20 updated guard tests. Frozen
+source digest was
+2dab630fc909b0da45925d0f927e86b2358f8c22d481cd1bd0807686710ac941
+(487 files), log SHA-256
+2600e86d4319c7a15e73182ecc0426d3bc6692f2192a22ef97dfadffa421ff96.
+
+The corrected integrated candidate then passed all 92 unique targeted
+coordinator compatibility tests with zero skips, failures or errors in
+32.121 seconds. Frozen head was
+9424120a98620420f62f7477c43c63801a5c6faa;
+source digest
+8a95b8fd63bfe8b2af3d6d835ba5f6e3639512dc20bfc12f18088c0eaa4e0660
+(489 files), log SHA-256
+e00f06819f5383ac64bf6971940cf1c513cb86cce94da982dcbfe96ea5668942.
+The inventory includes the 20 guard cases, existing Generate/capture ownership
+and capacity tests, real loopback mTLS/C-core tests and selected coordinator
+runtime tests. Both previously skipped model-backed cases ran using the
+existing read-only artifacts and reference volumes with the required test
+environment enabled. No source, image or resource cap was relaxed to turn
+those skips into passes.
+
+These diagnostics retain the pinned component dependency image and original
+caps; the containers exited zero and were removed. The original failed
+compatibility run and paired failing candidate remain in the historical
+record. This targeted regression result does not establish full C1 regression,
+actual C2 fixed-role readiness, shared physical limits or the real C2 route.
+C2.1–C2.6 remain open; host-service and coordinator model-owner implementation
+are still under review.
