@@ -19,7 +19,7 @@ started.
 
 Admission is aggregated over the whole mux generation: at most nine data calls
 (one active plus eight pending) and eight control calls. The caller must reserve
-the full capture ceiling for each aggregate lane. Every request ID is reserved
+the full capture ceiling for each aggregate lane. Every wire message ID is reserved
 before decoding; up to 1,024 unique wire message IDs are remembered without
 eviction, including completed calls. Reuse or history exhaustion fails the
 whole mux generation. A response must return from the exact selected worker
@@ -34,12 +34,6 @@ strong stream, writer, and request ownership; exhaustion rejects new cohorts
 rather than dropping unresolved owners. A global identity claim also prevents
 a coordinator, worker stream, or actual writer from being shared by a second
 mux.
-
-At most eight mux cohorts, including stopped cohorts with unresolved pending
-captures or uncertain stream closes, are retained process-wide. Those cohorts
-keep strong stream and request ownership; exhaustion rejects new cohorts rather
-than dropping unresolved owners. A global identity claim also prevents a
-captured coordinator or worker stream from being shared by a second mux.
 
 Heartbeat timing is centralized: the mux invokes the router liveness check
 once per monitor interval and requests a PING for every captured worker. The

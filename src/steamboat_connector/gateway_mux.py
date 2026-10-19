@@ -381,4 +381,3 @@ class GatewayChannelMultiplexer:
                 finally:
                     self._close_completed.add(marker)
         self._finalize_retirement()
-
