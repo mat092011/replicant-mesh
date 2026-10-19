@@ -19,15 +19,15 @@ from steamboat_security.sessions import SessionBindings
 from steamboat_connector.channel_wire import (HELLO, MAX_BUNDLE_BYTES, DATA,
                                                encode_bundle, iter_fragments)
 from tests.security import test_gateway_ingress as ingress_tests
-from tests.security.test_gateway_tls import GatewayServerTLSOwnerTests
-from tests.security.test_gateway_coordinator_tls import GatewayCoordinatorTLSOwnerTests
+from tests.security import test_gateway_tls as gateway_tls_tests
+from tests.security import test_gateway_coordinator_tls as coordinator_tls_tests
 from steamboat_security.gateway_egress import GatewayCoordinatorEgress
 
 
 class ChannelHelloTests(unittest.TestCase):
     def setUp(self):
         # Reuse the repository's actual mutual-TLS MemoryBIO fixture pair.
-        self.fixture = GatewayServerTLSOwnerTests()
+        self.fixture = gateway_tls_tests.GatewayServerTLSOwnerTests()
         self.fixture.setUp()
         self.ingress = GatewayWorkerIngress.from_tls(
             self.fixture.client,
@@ -307,7 +307,7 @@ class ChannelHelloTests(unittest.TestCase):
 
 class CoordinatorHelloTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = GatewayCoordinatorTLSOwnerTests()
+        self.fixture = coordinator_tls_tests.GatewayCoordinatorTLSOwnerTests()
         self.fixture.setUp()
         fx = self.fixture.fixture
         self.server_owner = self.fixture._new_server()

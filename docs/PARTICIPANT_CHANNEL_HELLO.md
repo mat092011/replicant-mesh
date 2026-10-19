@@ -43,5 +43,10 @@ also identity-only and does not prove work readiness or authorize an
 application round trip.
 
 The focused tests use the existing actual mutual-TLS MemoryBIO component fixture.
+The direct `send_hello`, `read_hello`, `send_ack`, and `read_ack` convenience
+methods are test/component helpers for that fixture. A production driver routes
+the generated HELLO/ACK frames through `ChannelSocket` so plaintext labels and
+draining stay in the transport path, then passes each decrypted plaintext chunk
+to `feed_hello` or `feed_ack` for bounded incremental parsing.
 They do not establish sockets, gateway forwarding, readiness, inference
 authority, resource enforcement, separate-device performance, or C2 acceptance.

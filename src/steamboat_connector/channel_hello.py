@@ -272,6 +272,7 @@ class WorkerHelloClient:
         return 2
 
     def send_hello(self):
+        """MemoryBIO/component test helper only; production routes this frame through ChannelSocket."""
         with self._lock:
             if self._state != "hello" or self._hello_sent:
                 self._fault()
@@ -289,6 +290,7 @@ class WorkerHelloClient:
                 raise
 
     def read_ack(self):
+        """MemoryBIO/component test helper only; production feeds ChannelSocket plaintext to feed_ack()."""
         try:
             chunk = self.tls_owner.read_plaintext(MAX_BOOTSTRAP_FRAME_BYTES)
         except Exception:
@@ -444,6 +446,7 @@ class WorkerHelloServer:
         return 2
 
     def read_hello(self):
+        """MemoryBIO/component test helper only; production feeds ChannelSocket plaintext to feed_hello()."""
         try:
             chunk = self.owner.read_plaintext(MAX_BOOTSTRAP_FRAME_BYTES)
         except Exception:
@@ -457,6 +460,7 @@ class WorkerHelloServer:
         return self.feed_hello(chunk)
 
     def send_ack(self, frame):
+        """MemoryBIO/component test helper only; production routes this frame through ChannelSocket."""
         with self._lock:
             if (self._state != "committed" or self._ack_sent
                     or type(frame) is not bytes or frame != self._ack_frame):
@@ -644,6 +648,7 @@ class CoordinatorHelloClient:
         return 2
 
     def send_hello(self):
+        """MemoryBIO/component test helper only; production routes this frame through ChannelSocket."""
         with self._lock:
             if self._state != "hello" or self._hello_sent:
                 self._fault()
@@ -661,6 +666,7 @@ class CoordinatorHelloClient:
                 raise
 
     def read_ack(self):
+        """MemoryBIO/component test helper only; production feeds ChannelSocket plaintext to feed_ack()."""
         try:
             chunk = self.egress.read_plaintext(MAX_BOOTSTRAP_FRAME_BYTES)
         except Exception:
@@ -820,6 +826,7 @@ class CoordinatorHelloServer:
         return 2
 
     def read_hello(self):
+        """MemoryBIO/component test helper only; production feeds ChannelSocket plaintext to feed_hello()."""
         try:
             chunk = self.owner.read_plaintext(MAX_BOOTSTRAP_FRAME_BYTES)
         except Exception:
@@ -833,6 +840,7 @@ class CoordinatorHelloServer:
         return self.feed_hello(chunk)
 
     def send_ack(self, frame):
+        """MemoryBIO/component test helper only; production routes this frame through ChannelSocket."""
         with self._lock:
             if (self._state != "committed" or self._ack_sent
                     or type(frame) is not bytes or frame != self._ack_frame):
