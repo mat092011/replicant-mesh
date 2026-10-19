@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from typing import Protocol
+import weakref
 
 from steamboat_connector import channel_wire as wire
 from steamboat_connector.channel_hello import CoordinatorHelloClient
@@ -19,6 +21,7 @@ from steamboat_runtime.protocol.wire import (
     Request, Response, parse_message, serialize_message, validate_response,
 )
 from steamboat_security.codec import WORKER_SERVICE
+from steamboat_security.errors import SessionError
 
 _CONTROL = frozenset({"CloseSession", "CancelSession", "SessionStatus"})
 _DATA_SLOTS, _CONTROL_SLOTS = 9, 8
@@ -28,6 +31,18 @@ _CONTROL_CAPTURE = (4 * wire.MAX_CONTROL_PROTOBUF_BYTES + wire.MAX_ENVELOPE_BYTE
                     + wire.MAX_BINDING_BYTES + 64 * 1024)
 _PUMP_INTERVAL = 0.005
 _CLOSE_GRACE = 1.0
+_MAX_ABANDONED_IDS = 1024
+_STREAM_CLAIM_LOCK = threading.Lock()
+_STREAM_CLAIMS = weakref.WeakKeyDictionary()
+
+
+def _claim_stream(stream):
+    # The weak-key tombstone lasts exactly as long as the stream object. Never
+    # release a claim: a later client cannot restart IDs or steal replies.
+    with _STREAM_CLAIM_LOCK:
+        if stream in _STREAM_CLAIMS:
+            raise TypeError("coordinator HELLO stream already has a client owner")
+        _STREAM_CLAIMS[stream] = True
 
 
 class SecureWorkerClientProtocol(Protocol):
@@ -61,7 +76,7 @@ class CoordinatorChannelClient:
                 or type(stream) is not ChannelStream
                 or type(stream._hello) is not CoordinatorHelloClient
                 or stream._hello.egress is not egress
-                or stream._driver._tls is not egress._tls
+                or stream._driver._tls is not egress
                 or not stream.transport_bootstrap_complete or stream.closed):
             raise TypeError("client requires the exact live coordinator egress HELLO stream")
         if not callable(authorization_watcher):
@@ -74,6 +89,7 @@ class CoordinatorChannelClient:
         if (type(egress.authorizer) is not OutboundAuthorizer
                 or egress.authorizer.clock is not egress.clock):
             raise TypeError("egress C1 authorizer and Clock owners changed")
+        _claim_stream(stream)
         self.egress, self.stream = egress, stream
         self.authorizer = egress.authorizer
         self.authorization_watcher = authorization_watcher
@@ -81,6 +97,7 @@ class CoordinatorChannelClient:
         self.control_capture_reservation_bytes = control_capture_reservation_bytes
         self._generation = stream._hello.generation
         self._pending = {}
+        self._abandoned = {}
         self._owners = {}
         self._next_message_id = 1
         self._data_bytes = self._control_bytes = 0
@@ -101,12 +118,14 @@ class CoordinatorChannelClient:
                 or not 1 <= request.timeout_ms <= MAX_TIMEOUT_MS
                 or request.ByteSize() > MAX_MESSAGE_BYTES):
             raise ProtocolError("INVALID_INPUT", "request timeout or protobuf size exceeds the protocol bound")
+        is_control = method in _CONTROL
+        if is_control and request.ByteSize() > wire.MAX_CONTROL_PROTOBUF_BYTES:
+            raise ProtocolError("INVALID_INPUT", "control request exceeds the control protobuf bound")
         # Shape is the only repeated Request field and the protocol supports
         # at most three dimensions. Check before protobuf CopyFrom can allocate
         # a second native repeated-field container.
         if request.HasField("tensor") and len(request.tensor.shape) > 3:
             raise ProtocolError("INVALID_INPUT", "tensor shape exceeds the protocol structure bound")
-        is_control = method in _CONTROL
         capture = _CONTROL_CAPTURE if is_control else _DATA_CAPTURE
         lane = wire.CONTROL if is_control else wire.DATA
         response_lane = wire.CONTROL_RESPONSE if is_control else wire.RESPONSE
@@ -193,7 +212,9 @@ class CoordinatorChannelClient:
                     close_authorization_on_pending=False)
             except SecureTaskPending as error:
                 transferred = error.authorization_transferred
-                self._fence("uncertain call ownership after cancellation")
+            pending_entry = self._pending.get(message_id)
+            if dispatched and pending_entry is not None:
+                pending_entry["abandon_response"] = True
                 if transferred and reservation_owned:
                     owner["state"] = "pending"
                     cleanup_task = asyncio.create_task(
@@ -210,13 +231,27 @@ class CoordinatorChannelClient:
             return response
         except asyncio.CancelledError:
             failed = True
-            self._fence("caller canceled an in-flight gateway operation")
+            if dispatched:
+                pending_entry = self._pending.get(message_id)
+                if pending_entry is not None:
+                    pending_entry["abandon_response"] = True
             raise
         except BaseException:
             failed = not completed
+            pending_entry = self._pending.get(message_id)
+            if (dispatched and not completed and pending_entry is not None
+                    and not pending_entry.get("response_received")):
+                pending_entry["abandon_response"] = True
             raise
         finally:
             entry = self._pending.pop(message_id, None)
+            if (dispatched and entry is not None and entry.get("abandon_response")
+                    and not entry.get("response_received")):
+                if len(self._abandoned) >= _MAX_ABANDONED_IDS:
+                    self._fence("abandoned response-ID bound exhausted")
+                else:
+                    self._abandoned[message_id] = (
+                        method, response_lane, self._generation)
             if entry is not None and not entry["future"].done():
                 entry["future"].cancel()
             try:
@@ -232,8 +267,17 @@ class CoordinatorChannelClient:
             while self._pending and not self._closed:
                 self._assert_live()
                 for entry in tuple(self._pending.values()):
-                    entry["route"].assert_live()
-                    await _maybe_await(entry["auth"].assert_live())
+                    try:
+                        entry["route"].assert_live()
+                        await _maybe_await(entry["auth"].assert_live())
+                    except Exception as error:
+                        # A request-scoped authorization can expire while
+                        # another independent call remains valid on this stream.
+                        future = entry["future"]
+                        if not future.done():
+                            future.set_exception(error)
+                        if isinstance(error, SessionError):
+                            entry["abandon_response"] = True
                 self.stream.pump()
                 message = self.stream.pop_message()
                 if message is not None:
@@ -254,7 +298,18 @@ class CoordinatorChannelClient:
 
     def _dispatch_response(self, message):
         entry = self._pending.get(message.message_id)
-        if (entry is None or message.kind != entry["response_lane"]
+        if entry is None:
+            tombstone = self._abandoned.get(message.message_id)
+            if (tombstone is None or message.kind != tombstone[1]
+                    or message.generation != tombstone[2]):
+                raise ProtocolError("EXECUTION_FAILED", "unexpected gateway response ID or lane")
+            decoded = wire.decode_bundle(message.payload, fragment_kind=message.kind)
+            if (decoded.classification != wire.BUNDLE_RESPONSE
+                    or decoded.method != tombstone[0]):
+                raise ProtocolError("EXECUTION_FAILED", "late gateway response differs from its abandoned call")
+            del self._abandoned[message.message_id]
+            return
+        if (message.kind != entry["response_lane"]
                 or message.generation != self._generation):
             raise ProtocolError("EXECUTION_FAILED", "unexpected gateway response ID or lane")
         decoded = wire.decode_bundle(message.payload, fragment_kind=message.kind)
@@ -266,6 +321,7 @@ class CoordinatorChannelClient:
         preflight_worker_protobuf(decoded.protobuf, response=True,
                                   max_bytes=MAX_MESSAGE_BYTES)
         response = parse_message(decoded.protobuf, Response, MAX_MESSAGE_BYTES)
+        entry["response_received"] = True
         if not entry["future"].done():
             entry["future"].set_result((response, (message.message_id,
                 self._generation, entry["binding"])))

@@ -8,6 +8,9 @@ and separate data/control capture reservations. It accepts an actual worker
 `Request` and trusted request context, mints the C1 gateway route guard, calls
 `OutboundAuthorizer.authorize_gateway_outbound`, and sends the authorized C1
 binding and deterministic protobuf in a C2 request bundle.
+The exact stream has one lifetime client claim (a weak-key tombstone); creating
+a second client for the same stream is rejected so IDs, pump ownership, and
+responses cannot be split between adapters.
 
 One stream pump dispatches responses to pending calls by the exact wire message
 ID. Data calls reserve 8,495,104 bytes each (nine slots); cleanup calls reserve
@@ -15,6 +18,8 @@ ID. Data calls reserve 8,495,104 bytes each (nine slots); cleanup calls reserve
 relay's maximum protobuf/envelope/binding captures and 64 KiB parser/object
 headroom. ChannelStream, TLS, decoded queues, runtime state, and process allocator
 overhead remain separate resource costs.
+Control requests are also limited to the wire's 8 KiB control protobuf bound
+before any request copy or C1 authorization.
 
 C2M1 response bundles intentionally omit the C1 binding. The adapter therefore
 retains each exact C1 binding, request, method, expected response lane, route
@@ -25,9 +30,11 @@ before completing the captured outbound authorization. This local correlation
 does not establish end-to-end worker proof or model readiness.
 
 The generation uses a monotonic, nonzero 128-bit message-ID allocator and
-retires before integer wrap. It never retries uncertain mutations. Cancellation
-or channel/policy loss fences the generation; pending callers fail and retain
-their authorization/capture ownership until local operation cleanup finishes.
+retires before integer wrap. It never retries uncertain mutations. Caller
+cancellation and request-scoped authorization expiry fail and retire only that
+operation, allowing independent calls to continue on the same live stream.
+Channel, transport, or generation loss fences all pending calls, which retain
+their authorization/capture ownership until local cleanup finishes.
 `close()` is bounded and reports `SecureTaskPending` while tasks still own work.
 If authorization failure or close itself is uncertain, the adapter retains that
 operation and its charged capture permanently, fences the generation, and
