@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 import time
 from typing import Protocol
@@ -69,7 +70,7 @@ class CoordinatorChannelClient:
 
     def __init__(self, *, egress, stream: ChannelStream,
                  authorization_watcher, data_capture_reservation_bytes,
-                 control_capture_reservation_bytes):
+                 control_capture_reservation_bytes, runtime_guard=None):
         from steamboat_security.gateway_egress import (
             GatewayCoordinatorEgress, is_owned_gateway_coordinator_egress,
         )
@@ -84,6 +85,13 @@ class CoordinatorChannelClient:
             raise TypeError("client requires the exact live coordinator egress HELLO stream")
         if not callable(authorization_watcher):
             raise TypeError("an explicit authorization watcher is required")
+        if runtime_guard is not None and (
+                not callable(runtime_guard)
+                or inspect.iscoroutinefunction(runtime_guard)
+                or inspect.isasyncgenfunction(runtime_guard)
+                or inspect.iscoroutinefunction(getattr(runtime_guard, "__call__", None))
+                or inspect.isasyncgenfunction(getattr(runtime_guard, "__call__", None))):
+            raise TypeError("runtime_guard must be a synchronous callback")
         if (type(data_capture_reservation_bytes) is not int
                 or data_capture_reservation_bytes < _DATA_SLOTS * _DATA_CAPTURE
                 or type(control_capture_reservation_bytes) is not int
@@ -96,6 +104,16 @@ class CoordinatorChannelClient:
         self.egress, self.stream = egress, stream
         self.authorizer = egress.authorizer
         self.authorization_watcher = authorization_watcher
+        self._runtime_guard = runtime_guard
+        self._runtime_invalidated = threading.Event()
+        self._runtime_wake_lock = threading.Lock()
+        self._runtime_wake_pending = False
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Some existing C1 callers construct the client before entering
+            # their event loop. The default path never needs a loop handle.
+            self._loop = None
         self.data_capture_reservation_bytes = data_capture_reservation_bytes
         self.control_capture_reservation_bytes = control_capture_reservation_bytes
         self._generation = stream._hello.generation
@@ -113,6 +131,81 @@ class CoordinatorChannelClient:
         self._retained, self._active, self._retirement_tasks = set(), set(), set()
         self._target_proxies = {}
 
+    def request_runtime_invalidation(self, reason):
+        """Fence this client from another thread without waiting for its loop.
+
+        The event is the immediate authority fence. Stream closure is coalesced
+        onto the owner's loop; callers never close TLS or wait for cleanup.
+        """
+        if self._runtime_guard is None:
+            raise RuntimeError("runtime invalidation requires a configured guard")
+        if not isinstance(reason, str) or not reason or len(reason) > 160:
+            raise ValueError("runtime invalidation reason must be short text")
+        self._runtime_invalidated.set()
+        loop = self._loop
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+                self._loop = loop
+            except RuntimeError:
+                return
+        if not self._runtime_wake_lock.acquire(blocking=False):
+            return
+        try:
+            if self._runtime_wake_pending:
+                return
+            self._runtime_wake_pending = True
+            try:
+                loop.call_soon_threadsafe(self._apply_runtime_invalidation)
+            except RuntimeError:
+                # A stopped loop cannot be woken, but the sticky Event still
+                # prevents any subsequent operation from admitting work.
+                self._runtime_wake_pending = False
+        finally:
+            self._runtime_wake_lock.release()
+
+    def _apply_runtime_invalidation(self):
+        with self._runtime_wake_lock:
+            self._runtime_wake_pending = False
+        if self._runtime_invalidated.is_set() and not self._unavailable:
+            self._fence("C2 coordinator runtime binding was invalidated")
+
+    def _check_runtime_guard(self):
+        self._check_runtime_event()
+        guard = self._runtime_guard
+        if guard is None:
+            return
+        if self._loop is None:
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+        try:
+            result = guard()
+            if inspect.isawaitable(result):
+                close = getattr(result, "close", None)
+                if callable(close):
+                    close()
+                raise TypeError("runtime_guard returned an awaitable")
+            if inspect.isasyncgen(result):
+                close = result.aclose()
+                if inspect.iscoroutine(close):
+                    close.close()
+                raise TypeError("runtime_guard returned an async generator")
+            if result is not None:
+                raise TypeError("runtime_guard must return exactly None")
+        except BaseException as error:
+            self._runtime_invalidated.set()
+            self._fence("C2 coordinator runtime guard failed", cause=error)
+            raise ProtocolError("EXECUTION_FAILED", "coordinator runtime binding is unavailable") from None
+        if self._runtime_invalidated.is_set():
+            self._fence("C2 coordinator runtime binding was invalidated")
+            raise ProtocolError("EXECUTION_FAILED", "coordinator runtime binding is unavailable")
+
+    def _check_runtime_event(self):
+        if self._runtime_invalidated.is_set():
+            raise ProtocolError("EXECUTION_FAILED", "coordinator runtime binding is unavailable")
+
     async def execute(self, method, request, *, trusted_request_context):
         return await self._execute_for(
             self.egress, method, request,
@@ -128,6 +221,7 @@ class CoordinatorChannelClient:
                 or not is_owned_gateway_target_view(route_owner)
                 or route_owner.egress is not self.egress):
             raise ProtocolError("EXECUTION_FAILED", "cohort target view is foreign or stale")
+        self._check_runtime_guard()
         if self._closed or self._unavailable or self.stream.closed:
             raise ProtocolError("EXECUTION_FAILED", "coordinator gateway channel is unavailable")
         if method not in METHODS or not isinstance(request, Request):
@@ -157,6 +251,7 @@ class CoordinatorChannelClient:
         self._active.add(current_task)
         request_deadline = time.monotonic() + request.timeout_ms / 1000
         try:
+            self._check_runtime_guard()
             async with self._lock:
                 self._assert_live()
                 if self._next_message_id >= (1 << 128):
@@ -175,20 +270,26 @@ class CoordinatorChannelClient:
             source_request = Request()
             source_request.CopyFrom(request)
             owner["request"] = source_request
+            self._check_runtime_guard()
             route = route_owner.mint_route_guard(
                 method=method, trusted_request_context=trusted_request_context)
+            owner["route"] = route
+            self._check_runtime_guard()
             auth = route_owner.authorizer.authorize_gateway_outbound(
                 service=WORKER_SERVICE, method=method, payload=source_request,
                 trusted_request_context=trusted_request_context,
                 gateway_route=route)
             owner["auth"], owner["route"], owner["state"] = auth, route, "active"
+            self._check_runtime_guard()
             async with self._lock:
                 self._assert_live()
                 wire_request = Request()
                 wire_request.CopyFrom(source_request)
                 owner["wire_request"] = wire_request
+                self._check_runtime_guard()
                 remaining = min(await _maybe_await(auth.remaining_seconds()),
                                 request_deadline - time.monotonic())
+                self._check_runtime_guard()
                 wire_request.timeout_ms = min(request.timeout_ms, int(remaining * 1000))
                 if wire_request.timeout_ms < 1:
                     raise TimeoutError("authorization expires before dispatch")
@@ -196,9 +297,12 @@ class CoordinatorChannelClient:
                 owner["raw_request"] = raw
                 # Apply a fresh authorization/deadline clip after serialization,
                 # immediately before the one-way mutation can enter the stream.
+                self._check_runtime_guard()
                 await _maybe_await(auth.assert_live())
+                self._check_runtime_guard()
                 remaining = min(await _maybe_await(auth.remaining_seconds()),
                                 request_deadline - time.monotonic())
+                self._check_runtime_guard()
                 wire_request.timeout_ms = min(wire_request.timeout_ms, int(remaining * 1000))
                 if wire_request.timeout_ms < 1:
                     raise TimeoutError("authorization expires before dispatch")
@@ -206,6 +310,7 @@ class CoordinatorChannelClient:
                 owner["raw_request"] = raw
                 self.egress.assert_transport_live()
                 route.assert_live()
+                self._check_runtime_guard()
                 bundle = wire.encode_bundle(
                     method, wire.REQUEST, fragment_kind=lane,
                     binding=auth.binding_bytes, protobuf=raw)
@@ -223,6 +328,7 @@ class CoordinatorChannelClient:
                 if self._pump_task is None:
                     self._pump_task = asyncio.create_task(self._pump())
             try:
+                self._check_runtime_guard()
                 response, _correlation = await _run_guarded(
                     self._pending[message_id]["future"], auth,
                     self.authorization_watcher,
@@ -230,6 +336,7 @@ class CoordinatorChannelClient:
                     absolute_deadline=request_deadline,
                     on_pending=self._retain_pending,
                     close_authorization_on_pending=False)
+                self._check_runtime_guard()
             except SecureTaskPending as error:
                 transferred = error.authorization_transferred
                 pending_entry = self._pending.get(message_id)
@@ -245,9 +352,12 @@ class CoordinatorChannelClient:
             if _correlation != (message_id, self._generation, auth.binding_bytes):
                 raise ProtocolError("EXECUTION_FAILED", "gateway response correlation changed")
             response = validate_response(method, wire_request, response)
+            self._check_runtime_guard()
             await _maybe_await(auth.assert_live())
+            self._check_runtime_guard()
             await _maybe_await(auth.complete(response))
             completed = True
+            self._check_runtime_guard()
             return response
         except asyncio.CancelledError:
             failed = True
@@ -287,6 +397,7 @@ class CoordinatorChannelClient:
         from steamboat_security.gateway_egress import (
             GatewayEgressTargetView, is_owned_gateway_target_view,
         )
+        self._check_runtime_guard()
         if (type(target_view) is not GatewayEgressTargetView
                 or not is_owned_gateway_target_view(target_view)
                 or target_view.egress is not self.egress):
@@ -295,6 +406,7 @@ class CoordinatorChannelClient:
             raise ProtocolError("EXECUTION_FAILED", "coordinator gateway client is unavailable")
         self._assert_live()
         target_view.assert_transport_live()
+        self._check_runtime_guard()
         key = target_view._key
         existing = self._target_proxies.get(key)
         if existing is not None:
@@ -315,7 +427,9 @@ class CoordinatorChannelClient:
                 for entry in tuple(self._pending.values()):
                     try:
                         entry["route"].assert_live()
+                        self._check_runtime_guard()
                         await _maybe_await(entry["auth"].assert_live())
+                        self._check_runtime_guard()
                     except SessionError:
                         # A request-scoped authorization can expire while
                         # another independent call remains valid on this stream.
@@ -327,9 +441,12 @@ class CoordinatorChannelClient:
                             future.set_exception(SessionError(
                                 "outbound request authorization expired"))
                         entry["abandon_response"] = True
+                self._check_runtime_guard()
                 self.stream.pump()
+                self._check_runtime_guard()
                 message = self.stream.pop_message()
                 if message is not None:
+                    self._check_runtime_guard()
                     self._dispatch_response(message)
                 await asyncio.sleep(_PUMP_INTERVAL)
         except asyncio.CancelledError:
@@ -346,6 +463,7 @@ class CoordinatorChannelClient:
                 self._pump_task = None
 
     def _dispatch_response(self, message):
+        self._check_runtime_guard()
         entry = self._pending.get(message.message_id)
         if entry is None:
             tombstone = self._abandoned.get(message.message_id)
@@ -370,12 +488,16 @@ class CoordinatorChannelClient:
         preflight_worker_protobuf(decoded.protobuf, response=True,
                                   max_bytes=MAX_MESSAGE_BYTES)
         response = parse_message(decoded.protobuf, Response, MAX_MESSAGE_BYTES)
-        entry["response_received"] = True
         if not entry["future"].done():
+            self._check_runtime_guard()
+            entry["response_received"] = True
             entry["future"].set_result((response, (message.message_id,
                 self._generation, entry["binding"])))
 
     def _assert_live(self):
+        # This helper is also used inside the capture lock. It only reads the
+        # sticky event there; caller-owned guard callbacks run outside locks.
+        self._check_runtime_event()
         if self._closed or self._unavailable or self.stream.closed:
             raise ProtocolError("EXECUTION_FAILED", "coordinator gateway generation is unavailable")
         if (self.stream._hello.egress is not self.egress
