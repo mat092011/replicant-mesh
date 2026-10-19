@@ -6,6 +6,7 @@ import base64
 import gc
 import json
 import os
+import stat
 from contextlib import contextmanager
 from pathlib import Path
 import subprocess
@@ -42,14 +43,59 @@ _NATIVE_FIXTURE = os.name == "posix" and hasattr(os, "geteuid") and _ARTIFACTS.i
     "requires Linux POSIX and the approved offline /artifacts model fixture")
 class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
     @contextmanager
-    def resources(self, scratch, *, pin_variant=None):
+    def narrowed_queue_artifacts(self, scratch):
+        from steamboat_connector.catalog import ARTIFACT_FILENAMES
+        from steamboat_runtime.manifest import canonical_bytes, fingerprint, load_manifest
+
+        source_manifest = load_manifest(_ARTIFACTS)
+        names = set(source_manifest["files"]) | {"modelmanifest.json"}
+        if not names <= ARTIFACT_FILENAMES:
+            raise AssertionError("source manifest names an undeclared artifact")
+        total_bytes = 0
+        with tempfile.TemporaryDirectory(prefix="c2-lowered-queue-", dir=scratch) as raw:
+            narrowed = Path(raw)
+            os.chmod(narrowed, 0o700)
+            for name in sorted(names - {"modelmanifest.json"}):
+                source = _ARTIFACTS / name
+                info = source.lstat()
+                if (not stat.S_ISREG(info.st_mode) or info.st_size <= 0
+                        or info.st_size > 32 * 1024 * 1024):
+                    raise AssertionError("source artifact is not a bounded regular file")
+                total_bytes += info.st_size
+                if total_bytes > 64 * 1024 * 1024:
+                    raise AssertionError("declared model artifacts exceed the fixture copy bound")
+                data = source.read_bytes()
+                if len(data) != info.st_size:
+                    raise AssertionError("source artifact changed while copying")
+                destination = narrowed / name
+                destination.write_bytes(data)
+                os.chmod(destination, 0o600)
+
+            manifest_source = _ARTIFACTS / "modelmanifest.json"
+            source_info = manifest_source.lstat()
+            if (not stat.S_ISREG(source_info.st_mode)
+                    or source_info.st_size <= 0 or source_info.st_size > 256 * 1024):
+                raise AssertionError("model manifest is not a bounded regular file")
+            manifest = json.loads(manifest_source.read_bytes())
+            manifest["limits"]["max_stage_queue"] = 1
+            manifest["fingerprint"] = fingerprint(manifest)
+            destination = narrowed / "modelmanifest.json"
+            destination.write_bytes(canonical_bytes(manifest))
+            os.chmod(destination, 0o600)
+            checked = load_manifest(narrowed)
+            if checked["limits"]["max_stage_queue"] != 1:
+                raise AssertionError("narrowed manifest did not validate")
+            yield narrowed
+
+    @contextmanager
+    def resources(self, scratch, *, pin_variant=None, artifacts_dir=_ARTIFACTS):
         from tests.connector.c2_startup_fixture import c2_startup_fixture
         from steamboat_connector.artifacts import ArtifactInstaller
         from steamboat_connector.c2_child_config import (
             build_c2_child_config, open_c2_child_binding, parse_c2_child_config,
         )
 
-        with c2_startup_fixture(_ARTIFACTS, scratch,
+        with c2_startup_fixture(artifacts_dir, scratch,
                                 pin_variant=pin_variant) as fx:
             document = build_c2_child_config(role="host",
                 selected_root=str(fx.selected_store.root),
@@ -242,7 +288,10 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(runtime._handlers, {})
                 self.assertEqual(runtime._bridges, {})
                 self.assertEqual(child_pins._state, "open")
-                del authorization, bridge, handler
+                delattr(bridge, "request_runtime_invalidation")
+                delattr(bridge, "stop")
+                del authorization, bridge, handler, invalidate, stop
+                del record_invalidation, record_stop
                 gc.collect()
                 self.assertIsNone(handler_ref())
                 self.assertIsNone(executor_ref())
@@ -308,24 +357,22 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
     async def test_signed_manifest_queue_limit_precedes_weight_load(self):
         with tempfile.TemporaryDirectory(prefix="c2-host-runtime-queue-limit-") as scratch:
             os.chmod(scratch, 0o700)
-            with self.resources(scratch) as (fx, child_owner, child_pins, installer):
-                view = installer.open_view(fx.assignment_id,
-                    account_id=fx.selected_host.account_id,
-                    device_id=fx.selected_host.device_id, role="host")
-                signed_limit = view._locked_manifest()["limits"]["max_stage_queue"]
-                self.assertLessEqual(signed_limit, 8)
-                if signed_limit == 8:
-                    self.skipTest("approved signed artifact already permits the full queue ceiling")
-                with mock.patch(
-                        "steamboat_connector.c2_host_runtime.build_assigned_worker_handler",
-                        side_effect=AssertionError("weights loaded before signed queue check")) as build:
-                    with self.assertRaisesRegex(CredentialError,
-                            "component allocation exceeds signed or assigned limits"):
-                        await build_c2_host_runtime(child_owner, child_pins, installer,
-                            owner_policy=self.owner_policy(queued_calls=8),
-                            component_allocations=self.allocations(
-                                queued_calls=signed_limit + 1))
-                    build.assert_not_called()
+            with self.narrowed_queue_artifacts(scratch) as artifacts:
+                with self.resources(scratch, artifacts_dir=artifacts) as (
+                        _fx, child_owner, child_pins, installer):
+                    view = installer.open_view(child_pins.owners[0].record["assignments"][0]["assignment_id"],
+                        account_id=child_pins.owners[0].record["account_id"],
+                        device_id=child_pins.owners[0].record["device_id"], role="host")
+                    self.assertEqual(view._locked_manifest()["limits"]["max_stage_queue"], 1)
+                    with mock.patch(
+                            "steamboat_connector.c2_host_runtime.build_assigned_worker_handler",
+                            side_effect=AssertionError("weights loaded before signed queue check")) as build:
+                        with self.assertRaisesRegex(CredentialError,
+                                "component allocation exceeds signed or assigned limits"):
+                            await build_c2_host_runtime(child_owner, child_pins, installer,
+                                owner_policy=self.owner_policy(queued_calls=8),
+                                component_allocations=self.allocations(queued_calls=2))
+                        build.assert_not_called()
 
     async def test_projected_owner_from_larger_signed_group_is_rejected(self):
         from steamboat_connector.runtime_pin_handoff import ChildArtifactPinSet
@@ -365,9 +412,12 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                 original_stop = bridge.stop
                 with mock.patch.object(bridge, "stop", mock.AsyncMock(return_value=False)) as stop:
                     with self.assertRaisesRegex(C2HostRuntimeError,
-                            "one or more secure worker bridges could not be fenced|did not confirm cleanup"):
+                            "host runtime cleanup is uncertain; retain owners until process reap") as caught:
                         await runtime.close(1.0)
                     stop.assert_awaited_once()
+                self.assertIsInstance(caught.exception.__cause__, C2HostRuntimeError)
+                self.assertRegex(str(caught.exception.__cause__),
+                                 "secure worker bridge did not confirm cleanup")
                 self.assertTrue(bridge._runtime_invalidated.is_set())
                 self.assertEqual(runtime._state, "faulted")
                 self.assertIs(runtime._handlers["worker-1"], handler)
