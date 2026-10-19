@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import gc
 import json
 import os
 from contextlib import contextmanager
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import weakref
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -128,6 +130,10 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                 bridge = runtime._bridges["worker-1"]
                 self.assertIs(bridge.authorizer_core, runtime._authorizers["worker-1"])
                 self.assertIs(bridge._runtime_guard.__self__, runtime._binding)
+                handler_ref = weakref.ref(handler)
+                executor_ref = weakref.ref(handler.executor)
+                stage_ref = weakref.ref(handler.executor.stage)
+                bridge_ref = weakref.ref(bridge)
 
                 # Add a real, narrowly scoped C1 Describe grant to the signed
                 # current snapshot. The fixture signing key and coordinator
@@ -236,6 +242,12 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(runtime._handlers, {})
                 self.assertEqual(runtime._bridges, {})
                 self.assertEqual(child_pins._state, "open")
+                del authorization, bridge, handler
+                gc.collect()
+                self.assertIsNone(handler_ref())
+                self.assertIsNone(executor_ref())
+                self.assertIsNone(stage_ref())
+                self.assertIsNone(bridge_ref())
 
     async def test_bad_component_allocation_rejected_before_any_weight_load(self):
         with tempfile.TemporaryDirectory(prefix="c2-host-runtime-preload-") as scratch:
@@ -292,3 +304,88 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                                         validate_policy(self.owner_policy()),
                                         self.allocations())
                                 build.assert_not_called()
+
+    async def test_signed_manifest_queue_limit_precedes_weight_load(self):
+        with tempfile.TemporaryDirectory(prefix="c2-host-runtime-queue-limit-") as scratch:
+            os.chmod(scratch, 0o700)
+            with self.resources(scratch) as (fx, child_owner, child_pins, installer):
+                view = installer.open_view(fx.assignment_id,
+                    account_id=fx.selected_host.account_id,
+                    device_id=fx.selected_host.device_id, role="host")
+                signed_limit = view._locked_manifest()["limits"]["max_stage_queue"]
+                self.assertLessEqual(signed_limit, 8)
+                if signed_limit == 8:
+                    self.skipTest("approved signed artifact already permits the full queue ceiling")
+                with mock.patch(
+                        "steamboat_connector.c2_host_runtime.build_assigned_worker_handler",
+                        side_effect=AssertionError("weights loaded before signed queue check")) as build:
+                    with self.assertRaisesRegex(CredentialError,
+                            "component allocation exceeds signed or assigned limits"):
+                        await build_c2_host_runtime(child_owner, child_pins, installer,
+                            owner_policy=self.owner_policy(queued_calls=8),
+                            component_allocations=self.allocations(
+                                queued_calls=signed_limit + 1))
+                    build.assert_not_called()
+
+    async def test_projected_owner_from_larger_signed_group_is_rejected(self):
+        from steamboat_connector.runtime_pin_handoff import ChildArtifactPinSet
+
+        with tempfile.TemporaryDirectory(prefix="c2-host-runtime-projected-group-") as scratch:
+            os.chmod(scratch, 0o700)
+            with self.resources(scratch, pin_variant="extra_component") as (
+                    fx, child_owner, child_pins, installer):
+                owner = next(item for item in child_pins.owners
+                             if item.component == "worker-1")
+                guard = next(item for item in child_pins.guards
+                             if item.component == "worker-1")
+                projected = ChildArtifactPinSet((owner,), (guard,))
+                self.assertEqual(child_pins._state, "open")
+                self.assertEqual(len(owner.record["assignments"]), 2)
+                with mock.patch(
+                        "steamboat_connector.c2_host_runtime.build_assigned_worker_handler",
+                        side_effect=AssertionError("weights loaded before full group check")) as build:
+                    with self.assertRaisesRegex(CredentialError,
+                            "inherited group record does not contain the complete selected set"):
+                        await build_c2_host_runtime(child_owner, projected, installer,
+                            owner_policy=self.owner_policy(),
+                            component_allocations=self.allocations())
+                    build.assert_not_called()
+                self.assertEqual(projected._state, "open")
+                self.assertEqual(child_pins._state, "open")
+
+    async def test_uncertain_bridge_stop_fences_and_retains_all_owners(self):
+        with tempfile.TemporaryDirectory(prefix="c2-host-runtime-fault-close-") as scratch:
+            os.chmod(scratch, 0o700)
+            with self.resources(scratch) as (_fx, child_owner, child_pins, installer):
+                runtime = await build_c2_host_runtime(child_owner, child_pins, installer,
+                    owner_policy=self.owner_policy(),
+                    component_allocations=self.allocations())
+                bridge = runtime._bridges["worker-1"]
+                handler = runtime._handlers["worker-1"]
+                original_stop = bridge.stop
+                with mock.patch.object(bridge, "stop", mock.AsyncMock(return_value=False)) as stop:
+                    with self.assertRaisesRegex(C2HostRuntimeError,
+                            "one or more secure worker bridges could not be fenced|did not confirm cleanup"):
+                        await runtime.close(1.0)
+                    stop.assert_awaited_once()
+                self.assertTrue(bridge._runtime_invalidated.is_set())
+                self.assertEqual(runtime._state, "faulted")
+                self.assertIs(runtime._handlers["worker-1"], handler)
+                self.assertIs(runtime._bridges["worker-1"], bridge)
+                self.assertIsNotNone(runtime._lease)
+                self.assertEqual(child_pins._state, "open")
+
+                # Test-only cleanup performs the real operations after the
+                # retained-owner assertions so this fixture can release FDs.
+                await original_stop(grace_seconds=1.0)
+                self.assertTrue(await handler.shutdown(grace_seconds=1.0))
+                runtime._cleanup_tasks.clear()
+                runtime._bridges.clear()
+                runtime._handlers.clear()
+                runtime._authorizers.clear()
+                runtime._sessions.clear()
+                runtime._lease.__exit__(None, None, None)
+                runtime._lease = None
+                runtime._binding = None
+                runtime._child_pins = None
+                runtime._installer = None
