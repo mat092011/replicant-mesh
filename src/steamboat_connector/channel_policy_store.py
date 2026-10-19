@@ -28,7 +28,6 @@ from steamboat_security.channel_policy import (
 from steamboat_security.certificates import public_key_sha256
 from steamboat_security.clock import Clock
 from steamboat_security.errors import SnapshotError, StorageError
-from steamboat_security.files import _open_directory_chain
 
 HEAD_NAME = "channel-policy-head.json"
 LOCK_NAME = "channel-policy-head.lock"
@@ -43,6 +42,15 @@ _HEAD_FIELDS = frozenset({
     "signed_policy_sha256", "signed_policy_b64",
 })
 _HEX64 = frozenset("0123456789abcdef")
+_QUARANTINE_LIMIT = 8
+_QUARANTINE = []
+_QUARANTINE_LOCK = threading.Lock()
+
+
+def _retain_uncertain_initialization(owner):
+    with _QUARANTINE_LOCK:
+        if len(_QUARANTINE) < _QUARANTINE_LIMIT and owner not in _QUARANTINE:
+            _QUARANTINE.append(owner)
 
 
 def _pairs(pairs):
@@ -164,6 +172,7 @@ class PersistentChannelPolicyStore:
         owner._initialize(root, expected_uid, verification_key_pem, clock,
                           minimum_revision, minimum_policy_digest, key_hash,
                           _fault_hook)
+        owner._check_quarantine_capacity()
         try:
             owner._open_provisioned_root()
             owner._create_and_claim_lock()
@@ -175,6 +184,8 @@ class PersistentChannelPolicyStore:
         except BaseException:
             owner._faulted = True
             owner._close_unpublished_initialization()
+            if owner._uncertain_cleanup:
+                _retain_uncertain_initialization(owner)
             raise
 
     @classmethod
@@ -187,6 +198,7 @@ class PersistentChannelPolicyStore:
         owner._initialize(root, expected_uid, verification_key_pem, clock,
                           minimum_revision, minimum_policy_digest, key_hash,
                           _fault_hook)
+        owner._check_quarantine_capacity()
         try:
             owner._open_existing_root()
             owner._open_and_claim_lock()
@@ -213,6 +225,8 @@ class PersistentChannelPolicyStore:
         except BaseException:
             owner._faulted = True
             owner._close_unpublished_initialization()
+            if owner._uncertain_cleanup:
+                _retain_uncertain_initialization(owner)
             raise
 
     def _initialize(self, root, uid, verification_key_pem, clock,
@@ -231,6 +245,8 @@ class PersistentChannelPolicyStore:
         self._key_hash = key_hash
         self._fault_hook = fault_hook
         self._root_fd = -1
+        self._walking_fds = []
+        self._uncertain_cleanup = False
         self._lock_fd = -1
         self._lock_identity = None
         self._head_bytes = None
@@ -244,6 +260,11 @@ class PersistentChannelPolicyStore:
         self._lifetime = threading.Condition(threading.Lock())
         self._operation_lock = threading.RLock()
 
+    def _check_quarantine_capacity(self):
+        with _QUARANTINE_LOCK:
+            if len(_QUARANTINE) >= _QUARANTINE_LIMIT:
+                raise StorageError("uncertain channel policy owners reached their fixed bound")
+
     def _new_core_store(self):
         return ChannelPolicyStore(
             self._verification_key_pem,
@@ -255,11 +276,32 @@ class PersistentChannelPolicyStore:
         )
 
     def _open_root(self):
+        flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+                 | getattr(os, "O_CLOEXEC", 0))
         try:
-            return _open_directory_chain(self._path, expected_uid=self._uid)
-        except BaseException as error:
-            if isinstance(error, StorageError):
-                raise
+            if not self._path.is_absolute() or self._path == Path(os.sep):
+                raise StorageError("filesystem root cannot store channel policy")
+            self._walking_fds.append(os.open(os.sep, flags))
+            components = self._path.parts[1:]
+            for index, component in enumerate(components):
+                if component in ("", ".", ".."):
+                    raise StorageError("channel policy root path has unsafe components")
+                parent = self._walking_fds[-1]
+                child = os.open(component, flags, dir_fd=parent)
+                self._walking_fds.append(child)
+                # Consume the parent descriptor before its one close attempt.
+                self._walking_fds.remove(parent)
+                self._close_fd_once(parent, "channel policy path component")
+                info = os.fstat(child)
+                if not stat.S_ISDIR(info.st_mode):
+                    raise StorageError("channel policy root component is not a directory")
+                if index == len(components) - 1:
+                    _check_inode(info, self._uid, directory=True)
+            result = self._walking_fds.pop()
+            return result
+        except StorageError:
+            raise
+        except OSError as error:
             raise StorageError("channel policy owner root is missing or unsafe") from error
 
     def _open_provisioned_root(self):
@@ -353,9 +395,14 @@ class PersistentChannelPolicyStore:
             raise StorageError("channel policy lock namespace identity changed")
 
     def _scan_names(self, *, require_head, allow_temp=False):
-        self._check_root_inode()
-        self._check_lock_live()
-        names = set(os.listdir(self._root_fd))
+        try:
+            self._check_root_inode()
+            self._check_lock_live()
+            names = set(os.listdir(self._root_fd))
+        except StorageError:
+            raise
+        except OSError as error:
+            raise StorageError("channel policy namespace cannot be inspected") from error
         expected = {LOCK_NAME, HEAD_NAME} if require_head else {LOCK_NAME}
         if allow_temp:
             expected.add(TEMP_NAME)
@@ -399,13 +446,18 @@ class PersistentChannelPolicyStore:
         return b"".join(chunks), self._identity(after)
 
     def _assert_expected_head(self, *, allow_temp=False):
-        self._scan_names(require_head=self._head_bytes is not None,
-                         allow_temp=allow_temp)
-        if self._head_bytes is None:
-            return
-        current, identity = self._read_head()
-        if current != self._head_bytes or identity != self._head_identity:
-            raise StorageError("durable channel policy head changed outside this owner")
+        try:
+            self._scan_names(require_head=self._head_bytes is not None,
+                             allow_temp=allow_temp)
+            if self._head_bytes is None:
+                return
+            current, identity = self._read_head()
+            if current != self._head_bytes or identity != self._head_identity:
+                raise StorageError("durable channel policy head changed outside this owner")
+        except StorageError:
+            raise
+        except OSError as error:
+            raise StorageError("channel policy head namespace is uncertain") from error
 
     def _encode_head(self, signed_policy, revision, policy_digest):
         return _canonical_head(
@@ -520,7 +572,11 @@ class PersistentChannelPolicyStore:
             self._owner_thread = ident
         try:
             with self._operation_lock:
-                self._assert_expected_head()
+                try:
+                    self._assert_expected_head()
+                except StorageError:
+                    self._faulted = True
+                    raise
                 yield
         except BaseException:
             if self._commit_ready:
@@ -536,25 +592,6 @@ class PersistentChannelPolicyStore:
     def install(self, signed_policy: bytes):
         with self._operation():
             try:
-                # A signature is over the canonical payload, so ECDSA signature
-                # byte variation cannot turn the same policy into an update.
-                # Validate it with the same core parser at the currently pinned
-                # head before treating it as an idempotent replay.
-                if self._head_bytes is not None:
-                    current = self._store.current()
-                    candidate_store = ChannelPolicyStore(
-                        self._verification_key_pem,
-                        clock=self._clock,
-                        minimum_revision=current.revision,
-                        minimum_policy_digest=current.policy_digest,
-                        durable_commit=lambda *_args: None,
-                        require_durable=True,
-                    )
-                    candidate = candidate_store.install(signed_policy)
-                    if (candidate.revision == current.revision
-                            and candidate.policy_digest == current.policy_digest
-                            and candidate.canonical_payload == current.canonical_payload):
-                        return current
                 return self._store.install(signed_policy)
             except BaseException:
                 if self._commit_ready:
@@ -606,6 +643,7 @@ class PersistentChannelPolicyStore:
             os.close(fd)
         except BaseException as error:
             self._faulted = True
+            self._uncertain_cleanup = True
             raise StorageError(f"{label} close outcome is unknown") from error
 
     def _close_unpublished_initialization(self):
@@ -620,6 +658,14 @@ class PersistentChannelPolicyStore:
                     os.close(fd)
                 except OSError:
                     self._faulted = True
+                    self._uncertain_cleanup = True
+        while self._walking_fds:
+            fd = self._walking_fds.pop()
+            try:
+                os.close(fd)
+            except OSError:
+                self._faulted = True
+                self._uncertain_cleanup = True
 
     def __enter__(self):
         return self

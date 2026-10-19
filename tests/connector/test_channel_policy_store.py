@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -14,6 +15,7 @@ from steamboat_connector.channel_policy_store import (
     HEAD_NAME,
     LOCK_NAME,
     PersistentChannelPolicyStore,
+    _QUARANTINE,
 )
 from steamboat_security.channel_policy import canonical_json, sign_channel_policy
 from steamboat_security.clock import Clock
@@ -90,9 +92,9 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
         return sign_channel_policy(self.payload if payload is None else payload,
                                    _private_pem(self.key if key is None else key))
 
-    def provision(self, *, fault_hook=None):
+    def provision(self, *, root=None, fault_hook=None):
         owner = PersistentChannelPolicyStore.provision(
-            self.root, **self.config, _fault_hook=fault_hook)
+            self.root if root is None else root, **self.config, _fault_hook=fault_hook)
         owner.install(self.sign())
         return owner
 
@@ -123,7 +125,7 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
 
     def test_revision_advance_and_reopen_obey_explicit_minimum_anchor(self):
         owner = self.provision()
-        second_payload = {**self.payload, "revision": 2, "issued_at": 1001,
+        second_payload = {**self.payload, "revision": 2, "issued_at": 1000,
                           "expires_at": 1101}
         second = self.sign(second_payload)
         view = owner.install(second)
@@ -139,9 +141,31 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
         with self.assertRaises(StorageError):
             self.open_existing(verification_key_pem=_public_pem(wrong_key))
 
+    def test_expired_head_cannot_reopen_and_live_owner_can_write_fresh_revision(self):
+        owner = self.provision()
+        original_bytes = (self.root / HEAD_NAME).read_bytes()
+        owner.close()
+        self.wall, self.mono = 1100.0, 150.0
+        with self.assertRaises(SnapshotError):
+            self.open_existing()
+        self.assertEqual((self.root / HEAD_NAME).read_bytes(), original_bytes)
+
+        # This same live owner can move to a fresh signed revision after the
+        # prior policy expires; the core store performs all checks and commit.
+        self.wall, self.mono = 1000.0, 50.0
+        live_root = self.root.parent / "live-policy"
+        live_root.mkdir(mode=0o700)
+        os.chmod(live_root, 0o700)
+        owner = self.provision(root=live_root)
+        self.wall, self.mono = 1100.0, 150.0
+        renewed = {**self.payload, "revision": 2, "issued_at": 1100,
+                   "expires_at": 1200}
+        self.assertEqual(owner.install(self.sign(renewed)).revision, 2)
+        owner.close()
+
     def test_rollback_is_rejected_without_changing_current_head(self):
         owner = self.provision()
-        changed = {**self.payload, "revision": 2, "issued_at": 1001,
+        changed = {**self.payload, "revision": 2, "issued_at": 1000,
                    "expires_at": 1101,
                    "routes": [{**self.payload["routes"][0], "methods": ["Describe"]}]}
         owner.install(self.sign(changed))
@@ -153,7 +177,7 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
 
     def test_same_revision_equivocation_is_rejected_without_changing_head(self):
         owner = self.provision()
-        first = {**self.payload, "revision": 2, "issued_at": 1001,
+        first = {**self.payload, "revision": 2, "issued_at": 1000,
                  "expires_at": 1101,
                  "routes": [{**self.payload["routes"][0], "methods": ["Describe"]}]}
         owner.install(self.sign(first))
@@ -172,8 +196,9 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
 
         owner = PersistentChannelPolicyStore.provision(
             self.root, **self.config, _fault_hook=fail)
-        with self.assertRaises(StorageError):
+        with self.assertRaises(StorageError) as caught:
             owner.install(self.sign())
+        self.assertIsInstance(caught.exception.__cause__, OSError)
         self.assertTrue(owner.faulted)
         self.assertIsNone(owner._store._view)
         self.assertTrue((self.root / LOCK_NAME).exists())
@@ -208,6 +233,38 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
             owner.install(self.sign(advanced))
         self.assertTrue(owner.faulted)
         self.assertEqual(owner._store._view, before)
+
+    def test_storage_preflight_failure_latches_even_without_a_commit(self):
+        owner = self.provision()
+        (self.root / HEAD_NAME).write_bytes(b"foreign head")
+        with self.assertRaises(StorageError):
+            owner.current()
+        self.assertTrue(owner.faulted)
+
+    def test_ancestor_close_uncertainty_does_not_double_close_reused_fd(self):
+        actual_close = os.close
+        result = {}
+
+        def close_then_reuse(fd):
+            if not result:
+                actual_close(fd)
+                reused = os.open(os.devnull, os.O_RDONLY)
+                result["reused"] = reused
+                raise OSError("close reported failure after releasing descriptor")
+            return actual_close(fd)
+
+        before = len(_QUARANTINE)
+        try:
+            with patch("steamboat_connector.channel_policy_store.os.close",
+                       side_effect=close_then_reuse):
+                with self.assertRaises(StorageError):
+                    PersistentChannelPolicyStore.provision(
+                        self.root, **self.config)
+            self.assertEqual(len(_QUARANTINE), before + 1)
+            os.fstat(result["reused"])
+        finally:
+            if "reused" in result:
+                actual_close(result["reused"])
 
 
 if __name__ == "__main__":

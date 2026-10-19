@@ -24,8 +24,19 @@ nonblocking exclusive `flock`. Each update compares the current bytes and inode
 with the owner's observed head before an atomic replacement and directory
 `fsync`. Exact canonical-payload replay is idempotent even if the valid ECDSA
 signature encoding differs. Any uncertain write, rename, synchronization,
-namespace, or close outcome faults the owner and retains its lock; there is no
-automatic recovery path.
+namespace, or close outcome faults the owner and preserves its ownership record
+and any descriptors whose close has not been attempted. An uncertain close is
+never retried, because the descriptor number may already have been reused. The
+owner makes no claim that an uncertain kernel close preserved exclusivity; it
+does not attempt automatic recovery.
+
+An expired persisted policy fails closed at restart. Cold re-enrollment is an
+operator-controlled operation outside this owner: preserve the old head and its
+lock directory as history, select a fresh activation and worker boot, and
+provision a separate per-generation policy-head directory with a fresh signed
+policy and explicit minimum revision/digest anchored at or above the observed
+head. Do not delete or reset old history to revive an expired generation. This
+module does not implement that re-enrollment workflow.
 
 The owner holds one persistent policy head rather than an append-only history.
 The file limit is derived from the core 64 KiB signed-policy bound plus fixed
