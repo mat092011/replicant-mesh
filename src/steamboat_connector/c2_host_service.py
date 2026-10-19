@@ -501,7 +501,8 @@ class C2HostService:
             worker_private_key_pem=private_key, gateway_ca_pem=ca,
             endpoint_host=host, endpoint_port=port, clock=clock)
         channel = {"tls": owner, "socket": None, "driver": None,
-                   "stream": None, "rpc": None}
+                   "stream": None, "rpc": None,
+                   "_socket_owners": [], "_current_socket_owner": None}
         self._channels.append(channel)
         self._check_startup_stop()
         loop = asyncio.get_running_loop()
@@ -517,9 +518,12 @@ class C2HostService:
             if remaining <= 0:
                 break
             connected = socket.socket(family, socktype, proto)
+            socket_owner = {"socket": connected, "status": "open", "driver": None}
+            channel["_socket_owners"].append(socket_owner)
+            channel["_current_socket_owner"] = socket_owner
             channel["socket"] = connected
-            connected.setblocking(False)
             try:
+                connected.setblocking(False)
                 task = asyncio.create_task(loop.sock_connect(connected, address))
                 stop_task = asyncio.create_task(self._stop_event.wait())
                 done, _ = await asyncio.wait({task, stop_task}, timeout=remaining,
@@ -543,7 +547,7 @@ class C2HostService:
                     raise C2HostServiceError(
                         "stop requested during gateway connect; socket retained") from error
                 try:
-                    self._close_raw_socket_once(channel, connected)
+                    self._close_raw_socket_once(socket_owner)
                 except C2HostServiceError as close_error:
                     raise C2HostServiceError(
                         "failed gateway socket close is uncertain") from close_error
@@ -553,24 +557,30 @@ class C2HostService:
 
     def _create_driver(self, channel, parent_boot_id):
         # The raw socket and TLS owner remain in _channels if construction fails.
+        socket_owner = channel.get("_current_socket_owner")
+        if (socket_owner is None or socket_owner.get("status") != "open"
+                or socket_owner.get("socket") is not channel.get("socket")):
+            raise C2HostServiceError("raw gateway socket ownership was not open for transfer")
         driver = ChannelSocket(channel["socket"], channel["tls"], self._traffic,
             role="host", boot_id=parent_boot_id)
+        socket_owner["driver"] = driver
+        socket_owner["status"] = "transferred"
         channel["driver"] = driver
         channel["socket"] = None
         return driver
 
     @staticmethod
-    def _close_raw_socket_once(channel, raw_socket):
-        status = channel.get("_socket_close_status", "open")
+    def _close_raw_socket_once(socket_owner):
+        status = socket_owner.get("status")
         if status == "open":
-            channel["_socket_close_status"] = "closing"
+            socket_owner["status"] = "closing"
             try:
-                raw_socket.close()
+                socket_owner["socket"].close()
             except BaseException:
-                channel["_socket_close_status"] = "uncertain"
+                socket_owner["status"] = "uncertain"
             else:
-                channel["_socket_close_status"] = "closed"
-        if channel.get("_socket_close_status") != "closed":
+                socket_owner["status"] = "closed"
+        if socket_owner.get("status") != "closed":
             raise C2HostServiceError("raw gateway socket close is uncertain")
 
     @staticmethod
@@ -754,11 +764,22 @@ class C2HostService:
             else:
                 raw_socket = channel.get("socket")
                 if raw_socket is not None:
-                    self._close_raw_socket_once(channel, raw_socket)
+                    socket_owner = channel.get("_current_socket_owner")
+                    if socket_owner is None or socket_owner.get("socket") is not raw_socket:
+                        raise C2HostServiceError("raw socket has no exact owned generation")
+                    self._close_raw_socket_once(socket_owner)
                     channel["socket"] = None
                 tls = channel.get("tls")
                 if tls is not None:
                     self._close_tls_owner_once(channel, tls)
+            for socket_owner in channel.get("_socket_owners", ()):
+                status = socket_owner.get("status")
+                if status == "transferred":
+                    driver = socket_owner.get("driver")
+                    status = getattr(driver, "socket_close_status", None)
+                    socket_owner["status"] = status
+                if status != "closed":
+                    raise C2HostServiceError("a gateway socket generation is not confirmed closed")
         current = asyncio.current_task()
         run_tasks = {channel.get("task") for channel in self._channels
                      if channel.get("task") is not None}

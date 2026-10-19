@@ -163,7 +163,9 @@ class C2HostServiceContractTests(unittest.TestCase):
         service = object.__new__(C2HostService)
         service._signal_stop = False
         service._traffic = object()
-        channel = {"socket": left, "tls": tls, "driver": None}
+        owner = {"socket": left, "status": "open", "driver": None}
+        channel = {"socket": left, "tls": tls, "driver": None,
+                   "_current_socket_owner": owner, "_socket_owners": [owner]}
         try:
             with mock.patch("steamboat_connector.c2_host_service.ChannelSocket",
                             side_effect=RuntimeError("factory failure")):
@@ -361,11 +363,21 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_uncertain_tls_cleanup_in_raw_channel_retains_pins(self):
         from tests.security.test_gateway_ingress import GatewayIngressTests
         from steamboat_security import channel_tls
+        from steamboat_security.channel_tls import OwnedWorkerTLS
         import shutil
 
         fixture = GatewayIngressTests()
         fixture.setUp()
-        tls = fixture.tls_owner
+        original_remove = channel_tls.shutil.rmtree
+        with mock.patch.object(channel_tls.shutil, "rmtree",
+                               side_effect=OSError("credential removal uncertain")):
+            tls = OwnedWorkerTLS.connect(
+                worker_certificate_pem=fixture.worker_channel,
+                worker_private_key_pem=fixture.worker_channel_key,
+                gateway_ca_pem=fixture.fixture.gateway_ca,
+                endpoint_host="gateway.example.net", endpoint_port=443,
+                clock=fixture.fixture.clock)
+        self.assertTrue(channel_tls.is_owned_worker_tls(tls))
         private_directory = tls._private_directory
         pins, runner = object(), object()
         service = object.__new__(C2HostService)
@@ -382,18 +394,17 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
         service._close_error = None
         service._shutdown_proven = False
         try:
-            with mock.patch.object(channel_tls.shutil, "rmtree",
-                                   side_effect=OSError("credential removal uncertain")):
-                with self.assertRaisesRegex(C2HostServiceError,
-                                            "credential cleanup is uncertain"):
-                    await service._shutdown([])
+            with self.assertRaisesRegex(C2HostServiceError,
+                                        "credential cleanup is uncertain"):
+                await service._shutdown([])
             self.assertTrue(tls.cleanup_uncertain)
             self.assertEqual(tls.cleanup_status, "uncertain")
             self.assertIs(service._child_pins, pins)
             self.assertIs(service._runner, runner)
             self.assertFalse(service._shutdown_proven)
         finally:
-            shutil.rmtree(private_directory, ignore_errors=True)
+            original_remove(private_directory, ignore_errors=True)
+            fixture.tls_owner.close()
             fixture.tearDown()
 
     async def test_raw_socket_close_uncertainty_is_not_retried_on_shutdown(self):
@@ -419,8 +430,11 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
         service._stopping = False
         service._ready = False
         service._stop_event = asyncio.Event()
+        socket_owner = {"socket": wrapper, "status": "open", "driver": None}
         service._channels = [{"rpc": None, "stream": None, "driver": None,
-                              "socket": wrapper, "tls": None}]
+                              "socket": wrapper, "tls": None,
+                              "_current_socket_owner": socket_owner,
+                              "_socket_owners": [socket_owner]}]
         service._uncertain_startup_tasks = []
         service._runtime = None
         service._child_pins = pins
@@ -429,7 +443,7 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
         try:
             with self.assertRaisesRegex(C2HostServiceError, "raw gateway socket close"):
                 await service._shutdown([])
-            self.assertEqual(service._channels[0]["_socket_close_status"], "uncertain")
+            self.assertEqual(socket_owner["status"], "uncertain")
             self.assertEqual(wrapper.close_calls, 1)
             self.assertIs(service._child_pins, pins)
             self.assertFalse(service._shutdown_proven)
@@ -505,6 +519,136 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
         admitted.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await admitted
+
+
+class C2HostServiceSocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    async def _connect_fixture(self, *, first_close_raises):
+        from tests.security.test_gateway_ingress import GatewayIngressTests
+        from steamboat_security.channel_tls import OwnedWorkerTLS
+        import steamboat_connector.c2_host_service as host_service_module
+
+        fixture = GatewayIngressTests()
+        fixture.setUp()
+        tls = OwnedWorkerTLS.connect(
+            worker_certificate_pem=fixture.worker_channel,
+            worker_private_key_pem=fixture.worker_channel_key,
+            gateway_ca_pem=fixture.fixture.gateway_ca,
+            endpoint_host="gateway.example.net", endpoint_port=443,
+            clock=fixture.fixture.clock)
+
+        class TrackedSocket:
+            def __init__(self, sock, *, fail_close=False):
+                self.sock = sock
+                self.fail_close = fail_close
+                self.close_calls = 0
+
+            def setblocking(self, value):
+                self.sock.setblocking(value)
+
+            def close(self):
+                self.close_calls += 1
+                self.sock.close()
+                if self.fail_close:
+                    raise OSError("close acknowledgement lost")
+
+        sockets = [TrackedSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                 fail_close=first_close_raises),
+                   TrackedSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))]
+        service = object.__new__(C2HostService)
+        service._signal_stop = False
+        service._stop_requested = threading.Event()
+        service._lifecycle_lock = threading.Lock()
+        service._stop_event = asyncio.Event()
+        service._uncertain_startup_tasks = []
+        service._channels = []
+        loop = asyncio.get_running_loop()
+        infos = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP,
+                  "", ("127.0.0.1", 41001)),
+                 (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP,
+                  "", ("127.0.0.1", 41002))]
+        connect_calls = 0
+
+        async def sock_connect(_sock, _address):
+            nonlocal connect_calls
+            connect_calls += 1
+            raise OSError(f"signed address {connect_calls} refused")
+
+        patches = [
+            mock.patch.object(host_service_module.socket, "socket",
+                              side_effect=sockets),
+            mock.patch.object(loop, "getaddrinfo", new=mock.AsyncMock(return_value=infos)),
+            mock.patch.object(loop, "sock_connect", new=mock.AsyncMock(side_effect=sock_connect)),
+            mock.patch.object(OwnedWorkerTLS, "connect", return_value=tls),
+        ]
+        try:
+            started = [patcher.start() for patcher in patches]
+            return_value = None
+            error = None
+            try:
+                return_value = await service._connect_worker(
+                    b"certificate", b"private-key", b"ca", "signed.host", 443,
+                    fixture.fixture.clock)
+            except BaseException as caught:
+                error = caught
+            return fixture, tls, service, sockets, return_value, error, patches, started[0]
+        except BaseException:
+            for patcher in reversed(patches):
+                patcher.stop()
+            tls.close()
+            fixture.tls_owner.close()
+            fixture.tearDown()
+            raise
+
+    async def test_each_failed_address_socket_has_independent_close_proof(self):
+        fixture, tls, service, sockets, channel, error, patches, socket_factory = await self._connect_fixture(
+            first_close_raises=False)
+        try:
+            self.assertIsNone(channel)
+            self.assertRegex(str(error), "signed gateway endpoint could not be reached")
+            owners = service._channels[0]["_socket_owners"]
+            self.assertEqual([owner["status"] for owner in owners], ["closed", "closed"])
+            self.assertEqual([sock.close_calls for sock in sockets], [1, 1])
+            self.assertEqual(socket_factory.call_count, 2)
+            for owner in owners:
+                service._close_raw_socket_once(owner)
+            self.assertEqual([sock.close_calls for sock in sockets], [1, 1])
+        finally:
+            for patcher in reversed(patches):
+                patcher.stop()
+            tls.close()
+            fixture.tls_owner.close()
+            fixture.tearDown()
+
+    async def test_uncertain_first_socket_close_blocks_second_address_and_shutdown(self):
+        fixture, tls, service, sockets, channel, error, patches, socket_factory = await self._connect_fixture(
+            first_close_raises=True)
+        pins = object()
+        service._stopping = False
+        service._ready = False
+        service._runtime = None
+        service._child_pins = pins
+        service._close_error = None
+        service._shutdown_proven = False
+        try:
+            self.assertIsNone(channel)
+            self.assertRegex(str(error), "failed gateway socket close is uncertain")
+            owned_channel = service._channels[0]
+            self.assertEqual(len(owned_channel["_socket_owners"]), 1)
+            self.assertEqual(owned_channel["_socket_owners"][0]["status"], "uncertain")
+            self.assertEqual([sock.close_calls for sock in sockets], [1, 0])
+            self.assertEqual(socket_factory.call_count, 1)
+            with self.assertRaisesRegex(C2HostServiceError, "raw gateway socket close"):
+                await service._shutdown([])
+            await service._shutdown([])
+            self.assertEqual([sock.close_calls for sock in sockets], [1, 0])
+            self.assertIs(service._child_pins, pins)
+            self.assertFalse(service._shutdown_proven)
+        finally:
+            for patcher in reversed(patches):
+                patcher.stop()
+            tls.close()
+            fixture.tls_owner.close()
+            fixture.tearDown()
 
 
 @unittest.skipUnless(os.name == "posix" and sys.platform.startswith("linux"),
