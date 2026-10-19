@@ -1,0 +1,17 @@
+services:
+  participant-consumer-check:
+    build:
+      context: .
+      dockerfile: docker/participant-connector/Dockerfile.consumer
+    image: steamboat-participant-consumer:local
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    cpus: 1.0
+    mem_limit: 256m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
