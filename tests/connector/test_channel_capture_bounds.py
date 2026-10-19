@@ -41,6 +41,19 @@ def _max_tensor_request():
 
 
 class ChannelCaptureBoundsTests(unittest.TestCase):
+    def test_isolated_bootstrap_code_executes(self):
+        source_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+        paths = [source_root, sysconfig.get_path("purelib"), sysconfig.get_path("platlib")]
+        bootstrap = "import sys\nsys.path[:0] = " + repr(paths) + "\n"
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", bootstrap + "print(sys.path[0])"],
+            cwd=os.getcwd(), text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0,
+                         f"isolated bootstrap failed; stdout={result.stdout[-1000:]!r}; "
+                         f"stderr={result.stderr[-1000:]!r}")
+        self.assertEqual(os.path.normcase(result.stdout.strip()),
+                         os.path.normcase(source_root))
+
     def test_real_generated_worker_proto_accepts_supported_maximum_tensor(self):
         raw = _max_tensor_request()
         self.assertGreater(len(raw), 1152 * 64 * 4)
@@ -111,7 +124,7 @@ class ChannelCaptureBoundsTests(unittest.TestCase):
                      *site.getsitepackages()):
             if path and path not in paths:
                 paths.append(path)
-        bootstrap = "sys.path[:0] = " + repr(paths) + "\n"
+        bootstrap = "import sys\nsys.path[:0] = " + repr(paths) + "\n"
         program = bootstrap + r'''
 import gc, json, resource, sys, tracemalloc
 from steamboat_connector import channel_wire
@@ -199,7 +212,11 @@ print(json.dumps({'mode':mode,'python_tracemalloc_current_bytes':current,'python
                 result = subprocess.run(
                     [sys.executable, "-I", "-S", "-c", program, mode],
                     cwd=os.getcwd(), env=env, text=True, capture_output=True,
-                    check=True, timeout=30)
+                    check=False, timeout=30)
+                self.assertEqual(result.returncode, 0,
+                                 f"isolated {mode} probe failed; "
+                                 f"stdout={result.stdout[-2000:]!r}; "
+                                 f"stderr={result.stderr[-2000:]!r}")
                 measurement = json.loads(result.stdout.strip().splitlines()[-1])
                 self.assertLessEqual(measurement["python_tracemalloc_peak_bytes"],
                                      measurement["per_admission_reservation_bytes"])
