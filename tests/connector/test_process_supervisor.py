@@ -129,9 +129,8 @@ class FakeProcess:
             return
         if sig in (signal.SIGTERM, 9):
             self.returncode = 0
-        if sig == 9:
-            if kill_descendants:
-                self.cgroup.set_empty(self.group)
+        if sig in (signal.SIGTERM, 9) and kill_descendants:
+            self.cgroup.set_empty(self.group)
 
 
 class ProcessSupervisorTests(unittest.TestCase):
@@ -483,9 +482,11 @@ class ProcessSupervisorTests(unittest.TestCase):
         elapsed = time.monotonic() - started
         self.assertEqual(result, {"host": True, "coordinator": True}, f"events={events}")
         self.assertLess(elapsed, 0.35)
-        first_wait = next(index for index, event in enumerate(events) if event[0] == "wait")
-        self.assertEqual([event[1] for event in events[:first_wait]],
-                         [signal.SIGTERM, signal.SIGTERM])
+        term_signals = [event for event in events if event[0] == "signal"
+                        and event[1] == signal.SIGTERM]
+        self.assertEqual(len(term_signals), 2)
+        self.assertEqual({event[2] for event in term_signals},
+                         {"host", "coordinator"})
 
     def test_request_stop_uses_one_watchdog_per_role_for_both_roles(self):
         holder = {}
@@ -635,7 +636,8 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertFalse(outcome["started"])
             gate_write.assert_not_called()
             self.assertTrue(self.backend.stop(["host"], 0.2)["host"])
-        self.assertIn(9, signals)
+        self.assertIn(signal.SIGTERM, signals)
+        self.assertNotIn(9, signals)
 
     def test_failed_startup_gate_write_reclaims_published_child(self):
         holder, popen, killpg = self._spawn_patch()
@@ -677,7 +679,8 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertFalse(outcome["started"])
         self.assertNotIn("host", self.backend.status())
-        self.assertIn(9, signals)
+        self.assertIn(signal.SIGTERM, signals)
+        self.assertNotIn(9, signals)
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "requires selectable Linux pipes")
     def test_real_stdout_pipe_cancellation_interrupts_ready_wait_and_kills(self):

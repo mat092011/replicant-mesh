@@ -48,6 +48,8 @@ class _OwnedProcess:
     attached: bool = False
     escalation_lock: object = field(default_factory=threading.Lock)
     term_sent: bool = False
+    leader_reaped: bool = False
+    reaped_event: object = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -297,6 +299,12 @@ class ProcessRoleBackend:
             process = owned.process
             if process is None or owned.reclaimed or self._owned.get(owned.role) is not owned:
                 return
+            if owned.leader_reaped:
+                return
+            if process.poll() is not None:
+                owned.leader_reaped = True
+                owned.reaped_event.set()
+                return
             kill_file = owned.group / "cgroup.kill"
             if owned.attached:
                 try:
@@ -311,11 +319,10 @@ class ProcessRoleBackend:
             # A process-group ID is not reserved after its leader exits.
             # Without cgroup.kill, retain unknown descendants instead of
             # risking a signal to an unrelated process group that reused it.
-            if process.poll() is None:
-                try:
-                    os.killpg(process.pid, SIGKILL)
-                except (OSError, AttributeError):
-                    pass
+            try:
+                os.killpg(process.pid, SIGKILL)
+            except (OSError, AttributeError):
+                pass
 
     def _signal_owned_term(self, owned):
         with owned.escalation_lock:
@@ -323,10 +330,27 @@ class ProcessRoleBackend:
             if (process is None or owned.reclaimed or owned.term_sent
                     or self._owned.get(owned.role) is not owned):
                 return
-            if (process.poll() is None
-                    or self._group_populated(owned.group) is True):
+            if owned.leader_reaped:
+                return
+            if process.poll() is not None:
+                owned.leader_reaped = True
+                owned.reaped_event.set()
+                return
+            if process is not None:
                 self._signal_tree(owned, signal.SIGTERM)
                 owned.term_sent = True
+
+    @staticmethod
+    def _poll_owned(owned):
+        """Serialize every leader reap with process-group signaling."""
+        with owned.escalation_lock:
+            if owned.leader_reaped:
+                return True
+            process = owned.process
+            if process is not None and process.poll() is not None:
+                owned.leader_reaped = True
+                owned.reaped_event.set()
+            return owned.leader_reaped
 
     def _run_stop_watchdog(self, watchdog):
         watchdog.armed.wait()
@@ -354,6 +378,12 @@ class ProcessRoleBackend:
                     else:
                         if not owner.term_sent:
                             self._signal_owned_term(owner)
+                        else:
+                            with owner.escalation_lock:
+                                if (not owner.leader_reaped
+                                        and owner.process.poll() is not None):
+                                    owner.leader_reaped = True
+                                    owner.reaped_event.set()
                         watchdog.wake.wait(min(term_deadline - now, 0.05))
                         watchdog.wake.clear()
                         continue
@@ -479,7 +509,12 @@ class ProcessRoleBackend:
                                           or self._cancelled(intent, cancel_event))
                 if not cancelled_before_ready:
                     owned.starting = False
-                    owned.ready = bool(ready and process.poll() is None)
+                    with owned.escalation_lock:
+                        process_live = process.poll() is None
+                        if not process_live:
+                            owned.leader_reaped = True
+                            owned.reaped_event.set()
+                    owned.ready = bool(ready and process_live)
             if cancelled_before_ready:
                 self._cancel_intent(intent)
                 if not intent.final_stop_requested:
@@ -616,26 +651,21 @@ class ProcessRoleBackend:
                 own_term_deadline = (owned.term_deadline if owned.term_deadline is not None
                                      else term_deadline)
                 remaining = max(0.0, min(deadline, own_term_deadline) - time.monotonic())
-                try:
-                    owned.process.wait(timeout=remaining)
-                except (subprocess.TimeoutExpired, TimeoutError, OSError):
-                    pass
+                owned.reaped_event.wait(remaining)
 
             # Escalate every still-populated tree before beginning final waits.
             for _, owned in active:
-                if (not self._events_populated(owned.group)
-                        or owned.process.poll() is None):
+                reaped = self._poll_owned(owned)
+                if not self._events_populated(owned.group) or not reaped:
                     self._watchdog_kill(owned)
 
             for role, owned in active:
                 own_deadline = min(deadline, owned.stop_deadline or deadline)
                 empty = self._wait_empty(owned, own_deadline)
                 remaining = max(0.0, own_deadline - time.monotonic())
-                try:
-                    owned.process.wait(timeout=remaining)
-                except (subprocess.TimeoutExpired, TimeoutError, OSError):
-                    empty = False
-                reclaimed = empty and owned.process.poll() is not None
+                owned.reaped_event.wait(remaining)
+                reaped = self._poll_owned(owned)
+                reclaimed = empty and reaped
                 if reclaimed:
                     if not self._acquire_until(self._lock, own_deadline):
                         reclaimed = False
@@ -645,7 +675,7 @@ class ProcessRoleBackend:
                                 # Recheck while excluding watchdog signals so a
                                 # stale PID cannot be targeted after reaping.
                                 reclaimed = (self._owned.get(role) is owned
-                                             and owned.process.poll() is not None
+                                             and owned.leader_reaped
                                              and self._events_populated(owned.group))
                                 if reclaimed and self._remove_empty_group(owned.group):
                                     del self._owned[role]
