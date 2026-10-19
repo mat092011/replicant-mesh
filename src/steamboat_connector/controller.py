@@ -270,7 +270,20 @@ class ManagementController:
             "recent_operations": [{key: item[key] for key in
                                     ("operation_id", "action", "status")}
                                    for item in state["operations"][-16:]],
+            "shutdown": self._shutdown_diagnostics(),
         }
+
+    def _shutdown_diagnostics(self):
+        with self._lock:
+            result = self._shutdown_result or {}
+            pending = bool(self._shutdown_started
+                            and (not self._shutdown_done.is_set()
+                                 or not all(result.values())
+                                 or self._shutdown_persist_failed))
+            return {"pending": pending,
+                    "persistence_confirmed": not self._shutdown_persist_failed,
+                    "reclaimed_by_role": {role: result.get(role) is True
+                                          for role in ROLE_NAMES}}
 
     def diagnostics(self):
         state = self._state_copy()
@@ -292,6 +305,7 @@ class ManagementController:
                                          if state["policy"] else (), now=self.clock())},
             "cgroup_v2": self._cgroup_snapshot(),
             "resource_ledger": self._resource_snapshot(),
+            "shutdown": self._shutdown_diagnostics(),
             "logging": {"payload_logging": False, "secret_logging": False,
                         "retained_records_max": 0},
         }
@@ -642,6 +656,14 @@ class ManagementController:
     def _fence_stop(self, roles, operation_id):
         tokens = {role: object() for role in roles}
         self._stop_fences.update(tokens)
+        # Retain only the newest token for each role. Superseded cleanup may
+        # still finish, but its token cannot clear the newer fence.
+        for old_id in tuple(self._stop_tokens):
+            old = self._stop_tokens[old_id]
+            for role in tokens:
+                old.pop(role, None)
+            if not old:
+                self._stop_tokens.pop(old_id, None)
         self._stop_tokens[operation_id] = tokens
 
     def _prepare_stop_intent(self, roles, operation_id):
@@ -693,6 +715,15 @@ class ManagementController:
             raise
         finally:
             if not successful_start and attempted:
+                # A multi-role start is one transaction: fence every attempted
+                # role before any stop call or reservation release can occur.
+                with self._lock:
+                    for role in attempted:
+                        self._state["paused_roles"][role] = True
+                    try:
+                        self._persist()
+                    except Exception:
+                        pass
                 self._cleanup_unconfirmed(attempted)
             with self._lock:
                 for role, token in tokens.items():
@@ -958,6 +989,12 @@ class ManagementController:
                 self._shutdown_started = True
                 self._closing.set()
                 operation_id = new_id("op")
+                self._shutdown_operation_id = operation_id
+                for item in self._state["operations"]:
+                    if item["status"] in ("queued", "running"):
+                        item["status"] = "incomplete"
+                        item["result"] = {"reason": "shutdown_reconciliation",
+                                          "reclaimed": False}
                 for role, enabled in self._state["roles"].items():
                     if enabled:
                         self._state["paused_roles"][role] = True
@@ -968,8 +1005,14 @@ class ManagementController:
                     self._persist()
                 except Exception:
                     self._shutdown_persist_failed = True
+                try:
+                    self._record_operation(
+                        "stop", status="running",
+                        result={"reclaimed_by_role": {role: False for role in ROLE_NAMES}},
+                        operation_id=operation_id)
+                except Exception:
+                    self._shutdown_persist_failed = True
                 self._shutdown_tokens = self._stop_tokens.get(operation_id, {})
-                self._shutdown_operation_id = operation_id
                 try:
                     owner = threading.Thread(target=self._shutdown_cleanup_owner,
                         name="connector-shutdown-cleanup", daemon=True)
@@ -981,6 +1024,24 @@ class ManagementController:
                     self._shutdown_done.set()
             else:
                 owner = getattr(self, "_shutdown_thread", None)
+                if (self._shutdown_done.is_set() and owner is not None
+                        and not owner.is_alive()
+                        and (not self._shutdown_result
+                             or not all(self._shutdown_result.values())
+                             or self._shutdown_persist_failed)):
+                    # Retry only after the previous cleanup owner has ended.
+                    # A live arbitrary backend can never create another thread.
+                    self._shutdown_done.clear()
+                    self._shutdown_result = None
+                    try:
+                        owner = threading.Thread(target=self._shutdown_cleanup_owner,
+                            name="connector-shutdown-reconcile", daemon=True)
+                        self._shutdown_thread = owner
+                        owner.start()
+                        self._shutdown_thread_started = True
+                    except Exception:
+                        self._shutdown_result = {role: False for role in ROLE_NAMES}
+                        self._shutdown_done.set()
             owner = self._shutdown_thread
         deadline = time.monotonic() + wait_seconds
         if (owner is not None and owner is not threading.current_thread()
@@ -1007,15 +1068,28 @@ class ManagementController:
                     self.ledger.release(role, reclaimed=True)
                 except (ResourceError, StorageError):
                     result[role] = False
-            if not self._shutdown_persist_failed:
+        except Exception:
+            result = {role: False for role in ROLE_NAMES}
+        finally:
+            try:
                 with self._lock:
+                    operation = self._find_operation(self._shutdown_operation_id)
+                    if operation is None:
+                        self._record_operation(
+                            "stop", status="succeeded" if all(result.values()) else "incomplete",
+                            result={"reclaimed_by_role": result},
+                            operation_id=self._shutdown_operation_id)
+                    else:
+                        operation["status"] = "succeeded" if all(result.values()) else "incomplete"
+                        operation["result"] = {"reclaimed_by_role": result}
+                        self._persist()
+                    self._shutdown_persist_failed = False
                     for role, reclaimed in result.items():
                         token = self._shutdown_tokens.get(role)
                         if reclaimed and self._stop_fences.get(role) is token:
                             self._stop_fences.pop(role, None)
                     self._stop_tokens.pop(self._shutdown_operation_id, None)
-        except Exception:
-            result = {role: False for role in ROLE_NAMES}
-        finally:
+            except Exception:
+                self._shutdown_persist_failed = True
             self._shutdown_result = result
             self._shutdown_done.set()

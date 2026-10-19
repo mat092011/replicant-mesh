@@ -139,6 +139,25 @@ class ControllerStartStopTests(unittest.TestCase):
             controller.handle("start", {"roles": ["consumer"]})
         self.assertIn("consumer", controller._stop_fences)
 
+    def test_stop_token_ledger_is_bounded_under_repeated_intents(self):
+        controller, _ = self.make_controller()
+        for index in range(300):
+            controller._prepare_stop_intent(("consumer",), f"op_{index:032x}")
+        self.assertLessEqual(len(controller._stop_tokens), len(controller._stop_fences))
+        self.assertLessEqual(sum(map(len, controller._stop_tokens.values())), 1)
+        self.assertIn("consumer", controller._stop_fences)
+
+    def test_failed_history_and_full_cleanup_queue_do_not_grow_stop_tokens(self):
+        controller, _ = self.make_controller()
+        with patch.object(controller, "_record_operation",
+                          side_effect=OSError("history unavailable")):
+            for _ in range(300):
+                with self.assertRaises(OSError):
+                    controller.handle("stop", {"roles": ["consumer"]})
+        self.assertLessEqual(len(controller._stop_tokens), len(controller._stop_fences))
+        self.assertLessEqual(sum(map(len, controller._stop_tokens.values())), 1)
+        self.assertLessEqual(controller._urgent.qsize(), controller._urgent.maxsize)
+
     def test_policy_replacement_and_stale_telemetry_cancel_old_start(self):
         enforcement = {"memory_cpu": True, "disk": True, "bandwidth": True}
         for reason in ("policy", "telemetry"):
@@ -172,6 +191,29 @@ class ControllerStartStopTests(unittest.TestCase):
             controller._perform_start(operation, payload)
         self.assertTrue(controller.status()["paused_roles"]["consumer"])
         self.assertNotIn("consumer", controller._starts)
+
+    def test_partial_multi_role_start_pauses_all_attempted_before_cleanup(self):
+        controller, backend = self.make_controller()
+        roles = ("host", "coordinator")
+        for role in roles:
+            controller._state["roles"][role] = True
+            controller._state["paused_roles"][role] = False
+        seen_at_stop = []
+        backend.start = lambda role, policy, cancel_event=None: role == "host"
+
+        def stop_and_observe(stopping_roles, grace_seconds):
+            seen_at_stop.append({role: controller._state["paused_roles"][role]
+                                 for role in stopping_roles})
+            return {role: True for role in stopping_roles}
+
+        backend.stop = stop_and_observe
+        tokens = {role: threading.Event() for role in roles}
+        for role, token in tokens.items():
+            controller._starts[role] = ("op_" + "b" * 32, token)
+        outcome = controller._perform_start(
+            "op_" + "b" * 32, (roles, sample_policy(), tokens))
+        self.assertFalse(outcome["success"])
+        self.assertEqual(seen_at_stop, [{"host": True, "coordinator": True}])
 
     def test_stop_fences_and_dispatches_cleanup_when_operation_record_fails(self):
         controller, backend = self.make_controller()
@@ -284,6 +326,17 @@ class ControllerStartStopTests(unittest.TestCase):
             self.assertFalse(controller.shutdown(wait_seconds=1))
         self.assertEqual(backend.stop_calls, 1)
         self.assertIn("consumer", controller._stop_fences)
+
+    def test_shutdown_reconciles_only_after_failed_owner_finishes(self):
+        controller, backend = self.make_controller()
+        backend.stop_result = False
+        self.assertFalse(controller.shutdown(wait_seconds=1))
+        self.assertEqual(backend.stop_calls, 1)
+        self.assertTrue(controller.status()["shutdown"]["pending"])
+        backend.stop_result = True
+        self.assertTrue(controller.shutdown(wait_seconds=1))
+        self.assertEqual(backend.stop_calls, 2)
+        self.assertFalse(controller.status()["shutdown"]["pending"])
 
 
 if __name__ == "__main__":

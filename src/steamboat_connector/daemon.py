@@ -118,6 +118,7 @@ class DaemonServer:
         self._cleanup_done = False
         self._close_lock = threading.Lock()
         self._closed = False
+        self._shutdown_complete = False
         self._stop = threading.Event()
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         self._threads = set()
@@ -294,21 +295,25 @@ class DaemonServer:
 
     def close(self):
         with self._close_lock:
-            if self._closed:
-                return
+            first_close = not self._closed
             self._closed = True
-        self._stop.set()
-        if self.listener is not None:
-            try:
-                self.listener.close()
-            except OSError:
-                pass
-        for thread in tuple(self._threads):
-            thread.join(timeout=0.1)
+        if first_close:
+            self._stop.set()
+            if self.listener is not None:
+                try:
+                    self.listener.close()
+                except OSError:
+                    pass
+            for thread in tuple(self._threads):
+                thread.join(timeout=0.1)
         try:
-            self.controller.shutdown(wait_seconds=1)
-        finally:
+            complete = self.controller.shutdown(wait_seconds=1)
+        except Exception:
+            return False
+        if complete:
+            self._shutdown_complete = True
             self._cleanup_files()
+        return self._shutdown_complete
 
 
 def run_daemon(*, runtime_directory=None, state_directory=None):
@@ -325,7 +330,10 @@ def run_daemon(*, runtime_directory=None, state_directory=None):
     try:
         server.serve_forever(stop)
     finally:
-        server.close()
+        # Retain the main thread and daemon/runtime ownership while cleanup is
+        # unresolved. Retries are serialized by the controller's one owner.
+        while not server.close():
+            time.sleep(0.25)
         for signum, handler in previous.items():
             signal.signal(signum, handler)
     return 0
