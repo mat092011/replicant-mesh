@@ -1,6 +1,7 @@
 """Actual loopback TLS socket and aggregate-budget checks for the C2 pump."""
 
 import socket
+import time
 import unittest
 
 from steamboat_connector.channel_socket import ChannelSocket, ChannelSocketError
@@ -42,6 +43,31 @@ class ChannelSocketTests(unittest.TestCase):
 
     def _owners(self):
         return self.owner_fixture._new_client(), self.owner_fixture._new_server()
+
+    @staticmethod
+    def _progress_state(endpoint, tls_owner):
+        return {
+            "socket_bytes": endpoint.socket_byte_counts,
+            "pending_plaintext": endpoint.pending_plaintext_bytes,
+            "pending_ciphertext": endpoint.pending_ciphertext_bytes,
+            "pending_tls_output": tls_owner.pending_encrypted_bytes,
+        }
+
+    @staticmethod
+    def _pump_until(endpoints, ready, *, timeout=1.0):
+        """Yield between bounded nonblocking pumps until socket state advances."""
+        if not 0 <= timeout <= 1.0:
+            raise ValueError("socket test wait must be at most one second")
+        deadline = time.monotonic() + timeout
+        while True:
+            for endpoint in endpoints:
+                endpoint.pump()
+            if ready():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.001, remaining))
 
     class PartialSocket:
         def __init__(self, sock):
@@ -302,10 +328,19 @@ class ChannelSocketTests(unittest.TestCase):
         before_server_received = server.socket_byte_counts[1]
         payload = b"c" * (16 * 1024)
         client.offer_plaintext(payload, kind="cleanup")
-        for _ in range(6):
-            client.pump()
-            server.pump()
-        self.assertEqual(server.take_plaintext(), payload)
+        received = None
+
+        def take_cleanup():
+            nonlocal received
+            received = server.take_plaintext()
+            return received is not None
+
+        self.assertTrue(
+            self._pump_until((client, server), take_cleanup),
+            msg=(f"cleanup record did not arrive; client="
+                 f"{self._progress_state(client, client_tls)!r}, server="
+                 f"{self._progress_state(server, server_tls)!r}"))
+        self.assertEqual(received, payload)
         sent = client.socket_byte_counts[0]
         self.assertEqual(sent - before_cleanup_sent, len(payload) + 22)
         self.assertEqual(client_tls.pending_encrypted_bytes, 0)
@@ -814,27 +849,41 @@ class ChannelSocketTests(unittest.TestCase):
         for index in range(6):
             payload = bytes((200 + index,)) * (16 * 1024)
             server.offer_plaintext(payload)
-            for _ in range(8):
-                server.pump()
-                if (server.pending_plaintext_bytes == 0
-                        and server.pending_ciphertext_bytes == 0
-                        and server_tls.pending_encrypted_bytes == 0):
-                    break
+            self.assertTrue(
+                self._pump_until(
+                    (server,),
+                    lambda: (server.pending_plaintext_bytes == 0
+                             and server.pending_ciphertext_bytes == 0
+                             and server_tls.pending_encrypted_bytes == 0)),
+                msg=(f"server could not flush inbound test record {index}; "
+                     f"server={self._progress_state(server, server_tls)!r}"))
             received = None
-            for _ in range(8):
-                client.pump()
+
+            def take_record():
+                nonlocal received
                 received = client.take_plaintext()
-                if received is not None:
-                    break
+                return received is not None
+
+            self.assertTrue(
+                self._pump_until((client,), take_record),
+                msg=(f"client did not decode inbound test record {index}; "
+                     f"client={self._progress_state(client, client_tls)!r}, "
+                     f"server={self._progress_state(server, server_tls)!r}"))
             self.assertEqual(received, payload)
 
         server.offer_plaintext(b"control-readable")
-        for _ in range(8):
-            server.pump()
-            client.pump()
+        received = None
+
+        def take_control():
+            nonlocal received
             received = client.take_plaintext()
-            if received is not None:
-                break
+            return received is not None
+
+        self.assertTrue(
+            self._pump_until((server, client), take_control),
+            msg=(f"control record did not arrive; client="
+                 f"{self._progress_state(client, client_tls)!r}, server="
+                 f"{self._progress_state(server, server_tls)!r}"))
         self.assertEqual(received, b"control-readable")
 
     def test_quota_denial_with_pending_ciphertext_retires_stream(self):
