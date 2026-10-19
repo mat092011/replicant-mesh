@@ -65,14 +65,15 @@ never returned to the caller, and no restarted owner can reconstruct an
 allowance object from a ledger row. This is conservative accounting, not an
 exact commit-certainty or automatic-retry protocol.
 
-The persisted ledger is validated before use: aggregate and per-role charges
-must fit their configured cumulative caps, role counters must reconcile with
-global counters, and observed bytes plus the still-unobserved remainder of open
-or uncertain reservations must fit within the charged totals for each role,
-kind and direction. Outstanding uncertain rows must also fit the recorded
-uncertainty counters and observed-byte totals. This prevents prior traffic
-from masking an inflated reservation and authorizing a refund larger than its
-backing charge.
+The persisted version-2 ledger is validated before use. For each aggregate and
+role counter, charged bytes must equal observed bytes plus unresolved uncertain
+bytes (full uncertain maxima minus their observed portions) plus the maxima of
+still-open reservations. Role counters must reconcile with global counters,
+and current uncertain rows must fit their recorded uncertainty and observation
+counters. Each allowance token also retains its original reservation fields;
+the row must match them before I/O or refund. This prevents prior or reconciled
+traffic from masking an inflated reservation. Older ledger versions fail closed
+and require explicit operator handling; no automatic migration resets quota.
 
 Data exhaustion rejects more data while cleanup tokens and cleanup quota remain
 independently usable. Storage or identity uncertainty rejects all admissions.

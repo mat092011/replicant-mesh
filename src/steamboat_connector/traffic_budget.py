@@ -38,7 +38,8 @@ _STATE_FIELDS = {
     "version", "allocation_id", "uid", "clock_domain", "policy",
     "policy_sha256", "last_mono_ns", "global", "roles", "reservations",
 }
-_COUNTER_FIELDS = {"tokens", "charged", "observed", "uncertain_bytes"}
+_COUNTER_FIELDS = {"tokens", "charged", "observed", "uncertain_bytes",
+                   "uncertain_observed"}
 
 
 class TrafficBudgetError(RuntimeError):
@@ -71,7 +72,7 @@ class MemoryTrafficStore:
 class TrafficAllowance:
     """Opaque in-process identity token minted by exactly one budget owner."""
 
-    __slots__ = ("_owner", "_reservation_id", "_settlement", "_retired")
+    __slots__ = ("_owner", "_reservation_id", "_binding", "_settlement", "_retired")
 
     def __init__(self, *args, **kwargs):
         raise TypeError("TrafficAllowance values are minted by TrafficBudget")
@@ -105,7 +106,8 @@ def _fresh_counters(policy, role=None):
         tokens[key] = rate * 1_000_000_000
     return {"tokens": tokens, "charged": {kind: 0 for kind in _COUNTERS},
             "observed": {kind: 0 for kind in _COUNTERS},
-            "uncertain_bytes": {kind: 0 for kind in _COUNTERS}}
+            "uncertain_bytes": {kind: 0 for kind in _COUNTERS},
+            "uncertain_observed": {kind: 0 for kind in _COUNTERS}}
 
 
 def _validate_network_allocations(policy):
@@ -119,7 +121,7 @@ def _validate_network_allocations(policy):
 def _new_state(allocation_id, uid, clock_domain, policy, now_ns):
     roles = {role: _fresh_counters(policy, role) | {"boot_id": None, "active": False}
              for role in ROLE_NAMES}
-    return {"version": 1, "allocation_id": allocation_id, "uid": uid,
+    return {"version": 2, "allocation_id": allocation_id, "uid": uid,
             "clock_domain": clock_domain, "policy": policy,
             "policy_sha256": _policy_digest(policy), "last_mono_ns": now_ns,
             "global": _fresh_counters(policy), "roles": roles, "reservations": []}
@@ -131,7 +133,9 @@ def _validate_counters(value, policy, role=None):
             or type(value["charged"]) is not dict or set(value["charged"]) != set(_COUNTERS)
             or type(value["observed"]) is not dict or set(value["observed"]) != set(_COUNTERS)
             or type(value["uncertain_bytes"]) is not dict
-            or set(value["uncertain_bytes"]) != set(_COUNTERS)):
+            or set(value["uncertain_bytes"]) != set(_COUNTERS)
+            or type(value["uncertain_observed"]) is not dict
+            or set(value["uncertain_observed"]) != set(_COUNTERS)):
         raise TrafficBudgetError("traffic budget counters are malformed")
     limits = policy["limits"] if role is None else policy["reservations"].get(role, {})
     for key, tokens in value["tokens"].items():
@@ -140,14 +144,14 @@ def _validate_counters(value, policy, role=None):
         capacity = limits.get(f"{prefix}{direction}_bytes_per_second", 0) * 1_000_000_000
         if not _valid_int(tokens, maximum=_MAX_TOKEN_NANOBYTES) or tokens > capacity:
             raise TrafficBudgetError("traffic bucket state is outside its policy cap")
-    for counter_name in ("charged", "observed", "uncertain_bytes"):
+    for counter_name in ("charged", "observed", "uncertain_bytes", "uncertain_observed"):
         if any(not _valid_int(amount) for amount in value[counter_name].values()):
             raise TrafficBudgetError("traffic cumulative counter is malformed")
 
 
 def _validate_state(state, *, allocation_id, uid, clock_domain):
     if (type(state) is not dict or set(state) != _STATE_FIELDS
-            or type(state["version"]) is not int or state["version"] != 1
+            or type(state["version"]) is not int or state["version"] != 2
             or state["allocation_id"] != allocation_id or state["uid"] != uid
             or state["clock_domain"] != clock_domain
             or not _valid_int(state["last_mono_ns"])):
@@ -173,7 +177,9 @@ def _validate_state(state, *, allocation_id, uid, clock_domain):
         _validate_counters({key: counters[key] for key in _COUNTER_FIELDS}, policy, role)
         for kind in _COUNTERS:
             if (counters["observed"][kind] > counters["charged"][kind]
-                    or counters["uncertain_bytes"][kind] > counters["charged"][kind]):
+                    or counters["uncertain_bytes"][kind] > counters["charged"][kind]
+                    or counters["uncertain_observed"][kind] > counters["observed"][kind]
+                    or counters["uncertain_observed"][kind] > counters["uncertain_bytes"][kind]):
                 raise TrafficBudgetError("role observed traffic exceeds conservative charges")
     if type(state["reservations"]) is not list or len(state["reservations"]) > MAX_OUTSTANDING:
         raise TrafficBudgetError("persistent outstanding allowance count is invalid")
@@ -209,13 +215,10 @@ def _validate_state(state, *, allocation_id, uid, clock_domain):
         role: {kind: {direction: 0 for direction in ("send", "receive")}
                for kind in _COUNTERS} for role in ROLE_NAMES}
     for item in state["reservations"]:
-        # Observed bytes have already been consumed. Only open maxima and the
-        # unobserved remainder of uncertain I/O still need backing charge.
-        obligation = (item["max_bytes"] if item["status"] == "open"
-                      else item["max_bytes"] - item["actual_bytes"])
-        outstanding_global[item["kind"]] += obligation
-        outstanding_roles[item["role"]][item["kind"]] += obligation
-        outstanding_directions[item["role"]][item["kind"]][item["direction"]] += obligation
+        if item["status"] == "open":
+            outstanding_global[item["kind"]] += item["max_bytes"]
+            outstanding_roles[item["role"]][item["kind"]] += item["max_bytes"]
+            outstanding_directions[item["role"]][item["kind"]][item["direction"]] += item["max_bytes"]
         if item["status"] == "uncertain":
             uncertain_max_global[item["kind"]] += item["max_bytes"]
             uncertain_actual_global[item["kind"]] += item["actual_bytes"]
@@ -226,7 +229,9 @@ def _validate_state(state, *, allocation_id, uid, clock_domain):
                 or state["global"]["uncertain_bytes"][kind]
                 > state["global"]["charged"][kind]
                 or uncertain_max_global[kind] > state["global"]["uncertain_bytes"][kind]
-                or uncertain_actual_global[kind] > state["global"]["observed"][kind]):
+                or uncertain_actual_global[kind] > state["global"]["uncertain_observed"][kind]
+                or state["global"]["uncertain_observed"][kind] > state["global"]["observed"][kind]
+                or state["global"]["uncertain_observed"][kind] > state["global"]["uncertain_bytes"][kind]):
             raise TrafficBudgetError("global observed traffic exceeds conservative charges")
         if sum(role["charged"][kind] for role in state["roles"].values()) != state["global"]["charged"][kind]:
             raise TrafficBudgetError("global and role traffic charges disagree")
@@ -234,22 +239,28 @@ def _validate_state(state, *, allocation_id, uid, clock_domain):
             raise TrafficBudgetError("global and role observed byte counts disagree")
         if sum(role["uncertain_bytes"][kind] for role in state["roles"].values()) != state["global"]["uncertain_bytes"][kind]:
             raise TrafficBudgetError("global and role traffic uncertainty disagrees")
+        if sum(role["uncertain_observed"][kind] for role in state["roles"].values()) != state["global"]["uncertain_observed"][kind]:
+            raise TrafficBudgetError("global and role uncertain observations disagree")
         global_total = policy["limits"]["total_network_bytes" if kind == "data"
                                        else "cleanup_total_network_bytes"]
-        if (state["global"]["observed"][kind] + outstanding_global[kind]
-                > state["global"]["charged"][kind]
+        if (state["global"]["charged"][kind] != state["global"]["observed"][kind]
+                + state["global"]["uncertain_bytes"][kind]
+                - state["global"]["uncertain_observed"][kind]
+                + outstanding_global[kind]
                 or state["global"]["charged"][kind] > global_total):
             raise TrafficBudgetError("global outstanding traffic exceeds its backing charge")
         for role in ROLE_NAMES:
             counters = state["roles"][role]
             role_total = policy["reservations"].get(role, {}).get(
                 "total_network_bytes" if kind == "data" else "cleanup_total_network_bytes", 0)
-            if (counters["observed"][kind] + outstanding_roles[role][kind]
-                    > counters["charged"][kind]
+            if (counters["charged"][kind] != counters["observed"][kind]
+                    + counters["uncertain_bytes"][kind]
+                    - counters["uncertain_observed"][kind]
+                    + outstanding_roles[role][kind]
                     or counters["charged"][kind] > role_total
                     or uncertain_max_roles[role][kind] > counters["uncertain_bytes"][kind]
-                    or uncertain_actual_roles[role][kind] > counters["observed"][kind]
-                    or any(counters["observed"][kind] + value > counters["charged"][kind]
+                    or uncertain_actual_roles[role][kind] > counters["uncertain_observed"][kind]
+                    or any(value > counters["charged"][kind]
                            for value in outstanding_directions[role][kind].values())):
                 raise TrafficBudgetError("role outstanding traffic exceeds its backing charge")
     return state
@@ -638,6 +649,8 @@ class TrafficBudget:
             allowance = object.__new__(TrafficAllowance)
             object.__setattr__(allowance, "_owner", self)
             object.__setattr__(allowance, "_reservation_id", reservation_id)
+            object.__setattr__(allowance, "_binding", (
+                role, boot_id, direction, kind, max_bytes, deadline))
             object.__setattr__(allowance, "_settlement", None)
             object.__setattr__(allowance, "_retired", False)
             self._live_allowances[reservation_id] = allowance
@@ -656,6 +669,10 @@ class TrafficBudget:
             raise TrafficBudgetError("allowance token is forged, foreign, or retired")
         for item in state["reservations"]:
             if item["reservation_id"] == reservation_id:
+                binding = (item["role"], item["boot_id"], item["direction"],
+                           item["kind"], item["max_bytes"], item["deadline_ns"])
+                if getattr(allowance, "_binding", None) != binding:
+                    raise TrafficBudgetError("allowance reservation binding changed")
                 return item
         raise TrafficBudgetError("allowance is no longer outstanding")
 
@@ -725,6 +742,8 @@ class TrafficBudget:
             if not certain:
                 state["global"]["uncertain_bytes"][kind] += reserved
                 state["roles"][role]["uncertain_bytes"][kind] += reserved
+                state["global"]["uncertain_observed"][kind] += actual_bytes
+                state["roles"][role]["uncertain_observed"][kind] += actual_bytes
                 item["status"] = "uncertain"
                 item["actual_bytes"] = actual_bytes
             else:
@@ -801,8 +820,14 @@ class TrafficBudget:
             entry = state["roles"][role]
             if not entry["active"] or entry["boot_id"] != boot_id:
                 raise TrafficBudgetError("generation is not the active role owner")
-            # Open allowances were fully charged before I/O. Retire them without
-            # refund; an unknown commit can never make quota available again.
+            # An open allowance may have reached I/O. Keep its full charge as
+            # uncertainty before dropping the reservation record.
+            for item in state["reservations"]:
+                if item["role"] == role and item["boot_id"] == boot_id and item["status"] == "open":
+                    kind = item["kind"]
+                    amount = item["max_bytes"]
+                    state["global"]["uncertain_bytes"][kind] += amount
+                    state["roles"][role]["uncertain_bytes"][kind] += amount
             state["reservations"] = [item for item in state["reservations"]
                                      if not (item["role"] == role and item["boot_id"] == boot_id)]
             entry["active"] = False
@@ -824,11 +849,14 @@ class TrafficBudget:
                         "roles": {role: {"active": value["active"],
                                          "boot_id": value["boot_id"],
                                          "charged": dict(value["charged"]),
-                                         "observed": dict(value["observed"])}
+                                         "observed": dict(value["observed"]),
+                                         "uncertain_bytes": dict(value["uncertain_bytes"]),
+                                         "uncertain_observed": dict(value["uncertain_observed"])}
                                   for role, value in state["roles"].items()},
                         "global": {"charged": dict(state["global"]["charged"]),
                                    "observed": dict(state["global"]["observed"]),
-                                   "uncertain_bytes": dict(state["global"]["uncertain_bytes"])},
+                                   "uncertain_bytes": dict(state["global"]["uncertain_bytes"]),
+                                   "uncertain_observed": dict(state["global"]["uncertain_observed"])},
                         "outstanding": len(state["reservations"])}
         except TrafficBudgetError:
             return {"allocation_id": self.allocation_id, "uid": self.uid,

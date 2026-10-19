@@ -350,6 +350,7 @@ class TrafficBudgetTests(unittest.TestCase):
         self.assertEqual((result["charged_bytes"], result["uncertain"]), (80, True))
         self.assertEqual(budget.status()["global"]["observed"]["data"], 35)
         self.assertEqual(budget.status()["global"]["uncertain_bytes"]["data"], 80)
+        self.assertEqual(budget.status()["global"]["uncertain_observed"]["data"], 35)
         with self.assertRaises(TrafficBudgetError):
             budget.bind_role("host", BOOT_B)
         with self.assertRaises(TrafficBudgetError):
@@ -358,6 +359,7 @@ class TrafficBudgetTests(unittest.TestCase):
         budget.reconcile_dead_generation("host", BOOT_A,
                                          reaped=True, cgroup_empty=True)
         self.assertEqual(budget.status()["global"]["charged"]["data"], 80)
+        self.assertEqual(budget.status()["global"]["uncertain_observed"]["data"], 35)
         budget.bind_role("host", BOOT_B)
         self.assertEqual(budget.reserve("host", BOOT_B, "send", "data", 100)
                          .settle(100, outcome_known=True)["charged_bytes"], 100)
@@ -518,6 +520,36 @@ class TrafficBudgetTests(unittest.TestCase):
         budget.bind_role("host", BOOT_A)
         budget.reserve("host", BOOT_A, "send", "data", 80).settle(
             80, outcome_known=True)
+        allowance = budget.reserve("host", BOOT_A, "send", "data", 20)
+        store.state["reservations"][0]["max_bytes"] = 30
+        with self.assertRaises(TrafficBudgetError):
+            allowance.assert_live()
+        self.assertTrue(budget._faulted)
+
+    def test_reconciled_open_reservation_remains_uncertain_and_cannot_back_refund(self):
+        for previously_unknown in (False, True):
+            with self.subTest(previously_unknown=previously_unknown):
+                budget, store, _ = _memory_budget()
+                budget.bind_role("host", BOOT_A)
+                prior = budget.reserve("host", BOOT_A, "send", "data", 80)
+                if previously_unknown:
+                    prior.settle(0, outcome_known=False)
+                budget.reconcile_dead_generation("host", BOOT_A,
+                                                 reaped=True, cgroup_empty=True)
+                state = store.state
+                self.assertEqual(state["global"]["charged"]["data"], 80)
+                self.assertEqual(state["global"]["uncertain_bytes"]["data"], 80)
+                self.assertEqual(state["global"]["uncertain_observed"]["data"], 0)
+                budget.bind_role("host", BOOT_B)
+                allowance = budget.reserve("host", BOOT_B, "send", "data", 20)
+                store.state["reservations"][0]["max_bytes"] = 30
+                with self.assertRaises(TrafficBudgetError):
+                    allowance.assert_live()
+                self.assertTrue(budget._faulted)
+
+    def test_allowance_binding_rejects_changed_row_before_io_or_refund(self):
+        budget, store, _ = _memory_budget()
+        budget.bind_role("host", BOOT_A)
         allowance = budget.reserve("host", BOOT_A, "send", "data", 20)
         store.state["reservations"][0]["max_bytes"] = 30
         with self.assertRaises(TrafficBudgetError):
