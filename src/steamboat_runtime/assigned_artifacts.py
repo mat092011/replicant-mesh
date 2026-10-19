@@ -286,7 +286,7 @@ class AssignedArtifactView:
             self._verify_current_expiry()
             return LayerCache(start, end)
 
-    def load_coordinator_model(self):
+    def load_coordinator_model(self, *, max_sessions=None):
         if self.role != "coordinator":
             raise AssignedArtifactError("only a coordinator assignment can load the model head")
         with self.installer._locked():
@@ -318,7 +318,8 @@ class AssignedArtifactView:
                 str(self.directory), local_files_only=True, trust_remote_code=False)
             if len(tokenizer) != config.vocab_size:
                 raise AssignedArtifactError("tokenizer vocabulary differs from the pinned model")
-            return CoordinatorModel(manifest, input_output, tokenizer)
+            return CoordinatorModel(manifest, input_output, tokenizer,
+                                    max_sessions=max_sessions)
 
 
 def _read_file(directory_fd, filename, maximum_bytes, uid):

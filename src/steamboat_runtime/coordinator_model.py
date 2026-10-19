@@ -18,14 +18,17 @@ import torch
 class CoordinatorModel:
     MAX_PROMPT_BYTES = 64 * 1024
 
-    def __init__(self, manifest, input_output, tokenizer):
+    def __init__(self, manifest, input_output, tokenizer, *, max_sessions=None):
         """Use already verified components; production callers use from_artifacts."""
         self.manifest = manifest
         self.config = manifest["config"]
         self.limits = manifest["limits"]
         self.input_output = input_output
         self.tokenizer = tokenizer
-        self._capacity = self.limits["max_sessions"]
+        capacity = self.limits["max_sessions"] if max_sessions is None else max_sessions
+        if type(capacity) is not int or not 1 <= capacity <= self.limits["max_sessions"]:
+            raise ValueError("Coordinator session capacity must narrow the assigned manifest")
+        self._capacity = capacity
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="coordinator-model")
         self._pending = set()
         self._loop = None
