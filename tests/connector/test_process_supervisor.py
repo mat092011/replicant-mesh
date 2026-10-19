@@ -617,6 +617,7 @@ class ProcessSupervisorTests(unittest.TestCase):
         program = (
             "import os,signal,sys,time\n"
             "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "os.write(1,b'TERM_IGNORED\\n')\n"
             "fd=int(sys.argv[1]); os.read(fd,1); os.close(fd)\n"
             "while True: time.sleep(10)\n")
 
@@ -627,6 +628,12 @@ class ProcessSupervisorTests(unittest.TestCase):
             return process
 
         def read_ready(process, timeout, cancelled=None):
+            # Observe the real child's installed signal handler before sending
+            # TERM; reaching the parent's reader alone is insufficient proof.
+            if not select.select([process.stdout], [], [], 2)[0]:
+                raise RuntimeError("native child did not install TERM handler")
+            if process.stdout.readline(32) != b"TERM_IGNORED\n":
+                raise RuntimeError("native child readiness control is invalid")
             readiness_entered.set()
             return original_read_ready(process, timeout, cancelled)
 
