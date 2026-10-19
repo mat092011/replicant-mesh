@@ -35,6 +35,8 @@ _GUARD_TOKEN = object()
 _GUARD_LOCK = threading.Lock()
 _MINTED_GUARDS = weakref.WeakSet()
 _MINTED_EGRESS = weakref.WeakSet()
+_TARGET_TOKEN = object()
+_MINTED_TARGETS = weakref.WeakSet()
 
 
 def is_owned_gateway_coordinator_egress(value):
@@ -95,6 +97,7 @@ class GatewayRouteGuard:
                     or self._method != method or self._context is not context
                     or self._claimed):
                 raise GatewayEgressError("gateway route guard is foreign or already used")
+            owner._assert_guard_target(self._identity, method)
             object.__setattr__(self, "_claimed", True)
         return self.assert_live()
 
@@ -150,6 +153,7 @@ class GatewayCoordinatorEgress:
             authorizer.local_identity.certificate_pem)
         self._configured_coordinator_certificate_der = _certificate_der(
             self._configured_coordinator_certificate_pem)
+        self._target_views = {}
         host_dns, host_ip = _endpoint_names(
             self._gateway_policy["coordinator_endpoint_host"])
         try:
@@ -178,8 +182,13 @@ class GatewayCoordinatorEgress:
         if self._tls.handshake_complete:
             self._verify_gateway_peer()
         self._initialized = True
+        primary = GatewayEgressTargetView(
+            _TARGET_TOKEN, self, authorizer, logical_host_certificate_pem)
+        key = _target_key(authorizer)
+        self._target_views[key] = primary
         with _GUARD_LOCK:
             _MINTED_EGRESS.add(self)
+            _MINTED_TARGETS.add(primary)
 
     def __setattr__(self, name, value):
         if getattr(self, "_initialized", False) and name in {
@@ -188,7 +197,7 @@ class GatewayCoordinatorEgress:
                 "_gateway_policy", "_worker_policy", "_host_dns", "_host_ip",
                 "_gateway_ca_pem", "_tls", "_coordinator_identity",
                 "_configured_coordinator_certificate_pem",
-                "_configured_coordinator_certificate_der"}:
+                "_configured_coordinator_certificate_der", "_target_views"}:
             raise AttributeError("gateway egress authority and transport are immutable")
         object.__setattr__(self, name, value)
 
@@ -389,8 +398,25 @@ class GatewayCoordinatorEgress:
         self._tls.close()
 
     def _assert_guard_live(self, identity, deadline):
+        return self._assert_guard_live_for(identity, deadline, None)
+
+    def _assert_guard_target(self, identity, method, authorizer=None):
+        adapter = self.authorizer if authorizer is None else authorizer
+        if (identity[2][8:12] != _target_key(adapter)
+                or identity[3] != adapter.target.certificate_sha256
+                or method not in identity[2][12]):
+            raise GatewayEgressError("route guard target differs from its C1 authorizer")
+
+    def _assert_guard_live_for(self, identity, deadline, target_view):
         with self._lock:
             self._assert_transport_live_locked()
+            if (target_view is not None
+                    and (not is_owned_gateway_target_view(target_view)
+                         or target_view._egress is not self
+                         or self._target_views.get(target_view._key) is not target_view)):
+                raise GatewayEgressError("gateway target view is no longer owned")
+            if target_view is not None:
+                target_view._assert_authority_live_locked()
             if identity[0] is not self._generation or identity[1] != self._view.policy_digest:
                 self._fault_locked()
                 raise GatewayEgressError("gateway route belongs to a stale generation")
@@ -407,15 +433,23 @@ class GatewayCoordinatorEgress:
 
     def mint_route_guard(self, *, method, trusted_request_context):
         """Authorize the exact coordinator/worker route for one C1 worker call."""
+        return self._mint_route_guard_for(
+            self.authorizer, self.logical_host_certificate_pem, self,
+            method=method, trusted_request_context=trusted_request_context)
+
+    def _mint_route_guard_for(self, adapter, logical_host_certificate_pem,
+                              guard_owner, *, method, trusted_request_context):
+        """Shared exact C1/policy route check for a minted target view."""
         from .codec import WORKER_METHODS
         from .outbound import BootstrapContext
         with self._lock:
             self._assert_transport_live_locked()
+            if type(guard_owner) is GatewayEgressTargetView:
+                guard_owner._assert_authority_live_locked()
             if not self._gateway_verified:
                 raise GatewayEgressError("gateway TLS channel is not authenticated")
             if method not in WORKER_METHODS:
                 raise GatewayEgressError("route method is not an exact worker method")
-            adapter = self.authorizer
             if type(trusted_request_context) is BootstrapContext:
                 trusted_request_context._check_available(
                     adapter._capability_owner, self.clock.sample().monotonic)
@@ -436,7 +470,7 @@ class GatewayCoordinatorEgress:
             if type(trusted_request_context) is BootstrapContext:
                 context_values["tenant_account_id"] = local.account_id
             target = _verify_pinned_credential(
-                adapter.snapshot_store, self.logical_host_certificate_pem,
+                adapter.snapshot_store, logical_host_certificate_pem,
                 c1_view, sample)
             if (local.role != "personal_coordinator"
                     or target.role != "host"
@@ -471,13 +505,89 @@ class GatewayCoordinatorEgress:
             if sample.monotonic >= deadline:
                 raise SessionError("gateway route authorization expired")
             guard = GatewayRouteGuard(
-                _GUARD_TOKEN, self,
+                _GUARD_TOKEN, guard_owner,
                 (self._generation, self._view.policy_digest, route, target.certificate_sha256),
                 method, trusted_request_context, deadline)
             with _GUARD_LOCK:
                 _MINTED_GUARDS.add(guard)
             self._guards.add(guard)
             return guard
+
+    def register_target(self, authorizer, logical_host_certificate_pem):
+        """Mint a bounded per-worker route view over this exact TLS owner."""
+        if (type(authorizer) is not OutboundAuthorizer
+                or type(logical_host_certificate_pem) is not bytes):
+            raise TypeError("target view requires exact C1 authorizer and certificate bytes")
+        key = _target_key(authorizer)
+        from .codec import WORKER_METHODS
+        with self._lock:
+            self._assert_transport_live_locked()
+            existing = self._target_views.get(key)
+            if existing is not None:
+                existing.assert_transport_live()
+                if (existing.authorizer is authorizer
+                        and existing.logical_host_certificate_pem == logical_host_certificate_pem):
+                    return existing
+                raise GatewayEgressError("target tuple is already bound to another authority")
+            if len(self._target_views) >= 3:
+                raise GatewayEgressError("coordinator cohort is limited to three targets")
+            if (authorizer.clock is not self.clock
+                    or authorizer.snapshot_store is not self.authorizer.snapshot_store
+                    or _coordinator_identity(authorizer) != self._coordinator_identity
+                    or authorizer.target.service != self.authorizer.target.service
+                    or authorizer.target.model_id != self.authorizer.target.model_id
+                    or authorizer.worker_request_type is not self.authorizer.worker_request_type
+                    or authorizer.trusted_request_context_type
+                       is not self.authorizer.trusted_request_context_type):
+                raise GatewayEgressError("target authorizer differs from the exact coordinator identity")
+            try:
+                sample = self.clock.sample()
+                c1_view = authorizer.snapshot_store.current(sample=sample)
+                local = _verify_pinned_credential(
+                    authorizer.snapshot_store,
+                    authorizer.local_identity.certificate_pem, c1_view, sample)
+                target = _verify_pinned_credential(
+                    authorizer.snapshot_store, logical_host_certificate_pem,
+                    c1_view, sample)
+                worker = self._view.worker(authorizer.target.device_id,
+                                           authorizer.target.boot_id)
+                policy_route = any(self._view.route(
+                    gateway_id=self.gateway_id, account_id=local.account_id,
+                    device_id=local.device_id, actor_serial=local.serial,
+                    actor_credential_epoch=local.credential_epoch,
+                    actor_certificate_sha256=local.certificate_sha256,
+                    coordinator_boot_id=authorizer.local_identity.boot_id,
+                    tenant_account_id=local.account_id,
+                    target_device_id=authorizer.target.device_id,
+                    worker_boot_id=authorizer.target.boot_id,
+                    assignment_id=authorizer.target.assignment_id,
+                    model_id=authorizer.target.model_id, method=method) is not None
+                    for method in WORKER_METHODS)
+            except Exception as error:
+                raise GatewayEgressError("target C1 identity or signed channel policy is invalid") from error
+            if (local.role != "personal_coordinator" or target.role != "host"
+                    or target.account_id != authorizer.target.account_id
+                    or target.device_id != authorizer.target.device_id
+                    or target.certificate_sha256 != authorizer.target.certificate_sha256
+                    or target.public_key_sha256 != authorizer.target.public_key_sha256
+                    or target.serial != authorizer.target.serial
+                    or target.credential_epoch != authorizer.target.credential_epoch
+                    or worker is None
+                    or worker["account_id"] != authorizer.target.account_id
+                    or worker["host_serial"] != target.serial
+                    or worker["host_credential_epoch"] != target.credential_epoch
+                    or worker["host_certificate_sha256"] != target.certificate_sha256
+                    or worker["assignment_id"] != authorizer.target.assignment_id
+                    or worker["model_id"] != authorizer.target.model_id
+                    or worker["gateway_id"] != self.gateway_id
+                    or not policy_route):
+                raise GatewayEgressError("target differs from its exact C1 and signed policy assignment")
+            view = GatewayEgressTargetView(
+                _TARGET_TOKEN, self, authorizer, logical_host_certificate_pem)
+            self._target_views[key] = view
+            with _GUARD_LOCK:
+                _MINTED_TARGETS.add(view)
+            return view
 
     def close(self):
         with self._lock:
@@ -490,3 +600,109 @@ class GatewayCoordinatorEgress:
 
     def __deepcopy__(self, _memo):
         raise TypeError("gateway egress owners cannot be copied")
+
+
+def _target_key(authorizer):
+    target = authorizer.target
+    return (target.device_id, target.boot_id, target.assignment_id, target.model_id)
+
+
+def _coordinator_identity(authorizer):
+    identity = authorizer.local_identity
+    return (identity.certificate_pem, identity.boot_id, identity.model_id,
+            identity.assignment_id, identity.admission_epoch,
+            identity.root_generation_sha256)
+
+
+class GatewayEgressTargetView:
+    """Sealed target-specific C1 route capability over a shared egress."""
+
+    __slots__ = ("_egress", "_authorizer", "_target", "_coordinator_identity",
+                 "_snapshot_store", "_clock", "_request_type", "_context_type",
+                 "_allow_bootstrap", "logical_host_certificate_pem", "_key",
+                 "_token", "__weakref__")
+
+    def __init__(self, token, egress, authorizer, logical_host_certificate_pem):
+        if token is not _TARGET_TOKEN:
+            raise TypeError("gateway target views are minted by their egress owner")
+        object.__setattr__(self, "_egress", egress)
+        object.__setattr__(self, "_authorizer", authorizer)
+        object.__setattr__(self, "_target", authorizer.target)
+        object.__setattr__(self, "_coordinator_identity",
+                           _coordinator_identity(authorizer))
+        object.__setattr__(self, "_snapshot_store", authorizer.snapshot_store)
+        object.__setattr__(self, "_clock", authorizer.clock)
+        object.__setattr__(self, "_request_type", authorizer.worker_request_type)
+        object.__setattr__(self, "_context_type",
+                           authorizer.trusted_request_context_type)
+        object.__setattr__(self, "_allow_bootstrap", authorizer.allow_bootstrap_describe)
+        object.__setattr__(self, "logical_host_certificate_pem",
+                           bytes(logical_host_certificate_pem))
+        object.__setattr__(self, "_key", _target_key(authorizer))
+        object.__setattr__(self, "_token", token)
+
+    def __setattr__(self, _name, _value):
+        raise AttributeError("gateway target views are immutable")
+
+    @property
+    def egress(self):
+        return self._egress
+
+    @property
+    def authorizer(self):
+        return self._authorizer
+
+    @property
+    def clock(self):
+        return self._egress.clock
+
+    def assert_transport_live(self):
+        if not is_owned_gateway_target_view(self):
+            raise GatewayEgressError("gateway target view is not owner-minted")
+        with self._egress._lock:
+            self._egress._assert_transport_live_locked()
+            if self._egress._target_views.get(self._key) is not self:
+                raise GatewayEgressError("gateway target view is no longer current")
+            self._assert_authority_live_locked()
+            return self._egress._gateway_verified
+
+    def _assert_authority_live_locked(self):
+        if (self._authorizer.target is not self._target
+                or _target_key(self._authorizer) != self._key
+                or _coordinator_identity(self._authorizer) != self._coordinator_identity
+                or self._authorizer.snapshot_store is not self._snapshot_store
+                or self._authorizer.clock is not self._clock
+                or self._authorizer.worker_request_type is not self._request_type
+                or self._authorizer.trusted_request_context_type is not self._context_type
+                or self._authorizer.allow_bootstrap_describe is not self._allow_bootstrap):
+            raise GatewayEgressError("target authorizer changed after view registration")
+
+    def mint_route_guard(self, *, method, trusted_request_context):
+        self.assert_transport_live()
+        return self._egress._mint_route_guard_for(
+            self.authorizer, self.logical_host_certificate_pem, self,
+            method=method, trusted_request_context=trusted_request_context)
+
+    def _assert_guard_live(self, identity, deadline):
+        return self._egress._assert_guard_live_for(identity, deadline, self)
+
+    def _assert_guard_target(self, identity, method):
+        self._assert_authority_live_locked()
+        self._egress._assert_guard_target(identity, method, self._authorizer)
+
+    def close(self):
+        """Close the shared coordinator cohort, as for the root egress."""
+        self._egress.close()
+
+    def __copy__(self):
+        raise TypeError("gateway target views cannot be copied")
+
+    def __deepcopy__(self, _memo):
+        raise TypeError("gateway target views cannot be copied")
+
+
+def is_owned_gateway_target_view(value):
+    if type(value) is not GatewayEgressTargetView:
+        return False
+    with _GUARD_LOCK:
+        return value in _MINTED_TARGETS and value._token is _TARGET_TOKEN

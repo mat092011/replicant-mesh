@@ -34,6 +34,9 @@ _CLOSE_GRACE = 1.0
 _MAX_ABANDONED_IDS = 1024
 _STREAM_CLAIM_LOCK = threading.Lock()
 _STREAM_CLAIMS = weakref.WeakKeyDictionary()
+_CLIENT_TARGET_TOKEN = object()
+_CLIENT_TARGET_LOCK = threading.Lock()
+_MINTED_CLIENT_TARGETS = weakref.WeakSet()
 
 
 def _claim_stream(stream):
@@ -108,8 +111,23 @@ class CoordinatorChannelClient:
         self._unavailable_reason = None
         self._unavailable_cause = None
         self._retained, self._active, self._retirement_tasks = set(), set(), set()
+        self._target_proxies = {}
 
     async def execute(self, method, request, *, trusted_request_context):
+        return await self._execute_for(
+            self.egress, method, request,
+            trusted_request_context=trusted_request_context)
+
+    async def _execute_for(self, route_owner, method, request, *,
+                           trusted_request_context):
+        from steamboat_security.gateway_egress import (
+            GatewayEgressTargetView, is_owned_gateway_target_view,
+        )
+        if route_owner is not self.egress and (
+                type(route_owner) is not GatewayEgressTargetView
+                or not is_owned_gateway_target_view(route_owner)
+                or route_owner.egress is not self.egress):
+            raise ProtocolError("EXECUTION_FAILED", "cohort target view is foreign or stale")
         if self._closed or self._unavailable or self.stream.closed:
             raise ProtocolError("EXECUTION_FAILED", "coordinator gateway channel is unavailable")
         if method not in METHODS or not isinstance(request, Request):
@@ -157,9 +175,9 @@ class CoordinatorChannelClient:
             source_request = Request()
             source_request.CopyFrom(request)
             owner["request"] = source_request
-            route = self.egress.mint_route_guard(
+            route = route_owner.mint_route_guard(
                 method=method, trusted_request_context=trusted_request_context)
-            auth = self.authorizer.authorize_gateway_outbound(
+            auth = route_owner.authorizer.authorize_gateway_outbound(
                 service=WORKER_SERVICE, method=method, payload=source_request,
                 trusted_request_context=trusted_request_context,
                 gateway_route=route)
@@ -263,6 +281,32 @@ class CoordinatorChannelClient:
                         cache_may_exist=dispatched and method != "Describe")
             finally:
                 self._active.discard(current_task)
+
+    def bind_target(self, target_view):
+        """Bind one minted target route to this client's shared stream pump."""
+        from steamboat_security.gateway_egress import (
+            GatewayEgressTargetView, is_owned_gateway_target_view,
+        )
+        if (type(target_view) is not GatewayEgressTargetView
+                or not is_owned_gateway_target_view(target_view)
+                or target_view.egress is not self.egress):
+            raise TypeError("target view must belong to this exact egress")
+        if self._closed or self._unavailable or self.stream.closed:
+            raise ProtocolError("EXECUTION_FAILED", "coordinator gateway client is unavailable")
+        self._assert_live()
+        target_view.assert_transport_live()
+        key = target_view._key
+        existing = self._target_proxies.get(key)
+        if existing is not None:
+            if existing._target_view is target_view:
+                return existing
+            raise TypeError("target tuple is already bound to another client proxy")
+        proxy = CoordinatorChannelTargetClient(
+            _CLIENT_TARGET_TOKEN, self, target_view)
+        with _CLIENT_TARGET_LOCK:
+            _MINTED_CLIENT_TARGETS.add(proxy)
+        self._target_proxies[key] = proxy
+        return proxy
 
     async def _pump(self):
         try:
@@ -472,3 +516,44 @@ class CoordinatorChannelClient:
                 "gateway client retains authorization owners with uncertain cleanup")
         self.egress.close()
         self._close_complete = True
+
+
+class CoordinatorChannelTargetClient:
+    """Sealed target-specific SDK surface sharing one coordinator client."""
+
+    __slots__ = ("_client", "_target_view", "_token")
+
+    def __init__(self, token, client, target_view):
+        if token is not _CLIENT_TARGET_TOKEN:
+            raise TypeError("target clients are minted by CoordinatorChannelClient")
+        object.__setattr__(self, "_client", client)
+        object.__setattr__(self, "_target_view", target_view)
+        object.__setattr__(self, "_token", token)
+
+    def __setattr__(self, _name, _value):
+        raise AttributeError("coordinator target client is immutable")
+
+    @property
+    def authorizer(self):
+        return self._target_view.authorizer
+
+    @property
+    def egress(self):
+        return self._client.egress
+
+    async def execute(self, method, request, *, trusted_request_context):
+        with _CLIENT_TARGET_LOCK:
+            minted = self in _MINTED_CLIENT_TARGETS
+        if not minted or self._token is not _CLIENT_TARGET_TOKEN:
+            raise ProtocolError("EXECUTION_FAILED", "coordinator target client is forged")
+        return await self._client._execute_for(
+            self._target_view, method, request,
+            trusted_request_context=trusted_request_context)
+
+    async def close(self):
+        """Close the shared coordinator channel and every cohort target."""
+        with _CLIENT_TARGET_LOCK:
+            minted = self in _MINTED_CLIENT_TARGETS
+        if not minted or self._token is not _CLIENT_TARGET_TOKEN:
+            raise ProtocolError("EXECUTION_FAILED", "coordinator target client is forged")
+        await self._client.close()
