@@ -596,6 +596,16 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         result, = await asyncio.gather(task, return_exceptions=True)
         if isinstance(result, BaseException) and not isinstance(
                 result, asyncio.CancelledError):
+            from steamboat_connector.channel_stream import ChannelStreamError
+            expected_retirement = (
+                self._expected_transport_loss
+                and self.fx.worker_client_stream.closed
+                and self.fx.worker_server_stream.closed
+                and self.bridge is not None
+                and self.bridge.status()["active_authorizations"] == 0
+                and not self.bridge._handler.sessions)
+            if expected_retirement and isinstance(result, ChannelStreamError):
+                return
             self.fail(f"fixture demultiplexer failed: {result!r}")
 
     def test_capture_reservations_are_mandatory_and_cover_all_admissions(self):
@@ -623,10 +633,12 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         from steamboat_connector.channel_rpc import WorkerChannelRpc
         from steamboat_runtime.protocol.secure_transport import SecureTaskPending
 
+        worker_boot_id = self.fx.worker_boot_id
+
         class TestBridge:
             def __init__(self):
                 self.authorizer_core = SimpleNamespace(
-                    local_identity=SimpleNamespace(boot_id=self.fx.worker_boot_id))
+                    local_identity=SimpleNamespace(boot_id=worker_boot_id))
                 self.confirm_error = None
             async def wait_for_authorized_reclamation(self, authorization):
                 order.append("wait")

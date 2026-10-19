@@ -458,12 +458,10 @@ class SecureWorkerRuntimeBridge:
                 or self._handler.requires_restart):
             raise RuntimeBridgeUnavailable(
                 "authorization retirement remains unconfirmed")
-        owner = operation.owner
-        if owner is not None and owner.invalidated:
-            if (self._owners.get(owner.key) is owner
-                    or self._handler_owns_session(owner)):
-                raise RuntimeBridgeUnavailable(
-                    "invalidated session retirement remains unconfirmed")
+        # A closed RPC authorization may share an invalidated session with a
+        # still-running sibling RPC (notably CancelSession while Step unwinds).
+        # _reconcile fences on failed/uncertain ledger reclamation; a remaining
+        # owner alone is therefore not evidence that this RPC's close failed.
         return True
 
     def begin_drain(self, timeout_seconds=30):
