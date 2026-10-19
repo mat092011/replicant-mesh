@@ -267,6 +267,55 @@ class RuntimePinHandoffTests(unittest.TestCase):
             self.assertIn("host", self.backend._pinned_roles)
             self.assertIn("host", self.backend._pin_release_blocked)
 
+    def test_successful_configured_pin_release_allows_reconfiguration(self):
+        first = self._configured_group_pin()
+        second = self._configured_group_pin()
+        first_pin, first_verifier, first_metadata, first_catalog, first_assignment = first
+        second_pin, second_verifier, second_metadata, second_catalog, second_assignment = second
+        with (mock.patch.object(RuntimeArtifactGroupPin, "assert_open_descriptors",
+                                return_value=True),
+              mock.patch.object(RuntimeArtifactGroupPin, "child_launch_metadata",
+                                side_effect=[first_metadata, second_metadata]),
+              mock.patch.object(CatalogVerifier, "verify_catalog",
+                                side_effect=[first_catalog, second_catalog]),
+              mock.patch.object(CatalogVerifier, "verify_assignment",
+                                side_effect=[first_assignment, second_assignment]),
+              mock.patch("steamboat_connector.process_supervisor.atomic_write_private",
+                         side_effect=lambda path, data: Path(path).write_bytes(data))):
+            self.assertTrue(self.backend.configure_pinned_role(
+                "host", {"test_mode": True}, first_pin,
+                catalog_verifier=first_verifier))
+            self.assertTrue(self.backend.release_configured_pin("host"))
+            self.assertNotIn("host", self.backend._pin_release_blocked)
+            self.assertTrue(self.backend.configure_pinned_role(
+                "host", {"test_mode": True}, second_pin,
+                catalog_verifier=second_verifier))
+            self.assertTrue(self.backend.release_configured_pin("host"))
+            first_pin.release.assert_called_once_with()
+            second_pin.release.assert_called_once_with()
+
+    def test_stop_never_reports_success_for_blocked_unowned_generation(self):
+        from steamboat_connector.process_supervisor import _StartIntent
+
+        self.backend._pin_release_blocked.add("host")
+        self.assertFalse(self.backend.stop(["host"], 0.1)["host"])
+
+        completed = _StartIntent(finished=True)
+        self.backend._start_intents["host"] = completed
+        self.assertFalse(self.backend.stop(["host"], 0.1)["host"])
+        self.assertNotIn("host", self.backend._start_intents)
+
+        group = Path(self.temp.name) / "finished-empty-group"
+        group.mkdir()
+        (group / "cgroup.events").write_text("populated 0\n", encoding="ascii")
+        (group / "cgroup.procs").write_text("", encoding="ascii")
+        cleanup = _StartIntent(finished=True, group=group)
+        self.backend._start_intents["host"] = cleanup
+        self.assertFalse(self.backend.stop(["host"], 0.1)["host"])
+        self.assertFalse(group.exists())
+        self.assertNotIn("host", self.backend._start_intents)
+        self.assertIn("host", self.backend._pin_release_blocked)
+
     def test_child_helper_requires_exact_trusted_clock_and_verifier(self):
         with self.assertRaises(RuntimePinHandoffError):
             validate_child_pin({}, clock=object(), verifier=object())

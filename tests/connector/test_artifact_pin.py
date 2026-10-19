@@ -77,6 +77,26 @@ class ArtifactPinLockTests(unittest.TestCase):
         os.fstat(replacement)
         os.close(replacement)
 
+    def test_aliased_invalid_inherited_fd_is_closed_once(self):
+        descriptor = os.open(os.devnull, os.O_RDONLY)
+        with self.assertRaises(artifact_pin.ArtifactPinError) as caught:
+            artifact_pin.validate_inherited_pin(
+                descriptor, descriptor, root=self.root, uid=self.uid,
+                role="host", record_path=self.root / ".runtime-pin-host.json",
+                expected_record={}, clock_domain="", captured_mono=0,
+                catalog_deadline=2, assignment_deadline=1, clock=object(),
+                signed_catalog=b"", signed_assignment=b"", verifier=object())
+        owner = caught.exception.pin_owner if hasattr(caught.exception, "pin_owner") else None
+        # A successful one-time close needs no uncertain owner; an error path
+        # must never close this numeric descriptor a second time.
+        replacement = os.open(os.devnull, os.O_RDONLY)
+        self.assertEqual(replacement, descriptor)
+        if owner is not None:
+            with self.assertRaises(artifact_pin.ArtifactPinError):
+                owner.close_after_failed_acquire()
+        os.fstat(replacement)
+        os.close(replacement)
+
     def tearDown(self):
         error = None
         try:

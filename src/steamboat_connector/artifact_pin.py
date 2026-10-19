@@ -366,17 +366,31 @@ class PartialArtifactPinOwner:
                 raise ArtifactPinError("partial runtime pin cleanup is faulted")
             self._state = "closing"
             errors = []
+            seen = {}
             for name in ("role_fd", "global_fd"):
                 descriptor = getattr(self, name)
                 if descriptor is None:
                     continue
+                if descriptor in seen:
+                    # Two logical slots can be given the same numeric FD.
+                    # Close it once and mirror the first outcome without ever
+                    # retrying an ambiguous close against a reused number.
+                    outcome, error = seen[descriptor]
+                    setattr(self, name, None)
+                    self._close_outcomes[name] = outcome
+                    if outcome == "unknown":
+                        self._uncertain_descriptors[name] = descriptor
+                        errors.append(error)
+                    continue
                 try:
                     os.close(descriptor)
                 except OSError as error:
+                    seen[descriptor] = ("unknown", error)
                     self._close_outcomes[name] = "unknown"
                     self._uncertain_descriptors[name] = descriptor
                     errors.append(error)
                 else:
+                    seen[descriptor] = ("closed", None)
                     setattr(self, name, None)
                     self._close_outcomes[name] = "closed"
             self._state = "faulted" if errors else "closed"
@@ -619,6 +633,8 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
         _require_linux()
         from steamboat_connector.catalog import CatalogVerifier
         if (type(clock) is not Clock or role not in ROLE_LOCKS
+                or type(global_fd) is not int or type(role_fd) is not int
+                or global_fd < 0 or role_fd < 0 or global_fd == role_fd
                 or type(verifier) is not CatalogVerifier or verifier.clock is not clock):
             raise ArtifactPinError("inherited runtime pin arguments are invalid")
         root_path = Path(os.path.abspath(os.fspath(root)))

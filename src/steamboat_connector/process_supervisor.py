@@ -302,7 +302,8 @@ class ProcessRoleBackend:
             return False
         with self._lock:
             if (role in self._owned or role in self._start_intents
-                    or role in self._pin_release_blocked
+                    or role not in self._pin_release_blocked
+                    or self._pin_cleanups.get(role) is not cleanup
                     or self._pinned_roles.get(role) is not entry):
                 return False
             self._pinned_roles.pop(role, None)
@@ -1093,7 +1094,7 @@ class ProcessRoleBackend:
                         # A previous cleanup removed the cgroup but could not
                         # reacquire the ledger lock to forget its intent.
                         del self._start_intents[role]
-                        results[role] = True
+                        results[role] = role not in self._pin_release_blocked
                     else:
                         results[role] = False
                     continue
@@ -1110,7 +1111,7 @@ class ProcessRoleBackend:
                         if (self._start_intents.get(role) is intent
                                 and intent.finished and intent.group is None):
                             del self._start_intents[role]
-                            results[role] = True
+                            results[role] = role not in self._pin_release_blocked
                     finally:
                         self._lock.release()
 
