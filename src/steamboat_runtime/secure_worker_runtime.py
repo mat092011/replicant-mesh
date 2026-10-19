@@ -33,6 +33,7 @@ class _SessionOwner:
     session_id: str
     core_owner: tuple
     core_identity: tuple
+    ingress_identity: tuple | None = None
     invalidated: bool = False
     invalidation_reason: str = ""
     predispatch_aborted: bool = False
@@ -185,6 +186,14 @@ class _IncomingAuthorizer:
             service=service, method=method, payload=payload, metadata=metadata,
             peer_certificate_pem=peer_certificate_pem)
 
+    def authorize_gateway(self, *, service, method, payload, metadata, ingress,
+                          envelope, request_bytes, frame_sequence):
+        """Admit a gateway request through the core Authorizer's owned ingress."""
+        return self._bridge._authorize(
+            service=service, method=method, payload=payload, metadata=metadata,
+            ingress=ingress, envelope=envelope, request_bytes=request_bytes,
+            frame_sequence=frame_sequence)
+
 
 class _BoundWorkerHandler:
     def __init__(self, bridge):
@@ -295,6 +304,7 @@ class SecureWorkerRuntimeBridge:
         self._admitting = 0
         self._operations = {}
         self._owners = {}
+        self._gateway_ingresses = {}
         self._capture_lock = threading.Lock()
         self._captured_owners = {}
         self._notice_lock = threading.Lock()
@@ -464,7 +474,9 @@ class SecureWorkerRuntimeBridge:
                 raise RuntimeBridgeUnavailable("secure worker authorization capacity is full")
             self._admitting += 1
 
-    def _authorize(self, *, service, method, payload, metadata, peer_certificate_pem):
+    def _authorize(self, *, service, method, payload, metadata,
+                   peer_certificate_pem=None, ingress=None, envelope=None,
+                   request_bytes=None, frame_sequence=None):
         self._assert_loop()
         if service != WORKER_SERVICE:
             raise RuntimeBindingError("runtime bridge accepts only the worker service")
@@ -472,9 +484,18 @@ class SecureWorkerRuntimeBridge:
         core_authorization = None
         registered = False
         try:
-            core_authorization = self.authorizer_core.authorize(
-                service=service, method=method, payload=payload, metadata=metadata,
-                peer_certificate_pem=peer_certificate_pem)
+            if ingress is None:
+                core_authorization = self.authorizer_core.authorize(
+                    service=service, method=method, payload=payload, metadata=metadata,
+                    peer_certificate_pem=peer_certificate_pem)
+            else:
+                core_authorization = self.authorizer_core.authorize_gateway(
+                    service, method, payload, metadata, ingress=ingress,
+                    envelope=envelope, request_bytes=request_bytes,
+                    frame_sequence=frame_sequence)
+                if core_authorization.payload is not payload:
+                    raise RuntimeBindingError(
+                        "gateway authorization changed the captured parsed Request object")
             operation = self._make_operation(method, payload, core_authorization)
             bound = _BoundAuthorization(self, operation)
             with self._lock:
@@ -507,6 +528,8 @@ class SecureWorkerRuntimeBridge:
                     bound._operation.owner = current
                 if operation.owner is not None:
                     self._capture_owner(operation.owner)
+                    if ingress is not None:
+                        self._gateway_ingresses[ingress.ingress_identity] = ingress
                 self._operations[key] = operation
                 registered = True
             return bound
@@ -566,6 +589,7 @@ class SecureWorkerRuntimeBridge:
                 session_id=request.session_id,
                 core_owner=core_owner,
                 core_identity=identity,
+                ingress_identity=authorization._ingress_identity,
                 invalidation_event=asyncio.Event())
         identity = self._core_identity(authorization)
         return _Operation(request=request, method=method,
@@ -635,6 +659,7 @@ class SecureWorkerRuntimeBridge:
                 self.session_bindings.invalidate(
                     key=(owner.target_device_id, owner.worker_boot_id, owner.session_id),
                     reason="worker-owner-drain-deadline")
+            self._poll_gateway_ingresses()
             self._process_notices()
             self._reconcile()
         except BaseException:
@@ -749,6 +774,7 @@ class SecureWorkerRuntimeBridge:
                 self._wake_scheduled = False
             if self._callback_fault.is_set():
                 self._fence("session invalidation callback or bounded queue failed")
+            self._poll_gateway_ingresses()
             self._process_notices()
             self._reconcile()
             if self._drain_deadline is not None:
@@ -773,6 +799,15 @@ class SecureWorkerRuntimeBridge:
             if self._loop.time() >= next_sweep:
                 self._sweep_once()
                 next_sweep = self._loop.time() + self.sweep_interval_seconds
+
+    def _poll_gateway_ingresses(self):
+        # Ingress polling is bounded by SessionBindings' live-session limit.
+        for ingress in tuple(self._gateway_ingresses.values()):
+            try:
+                ingress.poll_unavailable()
+            except BaseException:
+                self._unconfirmed_cleanup = True
+                self._fence("gateway ingress liveness could not be confirmed")
 
     def _sweep_once(self):
         try:
@@ -921,6 +956,10 @@ class SecureWorkerRuntimeBridge:
             captured = self._captured_owners.get(owner.key)
             if captured == (owner.core_owner, owner.core_identity):
                 self._captured_owners.pop(owner.key, None)
+        if owner.ingress_identity is not None and not any(
+                item.ingress_identity == owner.ingress_identity
+                for item in self._owners.values()):
+            self._gateway_ingresses.pop(owner.ingress_identity, None)
 
     def _capture_owner(self, owner):
         with self._capture_lock:

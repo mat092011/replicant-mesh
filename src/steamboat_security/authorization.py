@@ -280,6 +280,10 @@ class Authorization:
 
     def _live_deadline_state(self):
         authorizer = self._authorizer
+        gateway_errors = ()
+        if self._gateway_guard is not None:
+            from .gateway_ingress import GatewayIngressError
+            gateway_errors = (GatewayIngressError,)
         try:
             if authorizer.local_identity != self._local_identity:
                 raise CredentialError("configured local identity was replaced")
@@ -351,10 +355,11 @@ class Authorization:
             if authorizer.session_bindings is not None:
                 authorizer.session_bindings.invalidate_all("clock-or-snapshot-unavailable")
             raise
-        except (CredentialError, ScopeError, SessionError):
-            if self._session_key is not None and self.binding.method != "SessionStatus":
-                authorizer.session_bindings.invalidate(key=self._session_key,
-                                                       reason="authorization-invalidated")
+        except (CredentialError, ScopeError, SessionError) + gateway_errors:
+            if (self._session_key is not None
+                    and self.binding.method != "SessionStatus"):
+                authorizer.session_bindings.invalidate(
+                    key=self._session_key, reason="authorization-invalidated")
             raise
         return deadline, sample.monotonic
 
@@ -619,36 +624,69 @@ class Authorizer:
                 or verifier.local_identity != self.local_identity
                 or ingress._local_identity != self.local_identity):
             raise GatewayIngressError("gateway ingress owners differ from this Authorizer")
-        if type(request_bytes) is not bytes or not 1 <= len(request_bytes) <= MAX_REQUEST_BYTES:
-            ingress.close("gateway-invalid-frame")
-            raise BindingError("raw gateway request exceeds its 1 MiB bound")
+        authorization = None
+        c1_admission_started = False
         try:
-            guard = ingress.verify_operation(envelope, metadata, request_bytes, frame_sequence)
-            if type(guard) is not GatewayOperationGuard:
-                raise GatewayIngressError("ingress did not mint its concrete operation guard")
-            guard.assert_live()
-            delegated = guard.delegation
-            if (delegated.payload["service"] != service
-                    or delegated.payload["method"] != method
-                    or service != WORKER_SERVICE or method not in WORKER_METHODS):
-                raise ScopeError("gateway delegation does not match the worker entrypoint")
-            request = _request(payload, self.worker_request_type)
-            serializer = getattr(request, "SerializeToString", None)
-            if not callable(serializer):
-                raise BindingError("worker payload has no deterministic protobuf serializer")
-            serialized = serializer(deterministic=True)
-            if type(serialized) is not bytes or serialized != request_bytes:
-                raise BindingError("raw gateway bytes differ from the parsed worker payload")
-            if delegated.payload["frame_sequence"] != frame_sequence:
-                raise ScopeError("gateway delegation sequence differs from ingress admission")
+            if type(request_bytes) is not bytes or not 1 <= len(request_bytes) <= MAX_REQUEST_BYTES:
+                ingress.close("gateway-invalid-frame")
+                raise BindingError("raw gateway request exceeds its 1 MiB bound")
+            # Keep the ingress owner lock from guard minting through C1 checks
+            # and the SessionBindings claim/check. Stream close therefore either
+            # precedes admission or observes and invalidates the completed claim.
+            with ingress.admission_transaction():
+                guard = ingress.verify_operation(
+                    envelope, metadata, request_bytes, frame_sequence)
+                if type(guard) is not GatewayOperationGuard:
+                    raise GatewayIngressError(
+                        "ingress did not mint its concrete operation guard")
+                guard.assert_live()
+                delegated = guard.delegation
+                if (delegated.payload["service"] != service
+                        or delegated.payload["method"] != method
+                        or service != WORKER_SERVICE or method not in WORKER_METHODS):
+                    raise ScopeError(
+                        "gateway delegation does not match the worker entrypoint")
+                request = _request(payload, self.worker_request_type)
+                serializer = getattr(request, "SerializeToString", None)
+                if not callable(serializer):
+                    raise BindingError(
+                        "worker payload has no deterministic protobuf serializer")
+                serialized = serializer(deterministic=True)
+                if type(serialized) is not bytes or serialized != request_bytes:
+                    raise BindingError(
+                        "raw gateway bytes differ from the parsed worker payload")
+                if delegated.payload["frame_sequence"] != frame_sequence:
+                    raise ScopeError(
+                        "gateway delegation sequence differs from ingress admission")
+                c1_admission_started = True
+                authorization = self._authorize_with_actor_pem(
+                    service, method, request, metadata,
+                    delegated.actor_certificate_pem, ingress_guard=guard)
+                # The transaction exit also performs this liveness check. Keep
+                # an explicit core check before publishing the Authorization.
+                try:
+                    authorization.assert_live()
+                except BaseException:
+                    # No handler dispatch has occurred yet. Roll back a new
+                    # pending Open claim while its ingress transaction is still
+                    # held, before exceptional-exit liveness can close the stream.
+                    authorization.fail(cache_may_exist=False)
+                    raise
+            return authorization
         except Exception as error:
-            ingress.close("gateway-invalid-frame")
-            if isinstance(error, (BindingError, ScopeError, GatewayIngressError)):
+            if authorization is not None and not authorization._finished:
+                try:
+                    authorization.fail(cache_may_exist=False)
+                finally:
+                    authorization.close()
+            if (not c1_admission_started
+                    or isinstance(error, GatewayIngressError)):
+                ingress.close("gateway-invalid-frame")
+            if c1_admission_started and authorization is None:
+                raise
+            if isinstance(error, (SecurityError, GatewayIngressError)):
                 raise
             raise BindingError("worker payload cannot be serialized deterministically") from error
-        return self._authorize_with_actor_pem(
-            service, method, request, metadata,
-            delegated.actor_certificate_pem, ingress_guard=guard)
 
     def _authorize_with_actor_pem(self, service: str, method: str, payload: Any,
                                   metadata, peer_certificate_pem: bytes,
