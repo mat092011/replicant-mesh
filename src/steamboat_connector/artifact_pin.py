@@ -627,8 +627,12 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
     raw = (global_fd, role_fd)
     # Take ownership before any validation or cleanup operation can fail.
     # This owner records close(2) ambiguity and is transferred to the returned
-    # guard only after the complete signed-identity check succeeds.
-    input_owner = PartialArtifactPinOwner(global_fd, role_fd)
+    # guard only after the complete signed-identity check succeeds. Only exact
+    # nonnegative integers are descriptor claims; malformed values (including
+    # bools, which subclass int) must never reach close(2).
+    owned_global_fd = global_fd if type(global_fd) is int and global_fd >= 0 else None
+    owned_role_fd = role_fd if type(role_fd) is int and role_fd >= 0 else None
+    input_owner = PartialArtifactPinOwner(owned_global_fd, owned_role_fd)
     try:
         _require_linux()
         from steamboat_connector.catalog import CatalogVerifier

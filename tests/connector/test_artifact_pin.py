@@ -107,6 +107,41 @@ class ArtifactPinLockTests(unittest.TestCase):
         os.fstat(replacement)
         os.close(replacement)
 
+    def test_malformed_inherited_fd_values_are_never_closed(self):
+        for malformed in (True, False, -1, "not-an-fd", None):
+            with self.subTest(malformed=malformed):
+                close_calls = []
+                with mock.patch.object(artifact_pin.os, "close",
+                                       side_effect=lambda fd: close_calls.append(fd)):
+                    with self.assertRaises(artifact_pin.ArtifactPinError):
+                        artifact_pin.validate_inherited_pin(
+                            malformed, malformed, root=self.root, uid=self.uid,
+                            role="host", record_path=self.root / ".runtime-pin-host.json",
+                            expected_record={}, clock_domain="", captured_mono=0,
+                            catalog_deadline=2, assignment_deadline=1, clock=object(),
+                            signed_catalog=b"", signed_assignment=b"", verifier=object())
+                self.assertEqual(close_calls, [])
+
+    def test_valid_inherited_fd_is_closed_when_other_value_is_malformed(self):
+        descriptor = self._register_fd(os.open(os.devnull, os.O_RDONLY))
+        real_close = os.close
+        close_calls = []
+
+        def record_close(fd):
+            close_calls.append(fd)
+            return real_close(fd)
+
+        with mock.patch.object(artifact_pin.os, "close", side_effect=record_close):
+            with self.assertRaises(artifact_pin.ArtifactPinError):
+                artifact_pin.validate_inherited_pin(
+                    descriptor, True, root=self.root, uid=self.uid,
+                    role="host", record_path=self.root / ".runtime-pin-host.json",
+                    expected_record={}, clock_domain="", captured_mono=0,
+                    catalog_deadline=2, assignment_deadline=1, clock=object(),
+                    signed_catalog=b"", signed_assignment=b"", verifier=object())
+        self._fds.discard(descriptor)
+        self.assertEqual(close_calls, [descriptor])
+
     def tearDown(self):
         error = None
         try:
