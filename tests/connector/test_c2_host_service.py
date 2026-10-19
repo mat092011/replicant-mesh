@@ -1,9 +1,14 @@
 """Closed-boundary tests for the fixed supervised C2 host service."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import io
+import socket
 import subprocess
 import sys
 import os
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -60,7 +65,91 @@ class C2HostServiceContractTests(unittest.TestCase):
                 bridge.assert_not_called()
                 build.assert_not_called()
         finally:
+            service._restore_sigterm_handler()
             service._runner.close()
+
+    def test_stop_before_startup_denies_read_without_constructing_owners(self):
+        service = C2HostService("/protected/host-runtime.json")
+        try:
+            service.request_stop()
+            with (mock.patch("steamboat_connector.c2_host_service.read_private_json") as read,
+                  mock.patch("steamboat_connector.c2_host_service.ChildClockBridge") as bridge):
+                with self.assertRaisesRegex(C2HostServiceError, "readiness denied"):
+                    service.start()
+                read.assert_not_called()
+                bridge.assert_not_called()
+                self.assertFalse(service._ready)
+        finally:
+            service._restore_sigterm_handler()
+            service._runner.close()
+
+    def test_service_final_publication_gate_rejects_stop_after_start(self):
+        service = C2HostService("/protected/host-runtime.json")
+        service._ready = True
+        service.request_stop()
+        self.assertFalse(service.ready)
+        with self.assertRaisesRegex(C2HostServiceError, "readiness denied"):
+            service.assert_ready_for_publication()
+        service._runner.close()
+
+    def test_bootstrap_rechecks_stop_after_start_and_emits_no_ready(self):
+        from types import SimpleNamespace
+        from steamboat_connector import process_bootstrap
+
+        class Service:
+            stopped = False
+            started = False
+
+            def start(self, _path):
+                self.started = True
+                return self
+
+            def request_stop(self):
+                self.stopped = True
+
+            def assert_ready_for_publication(self):
+                if self.stopped:
+                    raise RuntimeError("stop before publication")
+                return None
+
+            def run(self):
+                return None
+
+        service = Service()
+        def start_then_stop(path):
+            service.start(path)
+            service.request_stop()
+            return service
+
+        module = SimpleNamespace(start=start_then_stop)
+        output = io.StringIO()
+        with (mock.patch.object(process_bootstrap.os, "read", return_value=b"R"),
+              mock.patch.object(process_bootstrap.os, "close"),
+              mock.patch.object(process_bootstrap.site, "getsitepackages", return_value=[]),
+              mock.patch.object(process_bootstrap.importlib, "import_module", return_value=module),
+              contextlib.redirect_stdout(output)):
+            with self.assertRaisesRegex(RuntimeError, "stop before publication"):
+                process_bootstrap.main(["host", "/protected/config.json", "41"])
+        self.assertEqual(output.getvalue(), "")
+        self.assertTrue(service.started)
+
+    def test_failed_driver_factory_keeps_raw_transport_and_tls_owner_captured(self):
+        left, right = socket.socketpair()
+        tls = object()
+        service = object.__new__(C2HostService)
+        service._traffic = object()
+        channel = {"socket": left, "tls": tls, "driver": None}
+        try:
+            with mock.patch("steamboat_connector.c2_host_service.ChannelSocket",
+                            side_effect=RuntimeError("factory failure")):
+                with self.assertRaisesRegex(RuntimeError, "factory failure"):
+                    service._create_driver(channel, "parent-boot")
+            self.assertIs(channel["socket"], left)
+            self.assertIs(channel["tls"], tls)
+            self.assertIsNone(channel["driver"])
+        finally:
+            left.close()
+            right.close()
 
     def test_valid_outer_policy_does_not_accept_nonhost_child(self):
         from cryptography.hazmat.primitives import serialization
@@ -145,6 +234,10 @@ class C2HostServiceNativeTests(unittest.IsolatedAsyncioTestCase):
                     component_allocations=fixture_case.allocations())
                 service = object.__new__(C2HostService)
                 service._runtime = runtime
+                service._lifecycle_lock = threading.Lock()
+                service._stop_requested = threading.Event()
+                service._stop_event = asyncio.Event()
+                service._uncertain_startup_tasks = []
                 try:
                     await service._probe_assigned_stages()
                     handler = runtime._handlers["worker-1"]
@@ -152,6 +245,150 @@ class C2HostServiceNativeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(handler._active_operation, None)
                 finally:
                     self.assertTrue(await runtime.close(grace_seconds=5.0))
+
+
+class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_false_runtime_close_retains_all_downstream_owners(self):
+        class Runtime:
+            _bridges = {}
+
+            async def close(self, *, grace_seconds):
+                return False
+
+        service = object.__new__(C2HostService)
+        service._stopping = False
+        service._ready = False
+        service._stop_event = asyncio.Event()
+        service._channels = []
+        service._runtime = Runtime()
+        service._child_pins = object()
+        service._binding_lease = object()
+        service._child_binding = object()
+        service._channel_policy_owner = object()
+        service._clock_bridge = object()
+        service._close_error = None
+        service._shutdown_proven = False
+        with self.assertRaisesRegex(C2HostServiceError, "uncertain"):
+            await service._shutdown([])
+        self.assertIsNotNone(service._child_pins)
+        self.assertIsNotNone(service._binding_lease)
+        self.assertIsNotNone(service._channel_policy_owner)
+        self.assertFalse(service._shutdown_proven)
+
+    async def test_hung_admitted_rpc_is_not_cancelled_or_released_on_stop(self):
+        class Rpc:
+            def __init__(self):
+                self._active = set()
+                self._retained_releases = set()
+                self._stuck_captures = set()
+                self._data_count = self._control_count = 1
+                self._data_bytes = self._control_bytes = 1
+                self.stopped = False
+
+            def stop(self):
+                self.stopped = True
+
+        service = object.__new__(C2HostService)
+        rpc = Rpc()
+        never = asyncio.Event()
+        admitted = asyncio.create_task(never.wait())
+        rpc._active.add(admitted)
+        service._stopping = False
+        service._ready = False
+        service._stop_event = asyncio.Event()
+        service._channels = [{"rpc": rpc}]
+        service._runtime = None
+        service._child_pins = object()
+        service._close_error = None
+        service._shutdown_proven = False
+        with mock.patch("steamboat_connector.c2_host_service.STOP_CLEANUP_SECONDS", 0.01):
+            with self.assertRaisesRegex(C2HostServiceError, "cleanup deadline"):
+                await service._shutdown([])
+        self.assertTrue(rpc.stopped)
+        self.assertFalse(admitted.done())
+        self.assertIn(admitted, rpc._active)
+        self.assertIsNotNone(service._child_pins)
+        admitted.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await admitted
+
+
+@unittest.skipUnless(os.name == "posix" and sys.platform.startswith("linux"),
+                     "actual signed loopback TLS gateway fixture is native Linux")
+class C2HostServiceTlsFactoryNativeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tls_factory_starts_before_tcp_handshake_then_pumps_real_gateway_tls(self):
+        from tests.connector.test_gateway_service import GatewayServiceLoopbackTests
+
+        fixture = GatewayServiceLoopbackTests(
+            methodName="test_two_listener_two_worker_cohort_routes_open_response_and_describe")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fx = fixture.fx
+        gateway = fixture._service(expected=((fx.device_id, fx.worker_boot_id),))
+        service = object.__new__(C2HostService)
+        service._channels = []
+        service._uncertain_startup_tasks = []
+        service._stop_requested = threading.Event()
+        service._lifecycle_lock = threading.Lock()
+        service._stop_event = asyncio.Event()
+        service._traffic = fx.meter_budget
+        service._loop = asyncio.get_running_loop()
+        pump_stop = asyncio.Event()
+
+        async def pump_gateway():
+            while not pump_stop.is_set():
+                gateway.pump_once()
+                await asyncio.sleep(0.001)
+
+        pump_task = asyncio.create_task(pump_gateway())
+
+        async def stop_pump():
+            pump_stop.set()
+            if not pump_task.done():
+                pump_task.cancel()
+            try:
+                await pump_task
+            except asyncio.CancelledError:
+                pass
+
+        self.addAsyncCleanup(stop_pump)
+        endpoint = gateway.worker_address
+        loop = asyncio.get_running_loop()
+        real_getaddrinfo = loop.getaddrinfo
+
+        async def loopback_resolution(host, port, **kwargs):
+            if host == "worker.gateway.example" and port == 443:
+                return await real_getaddrinfo(endpoint[0], endpoint[1], **kwargs)
+            return await real_getaddrinfo(host, port, **kwargs)
+
+        channel = None
+        try:
+            with mock.patch.object(loop, "getaddrinfo", side_effect=loopback_resolution):
+                channel = await service._connect_worker(
+                    fx.worker_channel_pem, fx.worker_channel_key, fx.base.gateway_ca,
+                    "worker.gateway.example", 443, fx.base.clock)
+            owner = channel["tls"]
+            self.assertFalse(owner.handshake_complete,
+                             "MemoryBIO TLS starts before transport handshake bytes arrive")
+            driver = service._create_driver(channel, fx.socket_host_boot)
+            await service._pump_tls(driver)
+            self.assertTrue(owner.handshake_complete)
+            self.assertEqual(driver.pending_ciphertext_bytes, 0)
+            self.assertEqual(driver.pending_plaintext_bytes, 0)
+        finally:
+            if channel is not None:
+                driver = channel.get("driver")
+                if driver is not None:
+                    driver.close()
+                else:
+                    raw_socket = channel.get("socket")
+                    if raw_socket is not None:
+                        raw_socket.close()
+                    tls = channel.get("tls")
+                    if tls is not None:
+                        tls.close()
+            pump_stop.set()
+            await stop_pump()
 
 
 if __name__ == "__main__":

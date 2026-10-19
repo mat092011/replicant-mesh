@@ -7,6 +7,14 @@ adapter accepts the supervisor's exact version 1 host document, constructs one
 service loop. Configuration cannot select Python modules, callbacks, network
 endpoints, commands, or clock providers.
 
+Before printing `READY`, `process_bootstrap` calls the fixed service's
+synchronous `assert_ready_for_publication()` gate. The host rechecks the sticky
+stop fence, selected runtime guards, persistent policy owner, and committed
+channels there. SIGTERM sets the stop fence synchronously and then wakes the
+loop. The parent still owns cancellation and process-reap authority; there is
+no cross-process atomic ordering claim for an OS signal racing the physical
+stdout write.
+
 Startup passes the inherited `clock_handoff` object unchanged to
 `ChildClockBridge`. It opens the exact host `C2ChildBinding`, reads settings
 through the selected binding, verifies the signed artifact group and exact
@@ -30,13 +38,18 @@ process-channel and assigned-stage readiness; it does not establish owner
 phase approval, aggregate host physical-resource enforcement, remote-device
 performance, or successful end-to-end inference.
 
-Signals request event-loop shutdown. The service fences RPC admission and
-closes channel owners, then performs bounded runtime cleanup. If cleanup is
-uncertain, the supervisor must retain the process owner and establish actual
-cgroup-empty and child-reap proof before reclaiming generation resources. The
-service does not declare uncertain work reclaimed or reconnect after ambiguous
-mutation. The caller must retain this service and its owners until confirmed
-cleanup or process death. Traffic-generation reconciliation still requires
+Signals set a sticky stop fence before waking the event loop, so startup checks
+deny readiness if stop arrives before publication. Shutdown fences every C1
+bridge before closing channels, then waits within one shared deadline for
+admitted RPC tasks, authorization retirements, capture releases, and zeroed
+admission charges. It requires `C2HostRuntime.close()` to confirm success before
+releasing selected-root pins or binding leases. A stuck capture, task, transport
+close, or runtime shutdown leaves the event loop and owners retained and returns
+an error for the supervisor to handle; it does not report normal shutdown or
+cancel potentially cache-owning work. If cleanup is uncertain, the supervisor
+must retain the process owner and establish actual cgroup-empty and child-reap
+proof before reclaiming generation resources. The service does not reconnect
+after ambiguous mutation. Traffic-generation reconciliation still requires
 trusted supervisor proof through `TrafficBudget.reconcile_dead_generation`.
 
 `GatewayDelegationVerifier` requires the exact core `ChannelPolicyStore` type.

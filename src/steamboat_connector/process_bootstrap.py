@@ -1,6 +1,7 @@
 """Private stdlib-only child bootstrap for fixed connector role processes."""
 
 import importlib
+import inspect
 import os
 from pathlib import Path
 import site
@@ -50,6 +51,18 @@ def main(argv=None):
     run = getattr(role_service, "run", None)
     if not callable(run):
         return 66
+    # Fixed supervised roles may expose a final synchronous stop/liveness gate.
+    # Legacy role services retain the historical contract.
+    publication_check = getattr(role_service, "assert_ready_for_publication", None)
+    if callable(publication_check):
+        if inspect.iscoroutinefunction(publication_check):
+            return 66
+        publication_result = publication_check()
+        if publication_result is not None:
+            close = getattr(publication_result, "close", None)
+            if callable(close):
+                close()
+            return 66
     sys.stdout.write("READY\n")
     sys.stdout.flush()
     # Runtime diagnostics never flow into the protocol pipe. stderr is already

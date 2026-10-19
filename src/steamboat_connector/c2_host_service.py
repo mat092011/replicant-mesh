@@ -11,6 +11,7 @@ import hashlib
 import os
 import signal
 import socket
+import threading
 import time
 
 from steamboat_connector import channel_wire as wire
@@ -49,6 +50,8 @@ from steamboat_security.files import safe_read
 MAX_BOOTSTRAP_SECONDS = 5.0
 HEALTH_INTERVAL_SECONDS = 0.25
 HEALTH_PROBE_SECONDS = 10.0
+STARTUP_STAGE_SECONDS = 300.0
+STOP_CLEANUP_SECONDS = 5.0
 OUTER_FIELDS = frozenset({
     "version", "role", "config", "policy", "artifact_pin", "clock_handoff",
 })
@@ -122,6 +125,10 @@ class C2HostService:
         self._runner = asyncio.Runner()
         self._loop = None
         self._stop_event = None
+        self._stop_requested = threading.Event()
+        self._lifecycle_lock = threading.Lock()
+        self._wake_lock = threading.Lock()
+        self._wake_scheduled = False
         self._ready = False
         self._stopping = False
         self._close_error = None
@@ -136,11 +143,14 @@ class C2HostService:
         self._channels = []
         self._rpc_tasks = []
         self._uncertain_startup_tasks = []
+        self._shutdown_proven = False
+        self._previous_sigterm_handler = None
 
     def start(self):
         """Load and authenticate the full host generation before returning."""
         try:
             self._runner.run(self._async_start())
+            self._check_startup_stop()
             return self
         except BaseException as error:
             try:
@@ -149,45 +159,85 @@ class C2HostService:
                 pass
             raise
 
+    @property
+    def ready(self):
+        return self._ready and not self._stop_requested.is_set()
+
+    def assert_ready_for_publication(self):
+        """Synchronous final gate called immediately before supervisor READY."""
+        self._check_startup_stop()
+        if not self._ready or self._runtime is None or self._channel_policy_owner is None:
+            raise C2HostServiceError("host role is not fully ready for publication")
+        self._runtime.assert_live()
+        self._channel_policy_owner.current()
+        for channel in self._channels:
+            tls = channel.get("tls")
+            stream = channel.get("stream")
+            driver = channel.get("driver")
+            rpc = channel.get("rpc")
+            if (tls is None or not tls.handshake_complete or stream is None
+                    or stream.closed or not stream.transport_bootstrap_complete
+                    or driver is None or driver.pending_ciphertext_bytes
+                    or driver.pending_plaintext_bytes or tls.pending_encrypted_bytes
+                    or type(stream) is not ChannelStream
+                    or type(rpc) is not WorkerChannelRpc
+                    or rpc.stream is not stream
+                    or rpc.bridge is not self._runtime._bridges.get(channel.get("component"))):
+                raise C2HostServiceError("host channel lost readiness before publication")
+        self._check_startup_stop()
+        if not self._ready:
+            raise C2HostServiceError("host role readiness was withdrawn before publication")
+        return None
+
     async def _async_start(self):
         self._loop = asyncio.get_running_loop()
         self._stop_event = asyncio.Event()
         self._install_signal_handlers()
         try:
+            self._check_startup_stop()
             document = read_private_json(
                 self._config_path, maximum_size=65_536, uid=os.getuid())
             config, policy = _validate_outer(document)
+            self._check_startup_stop()
             self._clock_bridge = ChildClockBridge(document["clock_handoff"])
             clock = self._clock_bridge.clock
             clock.sample()
             self._child_binding = open_c2_child_binding(
                 config, clock=clock, expected_uid=os.getuid())
+            self._check_startup_stop()
             self._binding_lease = self._child_binding.borrow()
             binding = self._binding_lease.__enter__()
             settings = load_c2_host_settings(binding)
+            self._check_startup_stop()
             catalog_key = bytes.fromhex(settings.catalog_public_key_hex)
             verifier = CatalogVerifier(catalog_key, clock=clock)
             self._child_pins = validate_child_pin(
                 document["artifact_pin"], clock=clock, verifier=verifier)
+            self._check_startup_stop()
             self._installer = ArtifactInstaller(
                 settings.artifact_root, verifier,
                 disk_ceiling_bytes=policy["limits"]["disk_ceiling_bytes"],
                 disk_headroom_bytes=MIN_DISK_HEADROOM_BYTES,
                 uid=os.getuid(), read_only=True)
+            self._check_startup_stop()
 
             initial_policy = _read_pinned_material(
                 settings.gateway.initial_policy, root=config.protected_root,
                 uid=os.getuid(), maximum=MAX_CHANNEL_POLICY_BYTES,
                 label="initial channel policy")
+            self._check_startup_stop()
             gateway_ca = _read_pinned_material(
                 settings.gateway.gateway_ca, root=config.protected_root,
                 uid=os.getuid(), maximum=64 * 1024, label="gateway CA")
+            self._check_startup_stop()
             self._channel_policy_owner = PersistentChannelPolicyStore.open_existing(
                 settings.gateway.policy_root, expected_uid=os.getuid(),
                 verification_key_pem=settings.gateway.verification_key_pem,
                 clock=clock, minimum_revision=settings.gateway.minimum_revision,
                 minimum_policy_digest=settings.gateway.minimum_policy_digest)
+            self._check_startup_stop()
             self._channel_policy_owner.install(initial_policy)
+            self._check_startup_stop()
             channel_store = self._channel_policy_owner.core_store
             current = self._channel_policy_owner.current()
             gateway = current.gateway(settings.gateway.gateway_id)
@@ -201,10 +251,12 @@ class C2HostService:
                 allocation_id=settings.traffic.allocation_id, uid=os.getuid(),
                 clock=clock, clock_domain=settings.traffic.clock_domain,
                 policy=policy)
+            self._check_startup_stop()
             parent_boot_id = binding._spec.boot_id
             self._traffic.bind_role("host", parent_boot_id)
+            self._check_startup_stop()
 
-            self._runtime = await build_c2_host_runtime(
+            self._runtime = await self._wait_startup(build_c2_host_runtime(
                 self._child_binding, self._child_pins, self._installer,
                 owner_policy=policy,
                 component_allocations={
@@ -215,8 +267,10 @@ class C2HostService:
                         "queued_calls": allocation.queued_calls,
                     }
                     for component, allocation in settings.component_allocations.items()
-                })
+                }), "resident assigned-stage load")
+            self._check_startup_stop()
             await self._probe_assigned_stages()
+            self._check_startup_stop()
             # Network authority is read only from the signed channel policy.
             endpoint_host = gateway["endpoint_host"]
             endpoint_port = gateway["endpoint_port"]
@@ -231,14 +285,17 @@ class C2HostService:
                     participant_ca_pem=binding._snapshot_store.ca_certificate_pem,
                     local_identity=identity, endpoint_host=endpoint_host,
                     endpoint_port=endpoint_port)
-                tls_owner, connected = await self._connect_worker(
+                self._check_startup_stop()
+                channel = await self._connect_worker(
                     tls_material.certificate_pem, tls_material.private_key_pem,
                     gateway_ca, endpoint_host, endpoint_port, clock)
-                driver = ChannelSocket(connected, tls_owner, self._traffic,
-                    role="host", boot_id=parent_boot_id)
-                self._channels.append({"tls": tls_owner, "driver": driver,
-                                       "stream": None, "rpc": None})
+                self._check_startup_stop()
+                channel["component"] = component
+                tls_owner = channel["tls"]
+                driver = self._create_driver(channel, parent_boot_id)
+                self._check_startup_stop()
                 await self._pump_tls(driver)
+                self._check_startup_stop()
                 if (driver.pending_ciphertext_bytes or driver.pending_plaintext_bytes
                         or tls_owner.pending_encrypted_bytes):
                     raise C2HostServiceError("TLS handshake output did not drain")
@@ -255,9 +312,9 @@ class C2HostService:
                         + wire.MAX_BUNDLE_BYTES + 8 * MAX_CONTROL_BUNDLE_BYTES),
                     decoded_byte_capacity=wire.MAX_BUNDLE_BYTES,
                     tls_owner_reservation_bytes=TLS_OWNER_MIN_RESERVATION_BYTES)
-                channel = self._channels[-1]
                 channel["stream"] = stream
                 await self._pump_hello(stream)
+                self._check_startup_stop()
                 if not stream.transport_bootstrap_complete:
                     raise C2HostServiceError("worker HELLO was not fully committed")
                 if (driver.pending_ciphertext_bytes or driver.pending_plaintext_bytes
@@ -270,7 +327,11 @@ class C2HostService:
                 channel["rpc"] = rpc
             self._runtime.assert_live()
             self._channel_policy_owner.current()
-            self._ready = True
+            self._check_startup_stop()
+            with self._lifecycle_lock:
+                if self._stop_requested.is_set():
+                    raise C2HostServiceError("stop requested before readiness publication")
+                self._ready = True
         except BaseException:
             self._ready = False
             raise
@@ -357,58 +418,149 @@ class C2HostService:
             self._runtime.assert_live()
 
     async def _bounded_startup_operation(self, awaitable, deadline, label):
+        self._check_startup_stop()
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             if asyncio.iscoroutine(awaitable):
                 awaitable.close()
             raise C2HostServiceError(f"shared {label} deadline elapsed")
         task = asyncio.create_task(awaitable)
-        done, _pending = await asyncio.wait({task}, timeout=remaining)
+        stop_task = asyncio.create_task(self._stop_event.wait())
+        done, _pending = await asyncio.wait(
+            {task, stop_task}, timeout=remaining,
+            return_when=asyncio.FIRST_COMPLETED)
+        if stop_task in done or self._stop_requested.is_set():
+            if task.done():
+                try:
+                    task.result()
+                except BaseException:
+                    pass
+            else:
+                self._uncertain_startup_tasks.append(task)
+            stop_task.cancel()
+            raise C2HostServiceError(f"stop requested during {label}; owner retained")
+        stop_task.cancel()
         if not done:
             # Do not cancel a handler coroutine that may own a cache or be
             # awaiting noninterruptible assigned-stage compute. Keep it and all
             # model owners until the supervising process actually reaps us.
             self._uncertain_startup_tasks.append(task)
             raise C2HostServiceError(f"shared {label} deadline elapsed; owner retained")
-        return task.result()
+        result = task.result()
+        if label == "resident assigned-stage load":
+            self._runtime = result
+        self._check_startup_stop()
+        return result
+
+    async def _wait_startup(self, awaitable, label):
+        self._check_startup_stop()
+        task = asyncio.create_task(awaitable)
+        stop_task = asyncio.create_task(self._stop_event.wait())
+        done, _pending = await asyncio.wait(
+            {task, stop_task}, timeout=STARTUP_STAGE_SECONDS,
+            return_when=asyncio.FIRST_COMPLETED)
+        if stop_task in done or self._stop_requested.is_set():
+            if task.done():
+                try:
+                    result = task.result()
+                    if label == "resident assigned-stage load":
+                        self._runtime = result
+                except BaseException as error:
+                    self._runtime = getattr(error, "c2_host_runtime_owner", self._runtime)
+                    raise
+            else:
+                self._uncertain_startup_tasks.append(task)
+            stop_task.cancel()
+            raise C2HostServiceError(f"stop requested during {label}; owner retained")
+        stop_task.cancel()
+        if task not in done:
+            self._uncertain_startup_tasks.append(task)
+            raise C2HostServiceError(f"{label} startup deadline elapsed; owner retained")
+        try:
+            result = task.result()
+        except BaseException as error:
+            self._runtime = getattr(error, "c2_host_runtime_owner", self._runtime)
+            raise
+        if label == "resident assigned-stage load":
+            self._runtime = result
+        self._check_startup_stop()
+        return result
+
+    def _check_startup_stop(self):
+        with self._lifecycle_lock:
+            if self._stop_requested.is_set():
+                self._ready = False
+                raise C2HostServiceError("stop requested during host startup; readiness denied")
 
     async def _connect_worker(self, certificate, private_key, ca, host, port, clock):
         from steamboat_security.channel_tls import OwnedWorkerTLS
         owner = OwnedWorkerTLS.connect(worker_certificate_pem=certificate,
             worker_private_key_pem=private_key, gateway_ca_pem=ca,
             endpoint_host=host, endpoint_port=port, clock=clock)
-        if not owner.handshake_complete:
-            owner.close()
-            raise C2HostServiceError("owned TLS client could not initialize its handshake")
+        channel = {"tls": owner, "socket": None, "driver": None,
+                   "stream": None, "rpc": None}
+        self._channels.append(channel)
+        self._check_startup_stop()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + MAX_BOOTSTRAP_SECONDS
-        try:
-            infos = await asyncio.wait_for(loop.getaddrinfo(
-                host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP),
-                timeout=max(0.001, deadline - loop.time()))
-        except BaseException:
-            owner.close()
-            raise
+        infos = await self._bounded_startup_operation(
+            loop.getaddrinfo(host, port, type=socket.SOCK_STREAM,
+                             proto=socket.IPPROTO_TCP), deadline,
+            "signed gateway DNS lookup")
         last_error = None
         for family, socktype, proto, _canon, address in infos[:8]:
+            self._check_startup_stop()
             remaining = deadline - loop.time()
             if remaining <= 0:
                 break
             connected = socket.socket(family, socktype, proto)
+            channel["socket"] = connected
             connected.setblocking(False)
             try:
-                await asyncio.wait_for(loop.sock_connect(connected, address),
-                                       timeout=remaining)
-                return owner, connected
-            except BaseException as error:
-                connected.close()
+                task = asyncio.create_task(loop.sock_connect(connected, address))
+                stop_task = asyncio.create_task(self._stop_event.wait())
+                done, _ = await asyncio.wait({task, stop_task}, timeout=remaining,
+                    return_when=asyncio.FIRST_COMPLETED)
+                if stop_task in done or self._stop_requested.is_set():
+                    if not task.done():
+                        self._uncertain_startup_tasks.append(task)
+                    stop_task.cancel()
+                    raise C2HostServiceError("stop requested during gateway connect; socket retained")
+                stop_task.cancel()
+                if task not in done:
+                    self._uncertain_startup_tasks.append(task)
+                    raise C2HostServiceError("gateway connect deadline elapsed; socket retained")
+                task.result()
+                self._check_startup_stop()
+                return channel
+            except asyncio.CancelledError:
+                raise
+            except OSError as error:
+                if self._stop_requested.is_set():
+                    raise C2HostServiceError(
+                        "stop requested during gateway connect; socket retained") from error
+                try:
+                    connected.close()
+                except OSError:
+                    raise C2HostServiceError("failed gateway socket close is uncertain") from error
+                if connected.fileno() != -1:
+                    raise C2HostServiceError("failed gateway socket close is uncertain") from error
+                channel["socket"] = None
                 last_error = error
-        owner.close()
         raise C2HostServiceError("signed gateway endpoint could not be reached") from last_error
+
+    def _create_driver(self, channel, parent_boot_id):
+        # The raw socket and TLS owner remain in _channels if construction fails.
+        driver = ChannelSocket(channel["socket"], channel["tls"], self._traffic,
+            role="host", boot_id=parent_boot_id)
+        channel["driver"] = driver
+        channel["socket"] = None
+        return driver
 
     async def _pump_tls(self, driver):
         deadline = time.monotonic() + MAX_BOOTSTRAP_SECONDS
         while time.monotonic() < deadline:
+            self._check_startup_stop()
             driver.pump()
             tls = driver._tls
             if (driver.tls_handshake_complete
@@ -422,6 +574,7 @@ class C2HostService:
     async def _pump_hello(self, stream):
         deadline = time.monotonic() + MAX_BOOTSTRAP_SECONDS
         while time.monotonic() < deadline:
+            self._check_startup_stop()
             stream.pump()
             if stream.transport_bootstrap_complete:
                 return
@@ -429,36 +582,69 @@ class C2HostService:
         raise C2HostServiceError("bounded worker HELLO deadline elapsed")
 
     def _install_signal_handlers(self):
-        for signum in (signal.SIGINT, signal.SIGTERM):
+        if threading.current_thread() is threading.main_thread():
+            try:
+                self._previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+                signal.signal(signal.SIGTERM, self.request_stop)
+            except (ValueError, OSError):
+                self._previous_sigterm_handler = None
+        for signum in (signal.SIGINT,):
             try:
                 self._loop.add_signal_handler(signum, self.request_stop)
             except (NotImplementedError, RuntimeError, ValueError):
                 continue
 
+    def _restore_sigterm_handler(self):
+        previous = self._previous_sigterm_handler
+        if previous is not None and threading.current_thread() is threading.main_thread():
+            try:
+                signal.signal(signal.SIGTERM, previous)
+            except (ValueError, OSError):
+                pass
+            self._previous_sigterm_handler = None
+
     def request_stop(self):
         """Fence the event loop promptly; bounded owner cleanup runs in-loop."""
-        if self._loop is not None and self._stop_event is not None:
-            self._loop.call_soon_threadsafe(self._stop_event.set)
+        self._stop_requested.set()
+        if self._lifecycle_lock.acquire(blocking=False):
+            try:
+                self._ready = False
+            finally:
+                self._lifecycle_lock.release()
+        if (self._loop is not None and self._stop_event is not None
+                and self._wake_lock.acquire(blocking=False)):
+            try:
+                if not self._wake_scheduled:
+                    self._wake_scheduled = True
+                    try:
+                        self._loop.call_soon_threadsafe(self._stop_event.set)
+                    except RuntimeError:
+                        pass
+            finally:
+                self._wake_lock.release()
 
     def run(self):
-        if not self._ready:
+        if not self._ready and not self._stop_requested.is_set():
             raise C2HostServiceError("fixed host service cannot run before complete readiness")
         try:
             self._runner.run(self._async_run())
         finally:
-            try:
-                self._runner.close()
-            except BaseException as error:
-                self._close_error = error
-                raise C2HostServiceError("host event-loop shutdown is uncertain") from error
+            if self._shutdown_proven:
+                try:
+                    self._runner.close()
+                except BaseException as error:
+                    self._close_error = error
+                    raise C2HostServiceError("host event-loop shutdown is uncertain") from error
 
     async def _async_run(self):
-        for channel in self._channels:
-            channel["task"] = asyncio.create_task(channel["rpc"].run())
-        health = asyncio.create_task(self._health_loop())
-        stop = asyncio.create_task(self._stop_event.wait())
-        tasks = [item["task"] for item in self._channels] + [health, stop]
+        tasks = []
         try:
+            self._check_startup_stop()
+            for channel in self._channels:
+                channel["task"] = asyncio.create_task(channel["rpc"].run())
+            health = asyncio.create_task(self._health_loop())
+            stop = asyncio.create_task(self._stop_event.wait())
+            tasks = [item["task"] for item in self._channels] + [health, stop]
             done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if stop not in done:
                 for task in done:
@@ -486,43 +672,90 @@ class C2HostService:
             return
         self._stopping = True
         self._ready = False
-        deadline = asyncio.get_running_loop().time() + 5.0
+        if self._stop_event is not None:
+            self._stop_event.set()
+        deadline = asyncio.get_running_loop().time() + STOP_CLEANUP_SECONDS
+        # Fence C1 before retiring any transports or waiting on admitted calls.
+        if self._runtime is not None:
+            for bridge in tuple(self._runtime._bridges.values()):
+                bridge.request_runtime_invalidation("C2 host service is stopping")
         for channel in self._channels:
             rpc = channel.get("rpc")
             if rpc is not None:
                 rpc.stop()
-            stream = channel.get("stream")
-            if stream is not None:
-                stream.close()
+            elif channel.get("stream") is not None:
+                channel["stream"].close()
+            elif channel.get("driver") is not None:
+                channel["driver"].close()
+            else:
+                raw_socket = channel.get("socket")
+                if raw_socket is not None:
+                    raw_socket.close()
+                    if raw_socket.fileno() != -1:
+                        raise C2HostServiceError("raw gateway socket close is uncertain")
+                    channel["socket"] = None
+                tls = channel.get("tls")
+                if tls is not None:
+                    tls.close()
+                    if not getattr(tls, "_closed", False):
+                        raise C2HostServiceError("TLS owner close is uncertain")
             driver = channel.get("driver")
             if driver is not None:
-                driver.close()
-            tls = channel.get("tls")
-            if tls is not None:
-                tls.close()
+                if driver._socket.fileno() != -1:
+                    raise C2HostServiceError("owned gateway socket close is uncertain")
+                if not getattr(driver._tls, "_closed", False):
+                    raise C2HostServiceError("owned TLS transport close is uncertain")
         current = asyncio.current_task()
-        pending = [task for task in tasks if task is not current and not task.done()]
-        for task in pending:
-            task.cancel()
-        if pending:
-            done, still = await asyncio.wait(
-                pending, timeout=max(0.0, deadline - asyncio.get_running_loop().time()))
-            if still:
-                self._close_error = C2HostServiceError("worker task cleanup deadline elapsed")
-                return
+        run_tasks = {channel.get("task") for channel in self._channels
+                     if channel.get("task") is not None}
+        run_tasks.update(task for task in tasks if task is not current)
+        while True:
+            pending = {task for task in run_tasks if not task.done()}
+            for channel in self._channels:
+                rpc = channel.get("rpc")
+                if rpc is None:
+                    continue
+                if rpc._stuck_captures:
+                    raise C2HostServiceError("RPC capture retirement is uncertain; retain owners")
+                pending.update(task for task in rpc._active | rpc._retained_releases
+                               if not task.done())
+            if not pending:
+                break
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise C2HostServiceError("worker RPC cleanup deadline elapsed; retain owners")
+            done, _still = await asyncio.wait(
+                pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 if task.cancelled():
-                    continue
+                    raise C2HostServiceError("worker task cancellation left cleanup uncertain")
                 try:
                     task.result()
                 except BaseException as error:
-                    self._close_error = self._close_error or error
+                    if task in run_tasks:
+                        continue
+                    raise C2HostServiceError("admitted RPC did not retire cleanly") from error
+        for channel in self._channels:
+            rpc = channel.get("rpc")
+            if rpc is not None and (rpc._stuck_captures or rpc._active
+                    or rpc._retained_releases or rpc._data_count or rpc._control_count
+                    or rpc._data_bytes or rpc._control_bytes):
+                raise C2HostServiceError("RPC admission owners remain after cleanup")
+        await asyncio.sleep(0)
+        for channel in self._channels:
+            rpc = channel.get("rpc")
+            if rpc is not None and (rpc._stuck_captures or rpc._active
+                    or rpc._retained_releases or rpc._data_count or rpc._control_count
+                    or rpc._data_bytes or rpc._control_bytes):
+                raise C2HostServiceError("RPC done callbacks did not confirm retirement")
         try:
             if self._runtime is not None:
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
                     raise C2HostServiceError("shared host cleanup deadline elapsed")
-                await self._runtime.close(grace_seconds=min(5.0, remaining))
+                closed = await self._runtime.close(grace_seconds=min(5.0, remaining))
+                if closed is not True:
+                    raise C2HostServiceError("resident runtime did not confirm full cleanup")
             if self._child_pins is not None and self._child_pins._state == "open":
                 self._child_pins.close()
             if self._binding_lease is not None:
@@ -532,8 +765,6 @@ class C2HostService:
                 self._child_binding.close()
             if self._channel_policy_owner is not None:
                 self._channel_policy_owner.close()
-            if self._traffic is not None:
-                self._traffic.close()
             if self._clock_bridge is not None and not self._clock_bridge.stop():
                 raise C2HostServiceError("parent clock bridge close is uncertain")
         except BaseException as error:
@@ -541,6 +772,8 @@ class C2HostService:
             raise C2HostServiceError("host owner shutdown is uncertain; retain owners until process reap") from error
         if self._close_error is not None:
             raise C2HostServiceError("host task shutdown is uncertain; retain owners until process reap") from self._close_error
+        self._shutdown_proven = True
+        self._restore_sigterm_handler()
 
 
 def start(config_path):
