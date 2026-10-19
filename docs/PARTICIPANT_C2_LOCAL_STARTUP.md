@@ -36,8 +36,10 @@ writing the local claim.
 The personal-coordinator selected profile does not yet contain catalog digest,
 catalog-key, or assignment-document-digest anchors. Coordinator startup checks
 its verified documents against its own live pin and the selected model,
-principal, assignment ID, component, role, and boot, but cannot claim the same
-selected-scope digest binding as the host group until that profile is extended.
+principal, role, and boot. The selected profile also contains no coordinator
+assignment-ID anchor: its assignment identity is checked only against the live
+pin's own record. It therefore cannot claim selected-scope catalog or assignment
+digest binding until those anchors are added to the profile.
 
 For each attempt, owner consent is durably advanced first and held through
 selected raw-head validation, local single-use claim, and publication of every

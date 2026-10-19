@@ -356,9 +356,13 @@ class C2LocalStartupNativeTests(unittest.TestCase):
                                          fx.selected_scope["catalog_sha256"])
                         self.assertNotEqual(entry["assignment_sha256"],
                                             scope_component["assignment_sha256"])
-                    else:
+                    elif variant == "catalog_key":
                         self.assertNotEqual(hashlib.sha256(fx.verifier.public_key).hexdigest(),
                                             fx.selected_scope["catalog_public_key_sha256"])
+                    else:
+                        self.assertEqual(len(fx.pin.record["assignments"]), 2)
+                        self.assertNotEqual(fx.pin.record["assignments"][1]["component"],
+                                            scope_component["component"])
 
                     # Make the later backend-config comparison fail too. The
                     # selected signed artifact error must be reported first.
