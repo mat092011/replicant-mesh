@@ -971,4 +971,8 @@ recorded in the [component report](experiments/2026-10-19-participant-c2-compone
 This is not a full repository or C1 regression. Component passes do not close
 any C2 gate: fixed-role controller/readiness, deployed two-device routing,
 aggregate physical-resource enforcement and CT-11/CT-13 remain outstanding.
-C2.1–C2.6 stay open; C3 and research P0–P8 statuses are unchanged.
+C2.1–C2.6 stay open; C3 and research P0–P8 statuses are unchanged. The
+component inventory predates the exact-catalog, raw-catalog-key and
+assignment-hash selected-pin fixes, which remain pending review and native
+validation. The component report records the focused startup, gateway, child
+configuration and profile attempts, including retained fixture failures.

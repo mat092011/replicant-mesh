@@ -812,7 +812,8 @@ regression. The newly integrated focused components also have separate native
 evidence: local startup passed 71 tests, actual loopback gateway service 11,
 per-handler bounds 46, fixed-role child configuration 11, and startup profile
 84, all with zero skips. These focused results are included in component 32's
-inventory; they do not demonstrate an actual fixed-role worker/coordinator,
+selected modules, but were separate executions from the combined inventory;
+they do not demonstrate an actual fixed-role worker/coordinator,
 controller readiness, deployed or WAN gateway, aggregate physical-resource
 enforcement, or a laptop-to-ZimaBlade routed C2 request. The gateway result is
 loopback-only and routes through real TLS, HELLO, and C1 ingress fixtures.
@@ -820,9 +821,30 @@ loopback-only and routes through real TLS, HELLO, and C1 ingress fixtures.
 Earlier failed or invalid runs remain part of the record and are not counted as
 successes. Component 31 supersedes the earlier 770-case component 30 inventory;
 the startup, gateway and child-configuration fixture failures remain in their
-focused histories. Component 32 is component-level evidence, not phase
-acceptance. C2.1–C2.6 and the C2 exit gate remain open, C3 is unchanged, and no
-supported GPU or pooled-GPU performance result is established. Cohort SDK and
-host model composition remain separate incomplete work. Shared physical CPU,
-RAM, disk, traffic and session-queue enforcement and CT-11/CT-13 split-host
+focused histories. Their compact run record is:
+
+| Focused run | Result | Retained cause and log SHA-256 |
+|---|---|---|
+| Local startup native1 | 68 tests: 67 passed, 1 failed | Wrong-owner fixture; `04a72802a0f0b29dae7aa28978a31160ee64bc6222b1d29adf689ec05e043e60` |
+| Local startup native2 | 69 inventoried; 68 completed passes before parent aborted the run | Final fixture deadlocked; `116bdff5c81909bb3a325133432193a3298bca40f25e863d4f40a04d0cfba0a1` |
+| Local startup native3 | 71 passed, zero skips in 3.832 s | Source head `2a2827e2e33b0908db4c97c4740ce941c485099b`, digest `e7ff354bbf1320a1be58de1aa19be773ff0be363d95dea26d197cd38f2df8f1e`; `6cef9657f3bcedaa3cd429e8507ee247826ca76dd7b99ab148e41f4965dba82e` |
+| Gateway native1 | 7 setup errors | Wrong fixture method name; `69827757ede271fa1452735940e16ea918f6dbb4b98bc69688198dbb1d404670` |
+| Gateway native2 | 6 passed, 4 errors | Worker HELLO constructed before TLS completed; `f85130eac8c780643ca0d2a0a3424ca1e537f1cadf13ba7277a281500b5a23` |
+| Gateway native3 | 8 passed, 2 errors | Coordinator HELLO constructed before TLS completed; `85e9004804c98f6ca51f0cd43998f0b7a786913d521e3dd6eff9c06f6ae4a5b0` |
+| Gateway native4 | 8 passed, 3 failed | Missing coordinator-client pump and fixture accepted-owner count; `1239f1380d8863616ecaf290feaca52286a06df5b7648697cfb80ca2815f752f` |
+| Gateway native5 | 11 passed, zero skips in 2.367 s | Source head `1e22177b1121480cb9b5d284242faa9be939556b`, digest `21a30febe48127bdadbffb924cf8b7ded7792ca4a9e85cba9b38909af7dceac4`; `90096569d0b7cc74e5b8c23af1a2da8cfc32cd3fa2742d2a2542a3531813e100` |
+| Child config native1 | 6 passed, 3 errors | Wrong-host fixture; `529ac5b5bacad6d87d50e170c4c188de0ae1a66170c997c9c01e1ccda14c0933` |
+| Child config native2 | 10 passed, 1 error | Obsolete getter fixture; `815d9d9b2cecfdaea79ff0810213be0784c1d537927835c5e9cab56c7eb2aa32` |
+| Child config native3 | 11 passed, zero skips in 0.703 s | Source head `d108d137db8f3423b58b637c91536199108804c5`, digest `224957a5656db89923d86070505fce7835130ef332e0f682e4281b282a91b900`; `500be3e469afe297421b5be84979103d57b28988519843b0e3bc1455f5030905` |
+| Startup profile native1 | 82 passed, 1 error | Header negative fixture expected `StorageError`; `560b614120e23abdefff5a0a7016c4c1ffea711ebce4fac38d5c424899e61ad9` |
+| Startup profile native2 | 84 passed, zero skips in 4.577 s | Source head `dea4dfd45ae9562243ae3c678d031afa8860730a`, digest `08044732e111785e7d2f7fa6cd6e475fff1e09ee54eeb068d325ac75a40d0a16`; `56bdebac263029f43d8b3d7791b014d4dcf1e395d1675828a73f91624947e188` |
+
+The focused successes are distinct runs from the combined 872-test inventory.
+That inventory predates the exact-catalog, raw-catalog-key and assignment-hash
+selected-pin fixes; those fixes are still pending review and native validation.
+Component 32 is component-level evidence, not phase acceptance. C2.1–C2.6 and
+the C2 exit gate remain open, C3 is unchanged, and no supported GPU or
+pooled-GPU performance result is established. Cohort SDK and host model
+composition remain separate incomplete work. Shared physical CPU, RAM, disk,
+traffic and session-queue enforcement and CT-11/CT-13 split-host
 numerical/lifecycle acceptance are still required.
