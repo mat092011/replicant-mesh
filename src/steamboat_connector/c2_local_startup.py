@@ -88,6 +88,9 @@ class C2LocalStartup:
             raise ValueError("READY timeout must be within the backend bound")
         self._root, self._owner, self._claims = root_store, owner_store, claim_store
         self._backend, self._clock = backend, clock
+        # C2's trusted wall/monotonic authority is separate from the backend's
+        # legacy monotonic deadline callable.
+        self._backend.bind_authority_clock(clock)
         self._uid, self._account, self._device = expected_uid, account_id, device_id
         self._references, self._policies = dict(references), dict(policies)
         self._timeout = timeout_seconds

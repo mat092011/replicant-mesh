@@ -59,6 +59,8 @@ class _OwnedProcess:
     artifact_pin: object = None
     pin_cleanup: object = None
     group_removed: bool = False
+    clock_bridge: object = None
+    clock_bridge_unknown_spawn: bool = False
 
 
 @dataclass
@@ -144,6 +146,9 @@ class ProcessRoleBackend:
         self.state_directory = Path(state_directory)
         self.cgroup = cgroup or CgroupV2Controller()
         self.clock = clock
+        # ``clock`` remains the monotonic deadline callable; C2 time authority
+        # is held separately and only bound by the trusted startup adapter.
+        self._authority_clock = None
         self._lock = threading.RLock()
         self._owned = {}
         # This map is intentionally process-local. A persisted JSON config is
@@ -167,13 +172,29 @@ class ProcessRoleBackend:
         return self.state_directory / f"{role}-runtime.json"
 
     @staticmethod
-    def _encode_config(role, config, policy=None, pin_metadata=None):
+    def _encode_config(role, config, policy=None, pin_metadata=None,
+                       clock_handoff=None):
         document = {"version": 1, "role": role, "config": config}
         if policy is not None:
             document["policy"] = policy
         if pin_metadata is not None:
             document["artifact_pin"] = pin_metadata
+        if clock_handoff is not None:
+            document["clock_handoff"] = clock_handoff
         return json_bytes(document, maximum_bytes=ROLE_CONFIG_MAX_BYTES)
+
+    def bind_authority_clock(self, clock):
+        """Bind the exact C2 Clock without changing the monotonic callable."""
+        from steamboat_security.clock import Clock
+        if type(clock) is not Clock:
+            raise TypeError("C2 authority requires the exact Clock owner")
+        with self._lock:
+            if self._authority_clock is clock:
+                return None
+            if self._authority_clock is not None or self._owned or self._start_intents:
+                raise ResourceError("C2 authority Clock cannot change while bound or live")
+            self._authority_clock = clock
+        return None
 
     def configure_role(self, role, config):
         """Persist bounded opaque role settings with fixed role metadata."""
@@ -353,7 +374,11 @@ class ProcessRoleBackend:
                 or set(document) not in ({"version", "role", "config"},
                                         {"version", "role", "config", "policy"},
                                         {"version", "role", "config", "artifact_pin"},
-                                        {"version", "role", "config", "policy", "artifact_pin"})
+                                        {"version", "role", "config", "policy", "artifact_pin"},
+                                        {"version", "role", "config", "clock_handoff"},
+                                        {"version", "role", "config", "policy", "clock_handoff"},
+                                        {"version", "role", "config", "artifact_pin", "clock_handoff"},
+                                        {"version", "role", "config", "policy", "artifact_pin", "clock_handoff"})
                 or type(document.get("version")) is not int
                 or document["version"] != 1 or document.get("role") != role
                 or type(document.get("config")) is not dict):
@@ -595,6 +620,23 @@ class ProcessRoleBackend:
                 owned.term_sent = True
 
     @staticmethod
+    def _clock_bridge_reclaimed(owned):
+        bridge = owned.clock_bridge
+        if bridge is None:
+            return True
+        # The caller has proved both actual leader reap and empty cgroup before
+        # invoking this. Clock cleanup is independent and remains retained if
+        # the provider thread or any endpoint close is uncertain.
+        try:
+            bridge.finalize_stop()
+            if owned.process is None or not owned.leader_reaped or not owned.group_removed:
+                return False
+            bridge.confirm_child_reaped(owned.process.pid)
+            return bridge.quiescent is True
+        except Exception:
+            return False
+
+    @staticmethod
     def _poll_owned(owned):
         """Serialize every leader reap with process-group signaling."""
         with owned.escalation_lock:
@@ -735,6 +777,8 @@ class ProcessRoleBackend:
         process = None
         owned = None
         pending = None
+        clock_bridge = None
+        clock_child_fd = None
         try:
             if self._cancelled(intent, cancel_event):
                 return None
@@ -765,6 +809,23 @@ class ProcessRoleBackend:
                         != expected_role_config_sha256)
                     or document.get("config") != role_config):
                 return None
+            # Only the exact closed C2 child schema opts into the clock
+            # authority handoff. Legacy role documents retain their old path.
+            c2_profile = False
+            if document["config"].get("profile") == "c2-local-compute-v2":
+                from steamboat_connector.c2_child_config import parse_c2_child_config
+                from steamboat_security.errors import SecurityError
+                try:
+                    child_config = parse_c2_child_config(document["config"])
+                except (SecurityError, TypeError, ValueError):
+                    return None
+                if child_config.role != role:
+                    return None
+                c2_profile = True
+            with self._lock:
+                authority_clock = self._authority_clock
+            if c2_profile and authority_clock is None:
+                return None
             if (type(document) is not dict
                     or ("artifact_pin" in document) != (pin_metadata is not None)
                     or (pin_metadata is not None
@@ -781,6 +842,10 @@ class ProcessRoleBackend:
             if self._cancelled(intent, cancel_event):
                 return None
             read_fd, write_fd = os.pipe()
+            if c2_profile:
+                from steamboat_connector.clock_bridge import OwnedClockBridge
+                clock_bridge = OwnedClockBridge(authority_clock)
+                clock_child_fd = clock_bridge.begin_spawn()
             bootstrap = Path(__file__).with_name("process_bootstrap.py").resolve()
             command = [sys.executable, "-I", "-S", os.fspath(bootstrap), role,
                        os.fspath(self._config_path(role)), str(read_fd)]
@@ -791,6 +856,8 @@ class ProcessRoleBackend:
                         or self._start_intents.get(role) is not intent):
                     return None
                 inherited_fds = [read_fd]
+                if clock_child_fd is not None:
+                    inherited_fds.append(clock_child_fd)
                 if pin_metadata is not None:
                     inherited_fds.extend((pin_metadata["global_fd"],
                                           pin_metadata["role_fd"]))
@@ -808,7 +875,8 @@ class ProcessRoleBackend:
                     return None
                 owned = _OwnedProcess(role, None, Path(group), self.clock(),
                                       start_intent=intent, artifact_pin=pin,
-                                      pin_cleanup=self._pin_cleanups.get(role))
+                    pin_cleanup=self._pin_cleanups.get(role),
+                    clock_bridge=clock_bridge)
                 self._owned[role] = owned
                 if (self._cancelled(intent, cancel_event)
                         or self._start_intents.get(role) is not intent
@@ -828,11 +896,36 @@ class ProcessRoleBackend:
                         pass_fds=tuple(inherited_fds),
                         start_new_session=True, env=dict(_CHILD_ENV), bufsize=0)
                 except BaseException:
-                    if self._owned.get(role) is owned:
-                        del self._owned[role]
-                    owned = None
+                    # Once Popen has been entered, a raised exception does
+                    # not prove that no child was created. Preserve this
+                    # owner and its bridge lease as an unknown outcome.
+                    if clock_bridge is not None:
+                        owned.clock_bridge_unknown_spawn = True
+                        owned.stopping = True
+                        clock_bridge.stop()
+                        self._pin_release_blocked.add(role)
+                    else:
+                        if self._owned.get(role) is owned:
+                            del self._owned[role]
+                        owned = None
                     raise
                 owned.process = process
+                if clock_bridge is not None:
+                    try:
+                        clock_metadata = clock_bridge.bind_child(process.pid, os.getuid())
+                    except Exception:
+                        clock_bridge.stop()
+                        owned.stopping = True
+                        self._pin_release_blocked.add(role)
+                        raise
+                    if clock_metadata is not None:
+                        # The child remains behind the gate until this
+                        # bounded outer document is durably replaced.
+                        atomic_write_private(self._config_path(role),
+                            self._encode_config(role, role_config, policy,
+                                pin_metadata=pin_metadata,
+                                clock_handoff=clock_metadata))
+                    clock_bridge.close_parent_child_copy()
                 if intent.cancelled.is_set() or (
                         cancel_event is not None and cancel_event.is_set()):
                     self._cancel_intent(intent)
@@ -881,7 +974,12 @@ class ProcessRoleBackend:
                 group = getattr(error, "retained_group", None)
                 if group is not None:
                     intent.group = Path(group)
-            if owned is not None and not intent.final_stop_requested:
+            if (owned is not None and owned.clock_bridge_unknown_spawn):
+                # No child identity or empty-group observation can discharge
+                # an ambiguous Popen outcome. Keep the bounded strong owner.
+                if owned.clock_bridge is not None:
+                    owned.clock_bridge.stop()
+            elif owned is not None and not intent.final_stop_requested:
                 self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
             elif owned is None and process is not None:
                 try:
@@ -894,6 +992,10 @@ class ProcessRoleBackend:
                     pass
             return None
         finally:
+            if clock_bridge is not None and process is not None:
+                # Popen's inherited endpoint is ours to consume even when
+                # metadata publication or cgroup attachment subsequently fails.
+                clock_bridge.close_parent_child_copy()
             if read_fd >= 0:
                 fd, read_fd = read_fd, -1
                 try:
@@ -906,6 +1008,11 @@ class ProcessRoleBackend:
                     os.close(fd)
                 except OSError:
                     pass
+            if clock_bridge is not None and process is None and not (
+                    owned is not None and owned.clock_bridge_unknown_spawn):
+                # This branch is reachable only before Popen was entered.
+                if not clock_bridge.cancel_spawn_without_child():
+                    clock_bridge.stop()
             intent.finished = True
             if owned is not None:
                 # Published process ownership now carries the cgroup path,
@@ -1109,6 +1216,9 @@ class ProcessRoleBackend:
                 self._lock.release()
 
             # Signal every independent process before waiting on any one of them.
+            for _, owned in active:
+                if owned.clock_bridge is not None:
+                    owned.clock_bridge.stop()
             if send_term:
                 for _, owned in active:
                     self._signal_owned_term(owned)
@@ -1155,6 +1265,8 @@ class ProcessRoleBackend:
                                 if reclaimed and not owned.group_removed:
                                     reclaimed = self._remove_empty_group(owned.group)
                                     owned.group_removed = reclaimed
+                                if reclaimed and owned.clock_bridge is not None:
+                                    reclaimed = self._clock_bridge_reclaimed(owned)
                                 if reclaimed and owned.artifact_pin is None:
                                     del self._owned[role]
                                     owned.reclaimed = True
@@ -1186,6 +1298,8 @@ class ProcessRoleBackend:
                                 reclaimed = (self._owned.get(role) is owned
                                              and owned.leader_reaped
                                              and owned.group_removed)
+                                if reclaimed and owned.clock_bridge is not None:
+                                    reclaimed = self._clock_bridge_reclaimed(owned)
                                 if reclaimed:
                                     pin_entry = self._pinned_roles.get(role)
                                     if pin_entry is not None and pin_entry[0] is owned.artifact_pin:
@@ -1359,6 +1473,8 @@ class ProcessRoleBackend:
             owned = self._owned.get(role)
             generation = intent
             if owned is not None:
+                if owned.clock_bridge is not None:
+                    owned.clock_bridge.stop()
                 generation = owned.start_intent
                 deadline = requested_deadline
                 term_deadline = requested_term
