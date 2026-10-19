@@ -1,13 +1,21 @@
 import os
+import json
 from pathlib import Path
+import shutil
+import select
 import signal
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
+import threading
 import time
 import unittest
 from unittest import mock
 
-from steamboat_connector.process_supervisor import ProcessRoleBackend
+from steamboat_connector.process_supervisor import (ProcessRoleBackend,
+                                                     ROLE_CONFIG_MAX_BYTES,
+                                                     READY_LINE_MAX)
 
 
 def sample_policy():
@@ -38,24 +46,38 @@ class FakeCgroup:
     def __init__(self, root):
         self.root = Path(root)
         self.group = None
+        self.groups = []
         self.attached = False
         self.fail_attach = False
+        self.create_entered = None
+        self.create_release = None
+        self.attach_entered = None
+        self.attach_release = None
 
     def create_group(self, name, policy, role):
+        if self.create_entered is not None:
+            self.create_entered.set()
+            self.create_release.wait(2)
         self.group = self.root / name
         self.group.mkdir()
-        (self.group / "cgroup.events").write_text("populated 1\n", encoding="ascii")
+        (self.group / "cgroup.events").write_text("populated 0\n", encoding="ascii")
         (self.group / "cgroup.procs").write_text("", encoding="ascii")
+        self.groups.append(self.group)
         return self.group
 
     def attach_child(self, group, process):
+        if self.attach_entered is not None:
+            self.attach_entered.set()
+            self.attach_release.wait(2)
         if self.fail_attach:
             raise OSError("attach refused")
         self.attached = True
+        (Path(group) / "cgroup.events").write_text("populated 1\n", encoding="ascii")
         (Path(group) / "cgroup.procs").write_text(str(process.pid), encoding="ascii")
 
-    def set_empty(self):
-        (self.group / "cgroup.events").write_text("populated 0\n", encoding="ascii")
+    def set_empty(self, group=None):
+        (Path(group or self.group) / "cgroup.events").write_text(
+            "populated 0\n", encoding="ascii")
 
 
 class FakeProcess:
@@ -63,8 +85,10 @@ class FakeProcess:
 
     def __init__(self, args, kwargs, cgroup):
         self.args = args
+        self.pid = 43121 + (1 if args[4] == "coordinator" else 0)
         self.kwargs = kwargs
         self.cgroup = cgroup
+        self.group = cgroup.group
         self.returncode = None
         self.stdout = object()
 
@@ -82,7 +106,7 @@ class FakeProcess:
             self.returncode = 0
         if sig == 9:
             if kill_descendants:
-                self.cgroup.set_empty()
+                self.cgroup.set_empty(self.group)
 
 
 class ProcessSupervisorTests(unittest.TestCase):
@@ -90,10 +114,19 @@ class ProcessSupervisorTests(unittest.TestCase):
         platform_patch = mock.patch("steamboat_connector.process_supervisor.sys.platform", "linux")
         platform_patch.start()
         self.addCleanup(platform_patch.stop)
+        def write_private(path, data):
+            Path(path).write_bytes(data)
+            os.chmod(path, 0o600)
         storage_patch = mock.patch("steamboat_connector.process_supervisor.atomic_write_private",
-                                   side_effect=lambda path, data: Path(path).write_bytes(data))
+                                   side_effect=write_private)
         storage_patch.start()
         self.addCleanup(storage_patch.stop)
+        reader_patch = mock.patch(
+            "steamboat_connector.process_supervisor.read_private_json",
+            side_effect=lambda path, **kwargs: json.loads(Path(path).read_text(
+                encoding="utf-8")))
+        reader_patch.start()
+        self.addCleanup(reader_patch.stop)
         self.readiness_patch = mock.patch.object(
             ProcessRoleBackend, "_read_ready",
             return_value=True)
@@ -112,6 +145,8 @@ class ProcessSupervisorTests(unittest.TestCase):
         os.chmod(self.temp.name, 0o700)
         self.cgroup = FakeCgroup(self.temp.name)
         self.backend = ProcessRoleBackend(self.temp.name, self.cgroup)
+        self.assertTrue(self.backend.configure_role("host", {"test_mode": True}))
+        self.assertTrue(self.backend.configure_role("coordinator", {"test_mode": True}))
 
     def tearDown(self):
         self.temp.cleanup()
@@ -146,9 +181,9 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertTrue(self.backend.start("host", sample_policy()))
         process = holder["process"]
         self.assertTrue(self.cgroup.attached)
-        self.assertEqual(process.args[1:5], ["-I", "-S", "-m",
-                                             "steamboat_connector.process_bootstrap"])
-        self.assertEqual(process.args[5], "host")
+        self.assertEqual(process.args[1:3], ["-I", "-S"])
+        self.assertEqual(Path(process.args[3]).name, "process_bootstrap.py")
+        self.assertEqual(process.args[4], "host")
         self.assertEqual(self.backend.status()["host"]["ready"], True)
         self.assertEqual(process.kwargs["stderr"], -3)  # subprocess.DEVNULL
 
@@ -176,6 +211,202 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertEqual(signals, [signal.SIGTERM, 9])
         self.assertEqual(self.backend.status(), {})
 
+    def test_multi_role_stop_signals_all_first_and_shares_one_deadline(self):
+        holder = {}
+
+        def spawn(*args, **kwargs):
+            process = FakeProcess(args[0], kwargs, self.cgroup)
+            holder[args[0][4]] = process
+            return process
+
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
+                        side_effect=spawn):
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            self.assertTrue(self.backend.start("coordinator", sample_policy()))
+        events = []
+        for process in holder.values():
+            original_wait = process.wait
+
+            def delayed_wait(timeout=None, *, _process=process, _original=original_wait):
+                events.append(("wait", _process.args[4]))
+                if _process.returncode is None and timeout and timeout > 0:
+                    time.sleep(timeout)
+                return _original(0)
+
+            process.wait = delayed_wait
+
+        def killpg(pid, sig):
+            process = next(item for item in holder.values() if item.pid == pid)
+            events.append(("signal", sig, process.args[4]))
+            if sig == 9:
+                process.on_signal(sig)
+
+        started = time.monotonic()
+        with mock.patch("steamboat_connector.process_supervisor.os.killpg",
+                        side_effect=killpg, create=True):
+            result = self.backend.stop(["host", "coordinator"], 0.2)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result, {"host": True, "coordinator": True}, f"events={events}")
+        self.assertLess(elapsed, 0.35)
+        first_wait = next(index for index, event in enumerate(events) if event[0] == "wait")
+        self.assertEqual([event[1] for event in events[:first_wait]],
+                         [signal.SIGTERM, signal.SIGTERM])
+
+    def test_duplicate_start_does_not_mutate_config_or_create_second_group(self):
+        holder, popen, killpg = self._spawn_patch()
+        original = (Path(self.temp.name) / "host-runtime.json").read_bytes()
+        with popen, killpg:
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            configured = (Path(self.temp.name) / "host-runtime.json").read_bytes()
+            self.assertFalse(self.backend.start("host", sample_policy()))
+            self.assertEqual((Path(self.temp.name) / "host-runtime.json").read_bytes(),
+                             configured)
+        self.assertEqual(len(self.cgroup.groups), 1)
+        self.assertEqual(len(holder), 1)
+        self.assertNotEqual((Path(self.temp.name) / "host-runtime.json").read_bytes(), original)
+
+    def test_stop_cancels_queued_start_before_any_spawn(self):
+        entered = threading.Event()
+        release = threading.Event()
+        self.cgroup.create_entered = entered
+        self.cgroup.create_release = release
+        spawned = mock.Mock()
+        result = {}
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen", spawned):
+            thread = threading.Thread(target=lambda: result.setdefault(
+                "started", self.backend.start("host", sample_policy())))
+            thread.start()
+            self.assertTrue(entered.wait(1))
+            self.assertFalse(self.backend.start("host", sample_policy()))
+            self.assertFalse(self.backend.stop(["host"], 1)["host"])
+            release.set()
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(result["started"])
+        spawned.assert_not_called()
+
+    def test_controller_cancel_event_cancels_before_and_during_queued_start(self):
+        cancelled = threading.Event()
+        cancelled.set()
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as spawn:
+            self.assertFalse(self.backend.start("host", sample_policy(),
+                                                cancel_event=cancelled))
+        spawn.assert_not_called()
+
+        cancelled.clear()
+        entered = threading.Event()
+        release = threading.Event()
+        self.cgroup.create_entered = entered
+        self.cgroup.create_release = release
+        outcome = {}
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as spawn:
+            thread = threading.Thread(target=lambda: outcome.setdefault(
+                "started", self.backend.start("host", sample_policy(),
+                                              cancel_event=cancelled)))
+            thread.start()
+            self.assertTrue(entered.wait(1))
+            cancelled.set()
+            release.set()
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(outcome["started"])
+        spawn.assert_not_called()
+
+    def test_request_stop_interrupts_attach_and_final_stop_reclaims(self):
+        holder, popen, _ = self._spawn_patch()
+        attach_entered = threading.Event()
+        attach_release = threading.Event()
+        self.cgroup.attach_entered = attach_entered
+        self.cgroup.attach_release = attach_release
+        outcome = {}
+        signals = []
+
+        def killpg(pid, sig):
+            signals.append(sig)
+            holder["process"].on_signal(sig)
+
+        with popen, mock.patch("steamboat_connector.process_supervisor.os.killpg",
+                              side_effect=killpg, create=True), mock.patch(
+                "steamboat_connector.process_supervisor.os.write",
+                return_value=1) as gate_write:
+            thread = threading.Thread(target=lambda: outcome.setdefault(
+                "started", self.backend.start("host", sample_policy())))
+            thread.start()
+            self.assertTrue(attach_entered.wait(1))
+            self.assertEqual(self.backend.request_stop(["host"]), {"host": True})
+            attach_release.set()
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+            self.assertFalse(outcome["started"])
+            gate_write.assert_not_called()
+            self.assertTrue(self.backend.stop(["host"], 0.2)["host"])
+        self.assertIn(9, signals)
+
+    def test_failed_startup_gate_write_reclaims_published_child(self):
+        holder, popen, killpg = self._spawn_patch()
+        with popen, killpg, mock.patch(
+                "steamboat_connector.process_supervisor.os.write",
+                side_effect=OSError("pipe write failed")):
+            self.assertFalse(self.backend.start("host", sample_policy()))
+        self.assertEqual(self.backend.status(), {})
+        self.assertTrue(ProcessRoleBackend._events_populated(self.cgroup.group))
+
+    def test_cancel_during_ready_wait_never_marks_role_ready(self):
+        holder, popen, _ = self._spawn_patch()
+        entered = threading.Event()
+        release = threading.Event()
+        caller_cancel = threading.Event()
+        signals = []
+
+        def wait_ready(process, timeout):
+            entered.set()
+            return release.wait(timeout)
+
+        def killpg(pid, sig):
+            signals.append(sig)
+            holder["process"].on_signal(sig)
+
+        outcome = {}
+        with popen, mock.patch.object(ProcessRoleBackend, "_read_ready",
+                                      side_effect=wait_ready), mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg",
+                side_effect=killpg, create=True):
+            thread = threading.Thread(target=lambda: outcome.setdefault(
+                "started", self.backend.start("host", sample_policy(),
+                                              cancel_event=caller_cancel)))
+            thread.start()
+            self.assertTrue(entered.wait(1))
+            caller_cancel.set()
+            release.set()
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(outcome["started"])
+        self.assertNotIn("host", self.backend.status())
+        self.assertIn(9, signals)
+
+    def test_configuration_is_bounded_role_scoped_and_required(self):
+        fresh = ProcessRoleBackend(self.temp.name, FakeCgroup(self.temp.name))
+        self.assertFalse(fresh.start("host", sample_policy()))
+        self.assertFalse(fresh.configure_role("consumer", {}))
+        self.assertFalse(fresh.configure_role("host", {"large": "x" * ROLE_CONFIG_MAX_BYTES}))
+        self.assertTrue(fresh.configure_role("host", {"manifest": "fixed"}))
+        self.assertFalse(fresh.configure_role("host", {"invalid": float("nan")}))
+
+    def test_invalid_stop_grace_fails_closed(self):
+        for value in (float("nan"), float("inf"), -1, True, "1"):
+            self.assertFalse(self.backend.stop(["host"], value)["host"])
+
+    def test_cgroup_population_parser_rejects_duplicate_unknown_and_bad_values(self):
+        path = Path(self.temp.name) / "probe"
+        path.mkdir()
+        events = path / "cgroup.events"
+        for value in ("populated 0\npopulated 1\n", "populated 0\nother 1\n",
+                      "populated maybe\n", "frozen 0\n"):
+            events.write_text(value, encoding="ascii")
+            self.assertFalse(ProcessRoleBackend._events_populated(path))
+        events.write_text("populated 0\nfrozen 0\n", encoding="ascii")
+        self.assertTrue(ProcessRoleBackend._events_populated(path))
+
     def test_exited_leader_with_live_descendant_keeps_ownership(self):
         holder, popen, _ = self._spawn_patch(kill_descendants=False)
         with popen:
@@ -186,6 +417,68 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertFalse(self.backend.stop(["host"], grace_seconds=0.05)["host"])
         self.assertIn("host", self.backend.status())
         self.assertTrue(self.backend.status()["host"]["cgroup_populated"])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux fd inheritance")
+    def test_actual_source_layout_bootstrap_waits_for_gate_without_torch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            package = root / "steamboat_connector"
+            package.mkdir(parents=True)
+            source_bootstrap = (Path(__file__).resolve().parents[2] / "src" /
+                                "steamboat_connector" / "process_bootstrap.py")
+            shutil.copyfile(source_bootstrap, package / "process_bootstrap.py")
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            marker = Path(temporary) / "role-imported"
+            module_source = (
+                "import pathlib, sys, time\n"
+                "class Service:\n"
+                "    def run(self):\n"
+                "        while True:\n"
+                "            print('x' * 4096, flush=True)\n"
+                "            time.sleep(0.002)\n"
+                "def start(config_path):\n"
+                f"    pathlib.Path({str(marker)!r}).write_text(str('torch' in sys.modules))\n"
+                "    return Service()\n")
+            (package / "role_worker.py").write_text(module_source, encoding="utf-8")
+            config = Path(temporary) / "role-config.json"
+            config.write_text("{}", encoding="utf-8")
+            read_fd, write_fd = os.pipe()
+            child = None
+            try:
+                child = subprocess.Popen(
+                    [sys.executable, "-I", "-S", str(package / "process_bootstrap.py"),
+                     "host", str(config), str(read_fd)],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL, pass_fds=(read_fd,),
+                    start_new_session=True, close_fds=True)
+                os.close(read_fd)
+                read_fd = -1
+                time.sleep(0.1)
+                self.assertIsNone(child.poll())
+                self.assertFalse(marker.exists())
+                os.write(write_fd, b"R")
+                os.close(write_fd)
+                write_fd = -1
+                self.assertTrue(select.select([child.stdout], [], [], 5)[0])
+                self.assertEqual(child.stdout.readline(READY_LINE_MAX + 1), b"READY\n")
+                self.assertTrue(select.select([child.stdout], [], [], 2)[0])
+                self.assertEqual(child.stdout.read(1), b"")
+                deadline = time.monotonic() + 5
+                while not marker.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(marker.read_text(encoding="utf-8"), "False")
+            finally:
+                if read_fd >= 0:
+                    os.close(read_fd)
+                if write_fd >= 0:
+                    os.close(write_fd)
+                if child is not None:
+                    try:
+                        os.killpg(child.pid, signal.SIGTERM)
+                        child.wait(timeout=2)
+                    except (OSError, subprocess.TimeoutExpired):
+                        os.killpg(child.pid, 9)
+                        child.wait(timeout=2)
 
     def test_unknown_role_does_not_spawn(self):
         with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as spawn:

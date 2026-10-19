@@ -1,6 +1,7 @@
 """Own fixed Linux role children and their delegated cgroups."""
 
 import json
+import math
 import os
 import selectors
 import signal
@@ -14,7 +15,8 @@ from pathlib import Path
 
 from .policy import validate_policy
 from .resources import CgroupV2Controller, ResourceError
-from .storage import StorageError, atomic_write_private
+from .storage import (StorageError, atomic_write_private, read_private_json)
+from .validation import json_bytes
 
 
 ROLE_MODULES = {
@@ -23,6 +25,7 @@ ROLE_MODULES = {
 }
 READY_TIMEOUT_SECONDS = 30.0
 READY_LINE_MAX = 64
+ROLE_CONFIG_MAX_BYTES = 65_536
 STOP_GRACE_MAX_SECONDS = 15.0
 _CHILD_ENV = {"PATH": "/usr/bin:/bin", "PYTHONNOUSERSITE": "1"}
 
@@ -37,6 +40,12 @@ class _OwnedProcess:
     ready: bool = False
     stopping: bool = False
     stop_lock: object = field(default_factory=threading.Lock)
+    reclaimed: bool = False
+
+
+@dataclass
+class _StartIntent:
+    cancelled: threading.Event = field(default_factory=threading.Event)
 
 
 class ProcessRoleBackend:
@@ -50,6 +59,7 @@ class ProcessRoleBackend:
         self.clock = clock
         self._lock = threading.RLock()
         self._owned = {}
+        self._start_intents = {}
 
     @property
     def secure_runtime_ready(self):
@@ -60,11 +70,44 @@ class ProcessRoleBackend:
     def _config_path(self, role):
         return self.state_directory / f"{role}-runtime.json"
 
-    def _write_config(self, role, policy):
-        config = {"version": 1, "role": role, "policy": policy}
-        atomic_write_private(self._config_path(role),
-                             json.dumps(config, sort_keys=True,
-                                        separators=(",", ":")).encode("utf-8"))
+    @staticmethod
+    def _encode_config(role, config, policy=None):
+        document = {"version": 1, "role": role, "config": config}
+        if policy is not None:
+            document["policy"] = policy
+        return json_bytes(document, maximum_bytes=ROLE_CONFIG_MAX_BYTES)
+
+    def configure_role(self, role, config):
+        """Persist bounded opaque role settings with fixed role metadata."""
+        if role not in ROLE_MODULES or type(config) is not dict:
+            return False
+        try:
+            encoded = self._encode_config(role, config)
+        except (TypeError, ValueError):
+            return False
+        with self._lock:
+            if role in self._owned or role in self._start_intents:
+                return False
+            try:
+                atomic_write_private(self._config_path(role), encoded)
+            except (OSError, StorageError):
+                return False
+            return True
+
+    def _configured_role(self, role):
+        try:
+            document = read_private_json(self._config_path(role),
+                                         maximum_size=ROLE_CONFIG_MAX_BYTES)
+        except (OSError, StorageError):
+            return None
+        if (type(document) is not dict
+                or set(document) not in ({"version", "role", "config"},
+                                        {"version", "role", "config", "policy"})
+                or type(document.get("version")) is not int
+                or document["version"] != 1 or document.get("role") != role
+                or type(document.get("config")) is not dict):
+            return None
+        return document["config"]
 
     @staticmethod
     def _read_ready(process, timeout):
@@ -100,14 +143,19 @@ class ProcessRoleBackend:
     @staticmethod
     def _events_populated(group):
         try:
-            fields = dict(line.split() for line in
-                          (Path(group) / "cgroup.events").read_text(encoding="ascii").splitlines())
+            fields = {}
+            for line in (Path(group) / "cgroup.events").read_text(
+                    encoding="ascii").splitlines():
+                parts = line.split()
+                if (len(parts) != 2 or parts[0] not in ("populated", "frozen")
+                        or parts[0] in fields or parts[1] not in ("0", "1")):
+                    return False
+                fields[parts[0]] = parts[1]
             return fields.get("populated") == "0"
         except (OSError, ValueError):
             return False
 
-    def _wait_empty(self, owned, timeout):
-        deadline = time.monotonic() + max(0.0, timeout)
+    def _wait_empty(self, owned, deadline):
         while True:
             if self._events_populated(owned.group):
                 return True
@@ -133,54 +181,119 @@ class ProcessRoleBackend:
             # Unknown signal state is surfaced by the subsequent empty check.
             pass
 
-    def start(self, role, policy):
+    @staticmethod
+    def _cancelled(intent, cancel_event):
+        return intent.cancelled.is_set() or (
+            cancel_event is not None and cancel_event.is_set())
+
+    def _forget_start_intent(self, role, intent):
+        with self._lock:
+            if self._start_intents.get(role) is intent:
+                del self._start_intents[role]
+
+    def start(self, role, policy, *, cancel_event=None):
+        if (cancel_event is not None
+                and not callable(getattr(cancel_event, "is_set", None))):
+            return False
+        if cancel_event is not None and cancel_event.is_set():
+            return False
         if role not in ROLE_MODULES:
             return False
         if not sys.platform.startswith("linux"):
             return False
         try:
             policy = validate_policy(policy)
-            self._write_config(role, policy)
-            group = self.cgroup.create_group(
-                f"participant-{role}-{uuid.uuid4().hex[:12]}", policy, role)
         except (OSError, ValueError, ResourceError, StorageError):
             return False
 
-        read_fd, write_fd = os.pipe()
+        # Claim the role before config I/O or cgroup creation so a duplicate
+        # start cannot mutate its config or create an unowned process.
+        with self._lock:
+            if ((cancel_event is not None and cancel_event.is_set())
+                    or role in self._owned or role in self._start_intents):
+                return False
+            intent = _StartIntent()
+            self._start_intents[role] = intent
+
+        group = None
+        read_fd = write_fd = -1
         process = None
         owned = None
         try:
-            command = [sys.executable, "-I", "-S", "-m",
-                       "steamboat_connector.process_bootstrap", role,
+            if self._cancelled(intent, cancel_event):
+                return False
+            role_config = self._configured_role(role)
+            if role_config is None or self._cancelled(intent, cancel_event):
+                return False
+            atomic_write_private(self._config_path(role),
+                                 self._encode_config(role, role_config, policy))
+            if self._cancelled(intent, cancel_event):
+                return False
+            group = self.cgroup.create_group(
+                f"participant-{role}-{uuid.uuid4().hex[:12]}", policy, role)
+            if self._cancelled(intent, cancel_event):
+                return False
+            read_fd, write_fd = os.pipe()
+            bootstrap = Path(__file__).with_name("process_bootstrap.py").resolve()
+            command = [sys.executable, "-I", "-S", os.fspath(bootstrap), role,
                        os.fspath(self._config_path(role)), str(read_fd)]
-            process = subprocess.Popen(
-                command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, close_fds=True, pass_fds=(read_fd,),
-                start_new_session=True, env=dict(_CHILD_ENV), bufsize=0)
+            # Spawn and publish as one ownership transition. stop() either
+            # cancels the intent first or observes the published process.
+            with self._lock:
+                if (self._cancelled(intent, cancel_event)
+                        or self._start_intents.get(role) is not intent):
+                    return False
+                owned = _OwnedProcess(role, None, Path(group), self.clock())
+                self._owned[role] = owned
+                if self._cancelled(intent, cancel_event):
+                    del self._owned[role]
+                    owned = None
+                    return False
+                try:
+                    process = subprocess.Popen(
+                        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, close_fds=True, pass_fds=(read_fd,),
+                        start_new_session=True, env=dict(_CHILD_ENV), bufsize=0)
+                except BaseException:
+                    if self._owned.get(role) is owned:
+                        del self._owned[role]
+                    owned = None
+                    raise
+                owned.process = process
             os.close(read_fd)
             read_fd = -1
-            owned = _OwnedProcess(role, process, Path(group), self.clock())
-            # Publish ownership before attach and before releasing the child.
-            with self._lock:
-                if role in self._owned:
-                    raise ResourceError("role already has an owned process")
-                self._owned[role] = owned
+            if self._cancelled(intent, cancel_event):
+                self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
+                return False
             self.cgroup.attach_child(group, process)
-            os.write(write_fd, b"R")
+            with self._lock:
+                cancelled = self._cancelled(intent, cancel_event) or owned.stopping
+                if not cancelled and os.write(write_fd, b"R") != 1:
+                    raise OSError("startup gate release failed")
+            if cancelled:
+                self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
+                return False
             os.close(write_fd)
             write_fd = -1
             ready = self._read_ready(process, READY_TIMEOUT_SECONDS)
             with self._lock:
                 current = self._owned.get(role)
-                if current is not owned or owned.stopping:
-                    return False
-                owned.starting = False
-                owned.ready = bool(ready and process.poll() is None)
+                cancelled_before_ready = (current is not owned or owned.stopping
+                                          or self._cancelled(intent, cancel_event))
+                if not cancelled_before_ready:
+                    owned.starting = False
+                    owned.ready = bool(ready and process.poll() is None)
+            if cancelled_before_ready:
+                intent.cancelled.set()
+                self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
+                return False
             if not owned.ready:
+                intent.cancelled.set()
                 self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
                 return False
             return True
         except Exception:
+            intent.cancelled.set()
             if owned is not None:
                 self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
             elif process is not None:
@@ -195,55 +308,150 @@ class ProcessRoleBackend:
             return False
         finally:
             if read_fd >= 0:
-                os.close(read_fd)
+                try:
+                    os.close(read_fd)
+                except OSError:
+                    pass
             if write_fd >= 0:
-                os.close(write_fd)
+                try:
+                    os.close(write_fd)
+                except OSError:
+                    pass
+            self._forget_start_intent(role, intent)
+            if group is not None and owned is None:
+                self._remove_empty_group(group)
+
+    @staticmethod
+    def _remove_empty_group(group):
+        if not ProcessRoleBackend._events_populated(group):
+            try:
+                Path(group).rmdir()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _bounded_grace(grace_seconds):
+        if type(grace_seconds) not in (int, float):
+            return None
+        grace = float(grace_seconds)
+        if not math.isfinite(grace) or grace < 0:
+            return None
+        return min(STOP_GRACE_MAX_SECONDS, grace)
+
+    def _stop_many(self, entries, deadline, term_deadline, *, send_term=True):
+        results = {}
+        acquired = []
+        for role, owned in entries:
+            remaining = max(0.0, deadline - time.monotonic())
+            if not owned.stop_lock.acquire(timeout=remaining):
+                results[role] = False
+                continue
+            acquired.append((role, owned))
+
+        try:
+            active = []
+            with self._lock:
+                for role, owned in acquired:
+                    if self._owned.get(role) is not owned:
+                        results[role] = owned.reclaimed
+                        continue
+                    owned.stopping = True
+                    owned.ready = False
+                    active.append((role, owned))
+
+            # Signal every independent process before waiting on any one of them.
+            if send_term:
+                for _, owned in active:
+                    self._signal_tree(owned, signal.SIGTERM)
+            for _, owned in active:
+                remaining = max(0.0, term_deadline - time.monotonic())
+                try:
+                    owned.process.wait(timeout=remaining)
+                except (subprocess.TimeoutExpired, TimeoutError, OSError):
+                    pass
+
+            # Escalate every still-populated tree before beginning final waits.
+            for _, owned in active:
+                if (not self._events_populated(owned.group)
+                        or owned.process.poll() is None):
+                    self._signal_tree(owned, signal.SIGKILL)
+
+            for role, owned in active:
+                empty = self._wait_empty(owned, deadline)
+                remaining = max(0.0, deadline - time.monotonic())
+                try:
+                    owned.process.wait(timeout=remaining)
+                except (subprocess.TimeoutExpired, TimeoutError, OSError):
+                    empty = False
+                reclaimed = empty and owned.process.poll() is not None
+                if reclaimed:
+                    with self._lock:
+                        if self._owned.get(role) is owned:
+                            del self._owned[role]
+                        owned.reclaimed = True
+                    self._remove_empty_group(owned.group)
+                results[role] = reclaimed
+            return results
+        finally:
+            for _, owned in acquired:
+                owned.stop_lock.release()
 
     def _stop_owned(self, owned, grace_seconds):
-        with owned.stop_lock:
-            return self._stop_owned_locked(owned, grace_seconds)
+        grace = self._bounded_grace(grace_seconds)
+        if grace is None:
+            return False
+        started = time.monotonic()
+        return self._stop_many([(owned.role, owned)], started + grace,
+                               started + grace * 0.5).get(owned.role, False)
 
-    def _stop_owned_locked(self, owned, grace_seconds):
-        grace = min(STOP_GRACE_MAX_SECONDS, max(0.0, float(grace_seconds)))
-        with self._lock:
-            if self._owned.get(owned.role) is not owned:
-                return True
-            owned.stopping = True
-            owned.ready = False
-        self._signal_tree(owned, signal.SIGTERM)
+    def stop(self, roles, grace_seconds):
+        grace = self._bounded_grace(grace_seconds)
+        if grace is None:
+            return {role: False for role in roles}
         started = time.monotonic()
         deadline = started + grace
         term_deadline = started + grace * 0.5
-        try:
-            owned.process.wait(timeout=max(0.0, term_deadline - time.monotonic()))
-        except (subprocess.TimeoutExpired, TimeoutError, OSError):
-            pass
-        # Always inspect the cgroup: the leader can exit while a child lives.
-        if not self._events_populated(owned.group):
-            self._signal_tree(owned, signal.SIGKILL)
-        remaining = max(0.0, deadline - time.monotonic())
-        empty = self._wait_empty(owned, remaining)
-        try:
-            owned.process.wait(timeout=max(0.0, remaining))
-        except (subprocess.TimeoutExpired, TimeoutError, OSError):
-            empty = False
-        if empty and owned.process.poll() is not None:
-            with self._lock:
-                if self._owned.get(owned.role) is owned:
-                    del self._owned[owned.role]
-            return True
-        return False
+        results = {}
+        entries = []
+        with self._lock:
+            for role in roles:
+                if role not in ROLE_MODULES:
+                    results[role] = False
+                    continue
+                intent = self._start_intents.get(role)
+                if intent is not None:
+                    intent.cancelled.set()
+                owned = self._owned.get(role)
+                if owned is None:
+                    # A launch intent may still be in cgroup creation or Popen.
+                    results[role] = intent is None
+                    continue
+                owned.stopping = True
+                owned.ready = False
+                entries.append((role, owned))
 
-    def stop(self, roles, grace_seconds):
-        grace = min(STOP_GRACE_MAX_SECONDS, max(0.0, float(grace_seconds)))
+        stopped = self._stop_many(entries, deadline, term_deadline)
+        results.update(stopped)
+        return results
+
+    def request_stop(self, roles):
+        """Fence in-flight starts and send TERM without waiting for reclamation."""
         results = {}
         for role in roles:
             if role not in ROLE_MODULES:
                 results[role] = False
                 continue
-            with self._lock:
-                owned = self._owned.get(role)
-            results[role] = True if owned is None else self._stop_owned(owned, grace)
+            # These dictionary lookups and event/set-flag writes are nonblocking;
+            # ownership itself remains reconciled by stop() on the lifecycle queue.
+            intent = self._start_intents.get(role)
+            if intent is not None:
+                intent.cancelled.set()
+            owned = self._owned.get(role)
+            if owned is not None and owned.process is not None:
+                owned.stopping = True
+                owned.ready = False
+                self._signal_tree(owned, signal.SIGTERM)
+            results[role] = intent is not None or owned is not None
         return results
 
     def drain(self, roles, deadline, cancel_event):

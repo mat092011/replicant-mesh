@@ -2,6 +2,8 @@
 
 import importlib
 import os
+from pathlib import Path
+import site
 import sys
 
 
@@ -35,6 +37,13 @@ def main(argv=None):
     if release != b"R":
         return 65
 
+    # -I -S excludes environment paths, user site, and automatic site startup.
+    # Add only interpreter-managed system site directories (never environment
+    # or user paths), then the source root derived from this installed file.
+    for site_path in site.getsitepackages():
+        site.addsitedir(site_path)
+    source_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, os.fspath(source_root))
     module = importlib.import_module(module_name)
     # start() must return only after the role has loaded and is actually ready.
     role_service = module.start(config_path)
