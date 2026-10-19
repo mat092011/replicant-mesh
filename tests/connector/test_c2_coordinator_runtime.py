@@ -49,10 +49,22 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         from tests.security.test_root_c2_coordinator import C2CoordinatorStoreIntegrationTests
+        import tests.security.test_root_c2_runtime as runtime_fixture_module
         self.root_fixture = object.__new__(C2CoordinatorStoreIntegrationTests)
         self.root_fixture._testMethodName = (
             "test_channel_wall_expiry_rejects_clock_drift_even_before_monotonic_deadline")
-        self.root_fixture.setUp()
+        original_generate = runtime_fixture_module.generate_private_key_pem
+        generated = []
+        def capture_key(*args, **kwargs):
+            value = original_generate(*args, **kwargs)
+            generated.append(value)
+            return value
+        with mock.patch.object(runtime_fixture_module, "generate_private_key_pem",
+                               side_effect=capture_key):
+            self.root_fixture.setUp()
+        if not generated:
+            self.fail("fixture did not create its real host-group signing key")
+        self.operator_private_key = generated[0]
         self.fx = self.root_fixture.fx
         self.pin = self.child_pins = self.child_owner = None
         self.runtime = None
@@ -144,6 +156,29 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
         activation["policy_revision"] = baseline["revision"]
         activation["policy_digest"] = canonical_policy_digest(baseline)
         activation["policy_payload_sha256"] = hashlib.sha256(canonical_json(baseline)).hexdigest()
+        # Keep the genuine selected host group, signed group file, host header,
+        # and selected launch hash aligned with the fixture's assigned model.
+        group_scope = activation["new_host_group_scopes"][0]
+        group_scope["model_id"] = source_manifest["fingerprint"]
+        from steamboat_security.root_c2_group_scope import sign_c2_host_group_policy
+        group_path = self.root_fixture.protected / "group-policy.json"
+        group_envelope = json.loads(group_path.read_bytes())
+        group_payload = group_envelope["payload"]
+        group_payload["scope"] = group_scope
+        signed_group = sign_c2_host_group_policy(group_payload, self.operator_private_key)
+        group_path.write_bytes(signed_group)
+        os.chmod(group_path, 0o600)
+        host_header = json.loads(self.root_fixture.header_path.read_bytes())
+        host_header["model_id"] = source_manifest["fingerprint"]
+        host_header["group_policy_sha256"] = hashlib.sha256(signed_group).hexdigest()
+        host_header_bytes = canonical_json(host_header)
+        self.root_fixture.header_path.write_bytes(host_header_bytes)
+        os.chmod(self.root_fixture.header_path, 0o600)
+        host_launch = next(item for item in activation["new_launch_specs"]
+                           if item["role"] == "host")
+        host_launch["configuration_sha256"] = hashlib.sha256(host_header_bytes).hexdigest()
+        self.fx.artifacts["new_launch_specs.json"] = canonical_json(
+            activation["new_launch_specs"])
         self.fx.artifacts["activation_manifest.json"] = canonical_json(activation)
 
         settings_fixture = object.__new__(settings_tests.C2CoordinatorSettingsTests)
