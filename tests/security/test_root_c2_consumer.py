@@ -7,13 +7,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from steamboat_security.certificates import (ROLE_EKUS, certificate_sha256,
+    generate_private_key_pem, issue_leaf, make_csr, public_key_sha256)
 from steamboat_security.errors import CredentialError, SnapshotError
+from steamboat_security.operator import _record_from_leaf
 from steamboat_security.root_c2_consumer import (
     C2ConsumerRuntimeBinding, _FIELDS, _PolicyRefreshRequired, _read_header,
     load_c2_consumer_binding,
 )
 from steamboat_security.root_transition_launch import (
-    canonical_role_launch_digest, parse_role_launch_spec, role_launch_document,
+    RoleLaunchSpec, canonical_role_launch_digest, parse_role_launch_spec,
+    role_launch_document,
 )
 from steamboat_security.root_transition_storage import (
     RootGenerationSelector, RootGenerationStore, root_generation_selector_document,
@@ -43,18 +47,50 @@ class C2ConsumerStoreIntegrationTests(unittest.TestCase):
     def _add_consumer_header(self):
         fx = self.fx
         manifest = json.loads(fx.artifacts["activation_manifest.json"])
-        consumer_doc = next(x for x in manifest["new_launch_specs"]
-                              if x["role"] == "consumer")
-        consumer = parse_role_launch_spec(consumer_doc)
-        issued = next(x for x in fx.fixture.candidate.issuance_candidate.principals
-                      if x.identity == consumer.identity)
-        role_fx = next(x for x in fx.fx.roles if x["principal"].identity == consumer.identity)
+        # The common selected-root fixture intentionally contains only host
+        # and coordinator roles. Add a consumer as a genuine C1 CA-issued
+        # principal, then regenerate the signed C2 selection and root store.
+        original_new = [parse_role_launch_spec(x) for x in manifest["new_launch_specs"]]
+        original_old = [parse_role_launch_spec(x) for x in manifest["old_launch_specs"]]
+        host = next(item for item in original_new if item.role == "host")
+        coordinator = next(item for item in original_new if item.role == "personal_coordinator")
+        device = "dev_" + f"{0xF2000000000000000000000000000001:032x}"
+        old_key, new_key = generate_private_key_pem(), generate_private_key_pem()
+        old_csr = make_csr(old_key, account_id=coordinator.account_id,
+                           device_id=device, role="consumer")
+        new_csr = make_csr(new_key, account_id=coordinator.account_id,
+                           device_id=device, role="consumer")
+        now = int(fx.wall)
+        old_cert = issue_leaf(fx.fx.old_ca, fx.fx.old_ca_key, old_csr,
+            account_id=coordinator.account_id, device_id=device, role="consumer",
+            not_before=now - 500, not_after=now + 240, serial=0xA113,
+            ekus=tuple(sorted(ROLE_EKUS["consumer"])))
+        new_cert = issue_leaf(fx.fx.new_ca, fx.fx.new_ca_key, new_csr,
+            account_id=coordinator.account_id, device_id=device, role="consumer",
+            not_before=now - 500, not_after=now + 240, serial=0xA114,
+            ekus=tuple(sorted(ROLE_EKUS["consumer"])))
+        old_record = _record_from_leaf(old_cert, account_id=coordinator.account_id,
+            device_id=device, role="consumer", credential_epoch=4)
+        consumer_record = _record_from_leaf(new_cert, account_id=coordinator.account_id,
+            device_id=device, role="consumer", credential_epoch=5)
+        consumer_boot = f"{0xF3000000000000000000000000000001:032x}"
+        old_boot = f"{0xF3000000000000000000000000000002:032x}"
+        old_consumer = RoleLaunchSpec(original_old[0].generation_sha256,
+            coordinator.account_id, device, "consumer", old_record["serial"],
+            old_record["certificate_sha256"], old_record["public_key_sha256"],
+            4, old_boot, 7, "0" * 64, f"{0xA113:032x}")
+        # Header does not contain its own hash, so the selected configuration
+        # pin can be computed after its protected bytes are finalized below.
+        consumer = RoleLaunchSpec(fx.selector.generation_sha256,
+            coordinator.account_id, device, "consumer", consumer_record["serial"],
+            consumer_record["certificate_sha256"], consumer_record["public_key_sha256"],
+            5, consumer_boot, 8, "0" * 64, f"{0xA114:032x}")
         runtime_path = fx.protected / "consumer-runtime.json"
         runtime_bytes = b'{"opaque_consumer_adapter":true}'
         fx._private(runtime_path, runtime_bytes)
         cert_path, key_path = fx.protected / "consumer.pem", fx.protected / "consumer.key"
-        fx._private(cert_path, issued.certificate_pem)
-        fx._private(key_path, role_fx["new_key"])
+        fx._private(cert_path, new_cert)
+        fx._private(key_path, new_key)
         model_id = json.loads(fx.active)["payload"]["grants"][0]["model_id"]
         header = {
             "schema_version": 1,
@@ -73,15 +109,66 @@ class C2ConsumerStoreIntegrationTests(unittest.TestCase):
         header_bytes = canonical_json(header)
         header_path = fx.protected / "consumer-header.json"
         fx._private(header_path, header_bytes)
-        consumer_doc["configuration_sha256"] = hashlib.sha256(header_bytes).hexdigest()
-        specs = tuple(parse_role_launch_spec(x) for x in manifest["new_launch_specs"])
-        manifest["new_launch_digest"] = canonical_role_launch_digest(specs)
+        consumer = RoleLaunchSpec(consumer.generation_sha256, consumer.account_id,
+            consumer.device_id, consumer.role, consumer.serial,
+            consumer.certificate_sha256, consumer.public_key_sha256,
+            consumer.credential_epoch, consumer.boot_id, consumer.admission_epoch,
+            hashlib.sha256(header_bytes).hexdigest(), consumer.launch_nonce)
+        consumer_doc = role_launch_document(consumer)
+        new_specs = tuple(sorted((*original_new, consumer), key=lambda item: item.identity))
+        old_specs = tuple(sorted((*original_old, old_consumer), key=lambda item: item.identity))
+        manifest["old_launch_specs"] = [role_launch_document(item) for item in old_specs]
+        manifest["new_launch_specs"] = [role_launch_document(item) for item in new_specs]
+        manifest["old_launch_digest"] = canonical_role_launch_digest(old_specs)
+        manifest["new_launch_digest"] = canonical_role_launch_digest(new_specs)
+        manifest["new_certificates"].append({"identity": list(consumer.identity),
+            "serial": consumer.serial, "certificate_sha256": consumer.certificate_sha256,
+            "public_key_sha256": consumer.public_key_sha256})
+        manifest["new_certificates"].sort(key=lambda item: tuple(item["identity"]))
+
+        def consumer_grant(payload):
+            grants = payload["grants"]
+            if any(g["actor_serial"] == consumer.serial for g in grants):
+                return
+            coordinator_record = next(x for x in payload["credentials"]
+                                      if x["serial"] == coordinator.serial)
+            grants.append({"account_id": consumer.account_id,
+                "device_id": consumer.device_id, "role": "consumer",
+                "actor_serial": consumer.serial,
+                "actor_public_key_sha256": consumer.public_key_sha256,
+                "actor_credential_epoch": consumer.credential_epoch,
+                "tenant_account_id": consumer.account_id,
+                "target_account_id": coordinator.account_id,
+                "target_device_id": coordinator.device_id,
+                "target_role": "personal_coordinator",
+                "target_serial": coordinator.serial,
+                "target_public_key_sha256": coordinator.public_key_sha256,
+                "target_credential_epoch": coordinator.credential_epoch,
+                "target_boot_id": coordinator.boot_id, "actor_boot_id": None,
+                "assignment_id": None, "model_id": model_id,
+                "method": "steamboat.v1.Coordinator/Generate",
+                "not_before": now - 10, "not_after": now + 100})
+
+        baseline = json.loads(fx.artifacts["policy_snapshot.json"])["payload"]
+        baseline["credentials"].append(consumer_record)
+        consumer_grant(baseline)
+        baseline_bytes = sign_snapshot(baseline, fx.fx.new_snapshot_key)
+        fx.artifacts["policy_snapshot.json"] = baseline_bytes
+        manifest["policy_revision"] = baseline["revision"]
+        manifest["policy_digest"] = canonical_policy_digest(baseline)
+        manifest["policy_payload_sha256"] = hashlib.sha256(canonical_json(baseline)).hexdigest()
+        active_payload = json.loads(fx.active)["payload"]
+        active_payload["credentials"].append(consumer_record)
+        consumer_grant(active_payload)
+        fx.active = sign_snapshot(active_payload, fx.fx.new_snapshot_key)
+        fx.artifacts["old_launch_specs.json"] = canonical_json(manifest["old_launch_specs"])
         fx.artifacts["new_launch_specs.json"] = canonical_json(manifest["new_launch_specs"])
         fx.artifacts["activation_manifest.json"] = canonical_json(manifest)
-        old = fx.selector
-        selector = RootGenerationSelector(old.generation_sha256,
+        old_selector = fx.selector
+        selector = RootGenerationSelector(old_selector.generation_sha256,
             hashlib.sha256(fx.artifacts["activation_manifest.json"]).hexdigest(),
-            old.policy_revision, old.policy_digest, old.active_policy_snapshot_sha256,
+            active_payload["revision"], canonical_policy_digest(active_payload),
+            hashlib.sha256(fx.active).hexdigest(),
             {name: hashlib.sha256(data).hexdigest() for name, data in fx.artifacts.items()})
         generation = fx.root / "generations" / selector.generation_sha256
         descriptor_path = generation / "descriptor.json"
@@ -92,6 +179,7 @@ class C2ConsumerStoreIntegrationTests(unittest.TestCase):
         fx._private(descriptor_path, canonical_json(descriptor))
         for name, data in fx.artifacts.items():
             fx._private(generation / name, data)
+        fx._private(fx.root / "policies" / f"{hashlib.sha256(fx.active).hexdigest()}.json", fx.active)
         fx._private(fx.root / "selector.json", canonical_json(root_generation_selector_document(selector)))
         fx.selector = selector
         fx.consumer_spec = parse_role_launch_spec(consumer_doc)
