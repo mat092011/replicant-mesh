@@ -257,6 +257,41 @@ class C2CoordinatorStoreIntegrationTests(unittest.TestCase):
         self.assertEqual(binding._snapshot_store.current().revision, payload_a["revision"])
         self.assertEqual(len(events), 1)
 
+    def test_new_selected_expiry_renews_after_local_snapshot_expiry(self):
+        root_store, binding = self._load()
+        self.addCleanup(root_store.close)
+        original = json.loads(self.fx.active)["payload"]
+        credentials = {item["serial"]: item for item in original["credentials"]}
+        payload_a = dict(original)
+        payload_a["revision"] += 1
+        payload_a["expires_at"] = int(self.fx.wall) + 5
+        payload_a["grants"] = [dict(grant) for grant in original["grants"]]
+        for grant in payload_a["grants"]:
+            grant["not_after"] = min(payload_a["expires_at"],
+                credentials[grant["actor_serial"]]["not_after"],
+                credentials[grant["target_serial"]]["not_after"])
+        encoded_a = sign_snapshot(payload_a, self.fx.fx.new_snapshot_key)
+        binding.install_policy(encoded_a)
+        binding.assert_live()
+        payload_b = dict(payload_a)
+        payload_b["revision"] += 1
+        payload_b["expires_at"] = int(self.fx.wall) + 60
+        payload_b["grants"] = [dict(grant) for grant in payload_a["grants"]]
+        for grant in payload_b["grants"]:
+            grant["not_after"] = min(payload_b["expires_at"],
+                credentials[grant["actor_serial"]]["not_after"],
+                credentials[grant["target_serial"]]["not_after"])
+        encoded_b = sign_snapshot(payload_b, self.fx.fx.new_snapshot_key)
+        old_head = hashlib.sha256((self.fx.root / "selector.json").read_bytes()).hexdigest()
+        root_store.advance_policy(encoded_b, expected_old_selector_sha256=old_head,
+                                  clock=self.fx.clock, validate=lambda *_: None)
+        self.fx.wall += 6
+        self.fx.mono += 6
+        self.assertEqual(binding.refresh_selected_policy(),
+            (payload_b["revision"], canonical_policy_digest(payload_b)))
+        self.assertEqual(binding._snapshot_store.current().revision, payload_b["revision"])
+        binding.assert_live()
+
     def test_expiry_during_final_protected_io_invalidates(self):
         store, binding = self._load()
         self.addCleanup(store.close)

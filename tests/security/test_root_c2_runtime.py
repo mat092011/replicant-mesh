@@ -631,6 +631,39 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         self.assertEqual(binding._snapshot_store.current().revision, payload_a["revision"])
         self.assertEqual(len(calls), 1)
 
+    def test_new_selected_expiry_renews_after_local_snapshot_expiry(self):
+        root_store, binding = self._load()
+        self.addCleanup(root_store.close)
+        credentials = {item["serial"]: item for item in json.loads(self.active)["payload"]["credentials"]}
+        payload_a = json.loads(self.active)["payload"]
+        payload_a["revision"] += 1
+        payload_a["expires_at"] = int(self.wall) + 5
+        for grant in payload_a["grants"]:
+            grant["not_after"] = min(payload_a["expires_at"],
+                credentials[grant["actor_serial"]]["not_after"],
+                credentials[grant["target_serial"]]["not_after"])
+        encoded_a = sign_snapshot(payload_a, self.fx.new_snapshot_key)
+        binding.install_policy(encoded_a)
+        binding.assert_live()
+        payload_b = dict(payload_a)
+        payload_b["revision"] += 1
+        payload_b["expires_at"] = int(self.wall) + 60
+        payload_b["grants"] = [dict(grant) for grant in payload_a["grants"]]
+        for grant in payload_b["grants"]:
+            grant["not_after"] = min(payload_b["expires_at"],
+                credentials[grant["actor_serial"]]["not_after"],
+                credentials[grant["target_serial"]]["not_after"])
+        encoded_b = sign_snapshot(payload_b, self.fx.new_snapshot_key)
+        old_head = hashlib.sha256((self.root / "selector.json").read_bytes()).hexdigest()
+        root_store.advance_policy(encoded_b, expected_old_selector_sha256=old_head,
+                                  clock=self.clock, validate=lambda *_: None)
+        self.wall += 6
+        self.mono += 6
+        self.assertEqual(binding.install_policy(encoded_b),
+                         (payload_b["revision"], canonical_policy_digest(payload_b)))
+        self.assertEqual(binding._snapshot_store.current().revision, payload_b["revision"])
+        binding.assert_live()
+
     def test_teardown_notification_must_be_synchronous(self):
         store, binding = self._load()
         self.addCleanup(store.close)
