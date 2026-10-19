@@ -60,11 +60,11 @@ class WorkerOwnerLimitTests(unittest.IsolatedAsyncioTestCase):
         self.handlers.append(limited)
         first = await limited.handle("OpenSession", self.request(
             "A", lease_token="", max_positions=1, lifetime_ms=1000,
-            idle_lease_ms=1000))
+            idle_lease_ms=1000, worker_boot_id="one-session"))
         self.assertEqual(first.code, "OK")
         second = await limited.handle("OpenSession", self.request(
             "B", lease_token="", max_positions=1, lifetime_ms=1000,
-            idle_lease_ms=1000))
+            idle_lease_ms=1000, worker_boot_id="one-session"))
         self.assertEqual(second.code, "CAPACITY_EXHAUSTED")
 
     async def test_request_timeout_narrows_open_session_lifetime(self):
@@ -115,20 +115,23 @@ class WorkerOwnerLimitTests(unittest.IsolatedAsyncioTestCase):
         for name in ("A", "B", "C"):
             opened = await queued.handle("OpenSession", self.request(
                 name, lease_token="", max_positions=32, lifetime_ms=300000,
-                idle_lease_ms=120000))
+                idle_lease_ms=120000, worker_boot_id="queued"))
             self.assertEqual(opened.code, "OK")
             leases[name] = opened.lease_token
         queued.executor.block = True
-        first = asyncio.create_task(queued.handle("Step", self.step_request("A", lease_token=leases["A"])))
+        first = asyncio.create_task(queued.handle("Step", self.step_request(
+            "A", lease_token=leases["A"], worker_boot_id="queued")))
         self.pending.append(first)
         await self.await_started()
-        second = asyncio.create_task(queued.handle("Step", self.step_request("B", lease_token=leases["B"])))
+        second = asyncio.create_task(queued.handle("Step", self.step_request(
+            "B", lease_token=leases["B"], worker_boot_id="queued")))
         self.pending.append(second)
         for _ in range(100):
             if len(queued._queue) == 1:
                 break
             await asyncio.sleep(0)
-        third = await queued.handle("Step", self.step_request("C", lease_token=leases["C"]))
+        third = await queued.handle("Step", self.step_request(
+            "C", lease_token=leases["C"], worker_boot_id="queued"))
         self.assertEqual(third.code, "CAPACITY_EXHAUSTED")
         self.assertEqual(len(queued._queue), 1)
         self.assertEqual(len(queued.executor.calls), 1)
