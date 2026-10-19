@@ -308,7 +308,12 @@ class AggregateHostWorkerNumericalFixture(unittest.TestCase):
                     for session in sessions.values():
                         session.close()
                     if reference is not None:
-                        reference.close()
+                        diagnostics = reference.diagnostics()
+                        self.assertEqual(diagnostics["active_sessions"], 0)
+                        self.assertEqual(diagnostics["allocated_cache_bytes"], 0)
+                    if handlers_stopped:
+                        for handler in handlers:
+                            self.assertFalse(handler.sessions)
                     if handlers_stopped and group is not None:
                         group.release()
                     elif group is not None:
