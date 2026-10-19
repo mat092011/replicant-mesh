@@ -41,10 +41,12 @@ The positive numerical test requires the approved offline model fixture mounted
 read-only at `/artifacts` (or `STEAMBOAT_C2_STARTUP_ARTIFACTS`). It executes
 forced token steps through an actual assigned stage and compares them with the
 same signed shard in the local pipeline reference. This checks assigned-stage
-composition only; the numerical test invokes the handler directly and does not
-prove guarded bridge RPC admission. It does not establish cross-device behavior,
-a complete-model output, network admission, or end-to-end readiness. Run the
-focused module with:
+composition only; those numerical calls invoke the handler directly. The same
+native test separately sends a `Describe` operation through the runtime guard
+and real C1 authorizer using a fixture-signed coordinator credential and grant.
+That exercises guarded core admission without opening a network transport. It
+does not establish cross-device behavior, a complete-model output, transport
+admission, or end-to-end readiness. Run the focused module with:
 
 ```text
 python -m unittest tests.connector.test_c2_host_runtime

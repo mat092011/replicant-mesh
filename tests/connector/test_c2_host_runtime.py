@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from dataclasses import replace
+import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -40,14 +40,15 @@ _NATIVE_FIXTURE = os.name == "posix" and hasattr(os, "geteuid") and _ARTIFACTS.i
     "requires Linux POSIX and the approved offline /artifacts model fixture")
 class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
     @contextmanager
-    def resources(self, scratch):
+    def resources(self, scratch, *, pin_variant=None):
         from tests.connector.c2_startup_fixture import c2_startup_fixture
         from steamboat_connector.artifacts import ArtifactInstaller
         from steamboat_connector.c2_child_config import (
             build_c2_child_config, open_c2_child_binding, parse_c2_child_config,
         )
 
-        with c2_startup_fixture(_ARTIFACTS, scratch) as fx:
+        with c2_startup_fixture(_ARTIFACTS, scratch,
+                                pin_variant=pin_variant) as fx:
             document = build_c2_child_config(role="host",
                 selected_root=str(fx.selected_store.root),
                 protected_root=str(fx.protected_root),
@@ -124,8 +125,61 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                     component_allocations=self.allocations())
                 self.assertEqual(runtime.components, ("worker-1",))
                 handler = runtime._handlers["worker-1"]
-                self.assertIs(runtime._bridges["worker-1"].authorizer_core,
-                              runtime._authorizers["worker-1"])
+                bridge = runtime._bridges["worker-1"]
+                self.assertIs(bridge.authorizer_core, runtime._authorizers["worker-1"])
+                self.assertIs(bridge._runtime_guard.__self__, runtime._binding)
+
+                # Add a real, narrowly scoped C1 Describe grant to the signed
+                # current snapshot. The fixture signing key and coordinator
+                # principal are the same ones bound by the selected RootStore.
+                from steamboat_runtime.secure_worker_runtime import WORKER_SERVICE
+                from steamboat_security.codec import METADATA_KEY, encode_binding
+                from steamboat_security.snapshot import sign_snapshot
+                policy = json.loads(runtime._binding._snapshot_store.current().canonical_payload)
+                grants = policy["grants"]
+                worker_grant = next(grant for grant in grants
+                    if grant["role"] == "personal_coordinator"
+                    and grant["target_role"] == "host"
+                    and grant["assignment_id"] == fx.assignment_id
+                    and grant["method"] == f"{WORKER_SERVICE}/Step")
+                describe_grant = dict(worker_grant,
+                    method=f"{WORKER_SERVICE}/Describe")
+                self.assertNotIn(describe_grant, grants)
+                grants.append(describe_grant)
+                policy["revision"] += 1
+                policy["issued_at"] = int(fx.selected_store.wall)
+                signed_policy = sign_snapshot(policy,
+                    fx.cohort_fixture.fx.new_snapshot_key)
+                runtime._binding.install_policy(signed_policy)
+
+                coordinator = next(principal
+                    for principal in fx.cohort_fixture.candidate.issuance_candidate.principals
+                    if principal.serial == worker_grant["actor_serial"])
+                coordinator_spec = next(spec
+                    for spec in fx.cohort_fixture.candidate.new_launch_specs
+                    if spec.identity == coordinator.identity)
+                describe_request = Request(protocol_version=1)
+                describe_binding = encode_binding(WORKER_SERVICE, "Describe", {
+                    "binding_version": 1,
+                    "operation_id": "op_" + "1" * 32,
+                    "account_id": coordinator_spec.account_id,
+                    "device_id": coordinator_spec.device_id,
+                    "role": "personal_coordinator",
+                    "credential_epoch": coordinator_spec.credential_epoch,
+                    "target_device_id": runtime._authorizers[
+                        "worker-1"].local_identity.device_id,
+                })
+                authorization = bridge.incoming_authorizer.authorize(
+                    service=WORKER_SERVICE, method="Describe",
+                    payload=describe_request,
+                    metadata=((METADATA_KEY, describe_binding),),
+                    peer_certificate_pem=coordinator.certificate_pem)
+                try:
+                    described = await bridge.handler.handle("Describe", describe_request)
+                    self.assertTrue(described.ready)
+                    authorization.complete(described)
+                finally:
+                    authorization.close()
 
                 # Compare actual assigned-stage forced steps with the same
                 # signed assigned shard run through the in-process reference.
@@ -214,28 +268,27 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                             component_allocations=self.allocations())
                     build.assert_not_called()
 
-    async def test_selected_catalog_and_assignment_hash_mismatches_precede_load(self):
-        with tempfile.TemporaryDirectory(prefix="c2-host-runtime-pins-preload-") as scratch:
-            os.chmod(scratch, 0o700)
-            with self.resources(scratch) as (_fx, child_owner, child_pins, installer):
-                with child_owner.borrow() as binding:
-                    original = binding._scope
-                    changed_component = replace(original.components[0],
-                                                assignment_sha256="0" * 64)
-                    mismatched = (
-                        replace(original, catalog_sha256="1" * 64),
-                        replace(original, catalog_public_key_sha256="2" * 64),
-                        replace(original, components=(changed_component,)),
-                    )
-                    with mock.patch("steamboat_connector.c2_host_runtime.build_assigned_worker_handler",
-                                    side_effect=AssertionError("weights loaded before pin matching")) as build:
-                        try:
-                            for candidate in mismatched:
-                                binding._scope = candidate
-                                with self.assertRaises(CredentialError):
+    async def test_signed_pin_catalog_digest_key_assignment_and_group_mismatches_precede_load(self):
+        cases = (
+            ("catalog_digest", "inherited catalog bytes or key differ"),
+            ("catalog_key", "inherited catalog bytes or key differ"),
+            ("assignment_digest", "inherited group record differs from the complete selected set"),
+            ("extra_component", "host runtime requires exact live child pins"),
+        )
+        for variant, expected in cases:
+            with self.subTest(variant=variant):
+                with tempfile.TemporaryDirectory(prefix="c2-host-runtime-pins-preload-") as scratch:
+                    os.chmod(scratch, 0o700)
+                    with self.resources(scratch, pin_variant=variant) as (
+                            fx, child_owner, child_pins, installer):
+                        self.assertEqual(fx.selected_scope["components"][0]["assignment_id"],
+                                         fx.assignment_id)
+                        with child_owner.borrow() as binding:
+                            with mock.patch(
+                                "steamboat_connector.c2_host_runtime.build_assigned_worker_handler",
+                                side_effect=AssertionError("weights loaded before pin matching")) as build:
+                                with self.assertRaisesRegex(CredentialError, expected):
                                     _validate_allocations(binding, child_pins, installer,
                                         validate_policy(self.owner_policy()),
                                         self.allocations())
-                        finally:
-                            binding._scope = original
-                        build.assert_not_called()
+                                build.assert_not_called()
