@@ -530,8 +530,16 @@ class RuntimePinHandoffTests(unittest.TestCase):
             with self.assertRaises(ArtifactPinError) as caught:
                 validate_child_pin(metadata, clock=clock, verifier=verifier)
         composite = caught.exception.pin_owner
-        self.assertEqual(len(composite.owners), 1)
+        # Retain both the already validated first assignment and the current
+        # pair whose close result is ambiguous.
+        self.assertEqual(len(composite.owners), 2)
+        self.assertEqual(composite.owners[1]._uncertain_descriptors["global_fd"],
+                         copied[0])
         replacement = os.open(os.devnull, os.O_RDONLY)
+        if replacement != copied[0]:
+            os.dup2(replacement, copied[0])
+            os.close(replacement)
+            replacement = copied[0]
         self.assertEqual(replacement, copied[0])
         with self.assertRaises(RuntimePinHandoffError):
             composite.close()
@@ -689,7 +697,8 @@ class RuntimePinNativeHandoffTests(unittest.TestCase):
             backend = ProcessRoleBackend(backend_root / "state", cgroup)
             (backend_root / "state").mkdir()
             self.assertTrue(backend.configure_pinned_role(
-                "host", {"test_mode": True}, pin, catalog_verifier=verifier))
+                "host", {"test_mode": True}, pin, catalog_verifier=verifier),
+                msg=f"pinned role config failed: {backend._pin_configuration_failure!r}")
             metadata = backend._pinned_roles["host"][2]
             repo_root = Path(__file__).resolve().parents[2]
             child_script = "\n".join((

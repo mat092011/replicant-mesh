@@ -133,6 +133,7 @@ class ProcessRoleBackend:
         self._pinned_roles = {}
         self._pin_cleanups = {}
         self._pin_release_blocked = set()
+        self._pin_configuration_failure = None
         self._start_intents = {}
         self._watchdog_lock = threading.Lock()
         self._stop_watchdogs = {}
@@ -183,26 +184,32 @@ class ProcessRoleBackend:
         from steamboat_connector.aggregate_artifact_pin import RuntimeArtifactGroupPin
         from steamboat_connector.catalog import CatalogVerifier
 
+        self._pin_configuration_failure = None
+
+        def fail(reason):
+            self._pin_configuration_failure = (role, reason)
+            return False
+
         if (role not in ROLE_MODULES or type(config) is not dict
                 or type(catalog_verifier) is not CatalogVerifier):
-            return False
+            return fail("invalid role, config, or catalog verifier")
         if role == "coordinator":
             if type(pin) is not RuntimeArtifactPin or pin.record.get("role") != role:
-                return False
+                return fail("coordinator pin type or role mismatch")
             if catalog_verifier.clock is not pin.clock:
-                return False
+                return fail("coordinator verifier clock mismatch")
             try:
                 pin.assert_open_descriptors()
                 catalog = catalog_verifier.verify_catalog(pin.signed_catalog)
                 if hashlib.sha256(catalog.document_bytes).hexdigest() != pin.record["catalog_sha256"]:
-                    return False
+                    return fail("coordinator catalog digest mismatch")
                 assignment = catalog_verifier.verify_assignment(
                     pin.signed_assignment, catalog,
                     account_id=pin.record["account_id"],
                     device_id=pin.record["device_id"], role=role)
                 if (assignment.payload["assignment_id"] != pin.record["assignment_id"]
                         or assignment.document_sha256 != pin.record["assignment_sha256"]):
-                    return False
+                    return fail("coordinator assignment identity mismatch")
                 pin_meta = {
                     "version": 1, "kind": "single", "role": role, "root": str(pin.root),
                     "uid": pin.uid, "record_path": str(pin.record_path),
@@ -215,20 +222,20 @@ class ProcessRoleBackend:
                     "signed_assignment": base64.b64encode(pin.signed_assignment).decode("ascii"),
                     "public_key": base64.b64encode(catalog_verifier.public_key).decode("ascii"),
                 }
-            except Exception:
-                return False
+            except Exception as error:
+                return fail(f"coordinator validation: {type(error).__name__}")
         else:
             if type(pin) is not RuntimeArtifactGroupPin or pin.record.get("role") != role:
-                return False
+                return fail("host pin type or role mismatch")
             if catalog_verifier.clock is not pin.clock:
-                return False
+                return fail("host verifier clock mismatch")
             try:
                 pin.assert_open_descriptors()
                 from steamboat_connector.aggregate_artifact_pin import _validate_group_record
                 _validate_group_record(dict(pin.record))
                 catalog = catalog_verifier.verify_catalog(pin.signed_catalog)
                 if hashlib.sha256(catalog.document_bytes).hexdigest() != pin.record["catalog_sha256"]:
-                    return False
+                    return fail("host catalog digest mismatch")
                 assignments = []
                 for entry in pin.record["assignments"]:
                     launch = pin.child_launch_metadata(entry["assignment_id"])
@@ -239,7 +246,7 @@ class ProcessRoleBackend:
                     if (assignment.payload["assignment_id"] != entry["assignment_id"]
                             or assignment.payload["component"] != entry["component"]
                             or assignment.document_sha256 != entry["assignment_sha256"]):
-                        return False
+                        return fail("host assignment identity mismatch")
                     assignments.append({
                         "version": 1,
                         "component": launch["component"],
@@ -259,24 +266,24 @@ class ProcessRoleBackend:
                     "public_key": base64.b64encode(catalog_verifier.public_key).decode("ascii"),
                     "assignments": assignments,
                 }
-            except Exception:
-                return False
+            except Exception as error:
+                return fail(f"host validation: {type(error).__name__}")
         try:
             encoded = self._encode_config(role, config, pin_metadata=pin_meta)
-        except (TypeError, ValueError):
-            return False
+        except (TypeError, ValueError) as error:
+            return fail(f"encoded pin config: {type(error).__name__}")
         with self._lock:
             if (role in self._owned or role in self._start_intents
                     or role in self._pinned_roles):
-                return False
+                return fail("role already owned or configured")
             try:
                 atomic_write_private(self._config_path(role), encoded)
-            except (OSError, StorageError):
-                return False
+            except (OSError, StorageError) as error:
+                return fail(f"config write: {type(error).__name__}")
             try:
                 cleanup = _PinReleaseMonitor(pin)
-            except Exception:
-                return False
+            except Exception as error:
+                return fail(f"release monitor setup: {type(error).__name__}")
             self._pinned_roles[role] = (pin, catalog_verifier, pin_meta)
             self._pin_cleanups[role] = cleanup
             return True

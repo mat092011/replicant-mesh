@@ -70,8 +70,13 @@ class ArtifactPinLockTests(unittest.TestCase):
         owner = caught.exception.pin_owner
         self.assertEqual(owner._state, "faulted")
         self.assertEqual(owner._uncertain_descriptors["role_fd"], descriptors[1])
+        with self.assertRaises(OSError):
+            os.fstat(descriptors[1])
         replacement = os.open(os.devnull, os.O_RDONLY)
-        self.assertEqual(replacement, descriptors[1])
+        if replacement != descriptors[1]:
+            os.dup2(replacement, descriptors[1])
+            os.close(replacement)
+            replacement = descriptors[1]
         with self.assertRaises(artifact_pin.ArtifactPinError):
             owner.close_after_failed_acquire()
         os.fstat(replacement)
@@ -89,8 +94,13 @@ class ArtifactPinLockTests(unittest.TestCase):
         owner = caught.exception.pin_owner if hasattr(caught.exception, "pin_owner") else None
         # A successful one-time close needs no uncertain owner; an error path
         # must never close this numeric descriptor a second time.
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
         replacement = os.open(os.devnull, os.O_RDONLY)
-        self.assertEqual(replacement, descriptor)
+        if replacement != descriptor:
+            os.dup2(replacement, descriptor)
+            os.close(replacement)
+            replacement = descriptor
         if owner is not None:
             with self.assertRaises(artifact_pin.ArtifactPinError):
                 owner.close_after_failed_acquire()
