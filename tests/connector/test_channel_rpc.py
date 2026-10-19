@@ -451,6 +451,16 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         while self.bridge.status()["active_authorizations"] and time.monotonic() < deadline:
             await asyncio.sleep(0.001)
         self.assertEqual(self.bridge.status()["active_authorizations"], 0)
+        # The independent OpenSession above remains valid after the first
+        # session is cancelled. Close it explicitly before asserting that the
+        # handler has reclaimed every session.
+        other_close_kind, other_close_method, other_close_raw = await rpc(
+            "CloseSession", req("CloseSession", session_id=other_session_id,
+                                lease_token=other_open.lease_token), lane=wire.CONTROL)
+        other_closed = WorkerResponse.FromString(other_close_raw)
+        self.assertEqual((other_close_kind, other_close_method, other_closed.code),
+                         (wire.CONTROL_RESPONSE, "CloseSession", "OK"))
+        self.assertNotIn(other_session_id, handler.sessions)
         self.assertEqual(handler.sessions, {})
 
         # Losing the channel while a native executor owns cache state must not
