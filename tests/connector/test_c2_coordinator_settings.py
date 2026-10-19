@@ -73,6 +73,25 @@ class C2CoordinatorSettingsTests(unittest.TestCase):
                 "allocation_id": "6" * 64,
                 "clock_domain": "coordinator-clock-domain",
             },
+            "workers": {
+                f"worker-{index}": {
+                    "device_id": f"dev_{index:032x}",
+                    "worker_boot_id": f"{index:032x}",
+                    "assignment_id": f"asg_{index:032x}",
+                    "host_certificate": {
+                        "path": f"/etc/steamboat/worker-{index}.pem",
+                        "sha256": f"{index:x}" * 64,
+                    },
+                }
+                for index in range(1, 4)
+            },
+            "listener": {
+                "endpoint": "127.0.0.1:7443",
+                "allowed_addresses": ["127.0.0.1"],
+                "listener_id": "coordinator-consumer",
+                "connection_slots": 1,
+                "acceptor_directory": "/var/lib/steamboat/acceptors",
+            },
         }
 
     def encode(self, document=None):
@@ -92,6 +111,11 @@ class C2CoordinatorSettingsTests(unittest.TestCase):
                          hashlib.sha256(self.catalog_key).hexdigest())
         self.assertEqual(settings.gateway.gateway_id, "gateway-1")
         self.assertEqual(settings.traffic.clock_domain, "coordinator-clock-domain")
+        self.assertEqual(tuple(worker.component for worker in settings.workers),
+                         ("worker-1", "worker-2", "worker-3"))
+        self.assertEqual(settings.workers[0].worker_boot_id, f"{1:032x}")
+        self.assertEqual(settings.listener.endpoint, "127.0.0.1:7443")
+        self.assertEqual(settings.listener.allowed_addresses, ("127.0.0.1",))
         source["assignment"]["catalog_sha256"] = "f" * 64
         self.assertEqual(settings.assignment.catalog_sha256, "1" * 64)
         with self.assertRaises(FrozenInstanceError):
@@ -186,6 +210,61 @@ class C2CoordinatorSettingsTests(unittest.TestCase):
         doc = self.document()
         doc["traffic"]["clock_domain"] = "x" * 257
         self.assert_invalid(doc)
+
+    def test_worker_map_is_exact_unique_and_uses_pinned_certificate_locators(self):
+        doc = self.document()
+        doc["workers"]["worker-2"]["device_id"] = doc["workers"]["worker-1"]["device_id"]
+        parsed = parse_c2_coordinator_settings(self.encode(doc))
+        self.assertEqual(parsed.workers[0].device_id, parsed.workers[1].device_id)
+        self.assertNotEqual(parsed.workers[0].worker_boot_id,
+                            parsed.workers[1].worker_boot_id)
+
+        doc = self.document()
+        del doc["workers"]["worker-3"]
+        self.assert_invalid(doc)
+        doc = self.document()
+        doc["workers"]["worker-1"]["device_id"] = doc["workers"]["worker-2"]["device_id"]
+        doc["workers"]["worker-1"]["worker_boot_id"] = doc["workers"]["worker-2"]["worker_boot_id"]
+        self.assert_invalid(doc)
+        doc = self.document()
+        doc["workers"]["worker-1"]["assignment_id"] = doc["workers"]["worker-2"]["assignment_id"]
+        self.assert_invalid(doc)
+        for field, value in (("device_id", "acct_" + "a" * 32),
+                             ("worker_boot_id", "A" * 32),
+                             ("assignment_id", "asg_short")):
+            doc = self.document()
+            doc["workers"]["worker-2"][field] = value
+            with self.subTest(field=field):
+                self.assert_invalid(doc)
+        doc = self.document()
+        doc["workers"]["worker-1"]["host_certificate"] = {
+            "path": "/etc/steamboat/worker.pem", "sha256": "A" * 64,
+        }
+        self.assert_invalid(doc)
+        doc = self.document()
+        doc["workers"]["worker-1"]["host_certificate"]["extra"] = "endpoint"
+        self.assert_invalid(doc)
+
+    def test_fixed_listener_reuses_strict_numeric_listener_semantics(self):
+        for endpoint, allowlist in (
+                ("0.0.0.0:7443", ["0.0.0.0"]),
+                ("localhost:7443", ["127.0.0.1"]),
+                ("127.0.0.1:0", ["127.0.0.1"]),
+                ("127.0.0.1:07443", ["127.0.0.1"]),
+                ("127.0.0.1:7443", ["127.0.0.1", "127.0.0.1"]),
+                ("127.0.0.1:7443", ["127.0.0.1", "10.0.0.2"])):
+            with self.subTest(endpoint=endpoint, allowlist=allowlist):
+                doc = self.document()
+                doc["listener"]["endpoint"] = endpoint
+                doc["listener"]["allowed_addresses"] = allowlist
+                self.assert_invalid(doc)
+        for field, value in (("listener_id", ""), ("listener_id", "x" * 129),
+                             ("connection_slots", True), ("connection_slots", 3),
+                             ("acceptor_directory", "relative")):
+            doc = self.document()
+            doc["listener"][field] = value
+            with self.subTest(field=field, value=value):
+                self.assert_invalid(doc)
 
 
 if __name__ == "__main__":

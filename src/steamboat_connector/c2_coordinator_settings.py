@@ -14,18 +14,26 @@ from steamboat_connector.c2_host_settings import (
 from steamboat_connector.traffic_budget import _ALLOCATION_ID
 from steamboat_security.codec import canonical_json
 from steamboat_security.errors import BindingError
-from steamboat_security.ids import validate_id
+from steamboat_security.ids import validate_boot, validate_id
 from steamboat_security.root_c2_coordinator import C2CoordinatorRuntimeBinding
 from steamboat_security.root_c2_runtime import MAX_RUNTIME_CONFIGURATION_BYTES
 
 PROFILE = "native_posix_c2_coordinator_runtime_v1"
 _TOP_FIELDS = frozenset({
     "schema_version", "profile", "artifact_root", "catalog_public_key_hex",
-    "assignment", "gateway", "traffic",
+    "assignment", "gateway", "traffic", "workers", "listener",
 })
 _ASSIGNMENT_FIELDS = frozenset({
     "assignment_id", "catalog_sha256", "catalog_public_key_sha256",
     "assignment_sha256",
+})
+_WORKER_COMPONENTS = ("worker-1", "worker-2", "worker-3")
+_WORKER_FIELDS = frozenset({
+    "device_id", "worker_boot_id", "assignment_id", "host_certificate",
+})
+_LISTENER_FIELDS = frozenset({
+    "endpoint", "allowed_addresses", "listener_id", "connection_slots",
+    "acceptor_directory",
 })
 
 
@@ -42,6 +50,24 @@ class CoordinatorAssignmentSettings:
 
 
 @dataclass(frozen=True)
+class CoordinatorWorkerSettings:
+    component: str
+    device_id: str
+    worker_boot_id: str
+    assignment_id: str
+    host_certificate: object
+
+
+@dataclass(frozen=True)
+class CoordinatorListenerSettings:
+    endpoint: str
+    allowed_addresses: tuple[str, ...]
+    listener_id: str
+    connection_slots: int
+    acceptor_directory: str
+
+
+@dataclass(frozen=True)
 class C2CoordinatorSettings:
     schema_version: int
     profile: str
@@ -50,6 +76,8 @@ class C2CoordinatorSettings:
     assignment: CoordinatorAssignmentSettings
     gateway: HostGatewaySettings
     traffic: HostTrafficSettings
+    workers: tuple[CoordinatorWorkerSettings, ...]
+    listener: CoordinatorListenerSettings
 
 
 def _pairs(pairs):
@@ -179,11 +207,73 @@ def parse_c2_coordinator_settings(encoded: bytes) -> C2CoordinatorSettings:
             _path(traffic_doc["state_path"], "traffic.state_path"),
             allocation_id, clock_domain,
         )
+        workers_doc = doc["workers"]
+        if (type(workers_doc) is not dict
+                or set(workers_doc) != set(_WORKER_COMPONENTS)):
+            raise C2CoordinatorSettingsError(
+                "workers must declare exactly worker-1, worker-2, and worker-3"
+            )
+        workers = []
+        worker_identities = set()
+        worker_assignments = set()
+        for component in _WORKER_COMPONENTS:
+            worker_doc = _object(workers_doc[component], _WORKER_FIELDS, component)
+            try:
+                device_id = validate_id(worker_doc["device_id"], "dev")
+                worker_boot_id = validate_boot(worker_doc["worker_boot_id"])
+                worker_assignment_id = validate_id(worker_doc["assignment_id"], "asg")
+            except BindingError as error:
+                raise C2CoordinatorSettingsError(
+                    f"{component} identity or assignment is invalid"
+                ) from error
+            if (device_id, worker_boot_id) in worker_identities:
+                raise C2CoordinatorSettingsError("worker device/boot identities must be unique")
+            if worker_assignment_id in worker_assignments:
+                raise C2CoordinatorSettingsError("worker assignments must be unique")
+            worker_identities.add((device_id, worker_boot_id))
+            worker_assignments.add(worker_assignment_id)
+            workers.append(CoordinatorWorkerSettings(
+                component, device_id, worker_boot_id, worker_assignment_id,
+                _pin(worker_doc["host_certificate"], f"{component}.host_certificate"),
+            ))
+
+        listener_doc = _object(doc["listener"], _LISTENER_FIELDS, "listener")
+        allowed_addresses = listener_doc["allowed_addresses"]
+        if (type(allowed_addresses) is not list or not 1 <= len(allowed_addresses) <= 4
+                or any(type(address) is not str for address in allowed_addresses)
+                or allowed_addresses != sorted(set(allowed_addresses))):
+            raise C2CoordinatorSettingsError(
+                "listener.allowed_addresses must be a sorted unique list of 1..4 addresses"
+            )
+        try:
+            from steamboat_runtime.protocol.secure_transport import parse_fixed_ipv4_endpoint
+            host, port = parse_fixed_ipv4_endpoint(
+                listener_doc["endpoint"], allowed_addresses, listen=True
+            )
+        except (TypeError, ValueError) as error:
+            raise C2CoordinatorSettingsError("listener endpoint is invalid") from error
+        if port == 0:
+            raise C2CoordinatorSettingsError("listener endpoint must use an explicit port")
+        listener_id = listener_doc["listener_id"]
+        if type(listener_id) is not str or not 1 <= len(listener_id) <= 128:
+            raise C2CoordinatorSettingsError(
+                "listener.listener_id must contain 1..128 characters"
+            )
+        connection_slots = _integer(
+            listener_doc["connection_slots"], minimum=1, maximum=2,
+            label="listener.connection_slots",
+        )
+        listener = CoordinatorListenerSettings(
+            f"{host}:{port}", tuple(allowed_addresses), listener_id,
+            connection_slots,
+            _path(listener_doc["acceptor_directory"], "listener.acceptor_directory"),
+        )
     except C2HostSettingsError as error:
         raise C2CoordinatorSettingsError(str(error)) from error
 
     return C2CoordinatorSettings(
-        1, PROFILE, artifact_root, key_hex, assignment, gateway, traffic
+        1, PROFILE, artifact_root, key_hex, assignment, gateway, traffic,
+        tuple(workers), listener,
     )
 
 
