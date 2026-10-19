@@ -268,6 +268,8 @@ class ConsumerRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         result_future = run.result
         loop = asyncio.get_running_loop()
         loop.call_soon(transport.request_runtime_invalidation, "owner stopped")
+        await asyncio.sleep(0)
+        self.assertTrue(transport._runtime_invalidated.is_set())
         with self.assertRaises(ConnectorError) as caught:
             await asyncio.wait_for(result_future, 1)
         self.assertEqual(caught.exception.code, "UNAVAILABLE")
