@@ -27,7 +27,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 
 from steamboat_security.certificates import (
-    certificate_sha256, generate_ca, generate_private_key_pem,
+    certificate_sha256, generate_private_key_pem,
     public_key_sha256, serial_hex,
 )
 from steamboat_security.channel_policy import sign_channel_policy
@@ -312,6 +312,8 @@ class C2HostProcessFixture:
         self.pin = self.startup.pin
         self.verifier = self.startup.verifier
         self.scope = self.startup.selected_scope
+        if self.gateway_ca != self.binding._snapshot_store.ca_certificate_pem:
+            raise RuntimeError("gateway peer CA differs from the selected cohort CA")
         self.worker = self.startup.binding.components[0]
         self._open_policy_and_traffic()
 
@@ -321,9 +323,11 @@ class C2HostProcessFixture:
         from steamboat_security.channel_policy import sign_channel_policy
         now = int(case.clock.sample().wall)
         if self.gateway_ca is None:
-            self.gateway_ca, self.gateway_ca_key = generate_ca(
-                common_name="C2 host process fixture gateway CA", now=now - 30,
-                lifetime_days=1)
+            # This actual GatewayService uses the selected cohort CA to verify
+            # both its local gateway leaf and the worker-stream peer leaf.
+            # Issue only the gateway fixture leaf from that same real root.
+            self.gateway_ca = case.fx.new_ca
+            self.gateway_ca_key = case.fx.new_ca_key
             self.gateway_cert, self.gateway_key, self.gateway_x509 = _gateway_certificate(
                 self.gateway_ca, self.gateway_ca_key, now=now)
         candidate = case.fixture.candidate
