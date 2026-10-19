@@ -1,17 +1,19 @@
 """C2 RPC dispatch/relay checks over the genuine loopback TLS/HELLO fixtures."""
 import asyncio
 import secrets
+import time
 import unittest
 from unittest import mock
 
 from steamboat_connector import channel_wire as wire
 from steamboat_connector.channel_rpc import (
     ChannelRpcError, GatewayChannelRelay, _delegation_sequence,
+    _DATA_LIMIT, _DATA_CAPTURE_BYTES, _CONTROL_LIMIT, _CONTROL_CAPTURE_BYTES,
 )
 from steamboat_runtime.protocol.wire import Request, Response, serialize_message
 from steamboat_security.codec import METADATA_KEY, encode_binding
 from steamboat_security.ids import new_id
-from tests.connector.test_gateway_router import GatewayRouterTwoHopTests
+from tests.connector import test_gateway_router as gateway_router_tests
 
 
 class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
@@ -26,11 +28,22 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             identity_core, "MODEL", self.manifest["fingerprint"])
         self._model_patch.start()
         self.addCleanup(self._model_patch.stop)
-        self.fx = GatewayRouterTwoHopTests(
+        self.fx = gateway_router_tests.GatewayRouterTwoHopTests(
             methodName="test_submit_binds_real_two_hops_hello_generation_and_core_c1")
-        self.fx.setUp()
         self.addCleanup(self.fx.doCleanups)
+        self.fx.setUp()
         self.bridge = None
+
+    def _pump_until(self, streams, pop, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for stream in streams:
+                stream.pump()
+            message = pop()
+            if message is not None:
+                return message
+            time.sleep(0.001)
+        return None
 
     async def asyncTearDown(self):
         if self.bridge is not None and not self.bridge._closed:
@@ -40,7 +53,9 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
     def test_gateway_relay_routes_and_returns_exact_protobuf_rpc(self):
         relay = GatewayChannelRelay(
             coordinator_stream=self.fx.coordinator_server_stream,
-            worker_stream=self.fx.worker_server_stream, router=self.fx.router)
+            worker_stream=self.fx.worker_server_stream, router=self.fx.router,
+            data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
+            control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
         fields = {
             "binding_version": 1,
             "operation_id": new_id("op"),
@@ -63,13 +78,9 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             kind=wire.DATA, message_id=message_id, payload=inbound)
         # Pump the authenticated coordinator hop until its real server stream has
         # decoded the C2 request, then exercise the relay's route authorization.
-        coordinator_message = None
-        for _ in range(1000):
-            self.fx.coordinator_client_stream.pump()
-            self.fx.coordinator_server_stream.pump()
-            coordinator_message = self.fx.coordinator_server_stream.pop_message()
-            if coordinator_message is not None:
-                break
+        coordinator_message = self._pump_until(
+            (self.fx.coordinator_client_stream, self.fx.coordinator_server_stream),
+            self.fx.coordinator_server_stream.pop_message)
         self.assertIsNotNone(coordinator_message)
         self.assertEqual(coordinator_message.message_id, message_id)
         relay._forward(coordinator_message)
@@ -92,22 +103,14 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             protobuf=serialize_message(response_proto))
         self.fx.worker_client_stream.enqueue(kind=wire.RESPONSE, message_id=message_id,
                                              payload=response_bundle)
-        worker_response = None
-        for _ in range(1000):
-            self.fx.worker_client_stream.pump()
-            self.fx.worker_server_stream.pump()
-            worker_response = self.fx.worker_server_stream.pop_message()
-            if worker_response is not None:
-                break
+        worker_response = self._pump_until(
+            (self.fx.worker_client_stream, self.fx.worker_server_stream),
+            self.fx.worker_server_stream.pop_message)
         self.assertIsNotNone(worker_response)
         relay._return(worker_response)
-        returned = None
-        for _ in range(1000):
-            self.fx.coordinator_server_stream.pump()
-            self.fx.coordinator_client_stream.pump()
-            returned = self.fx.coordinator_client_stream.pop_message()
-            if returned is not None:
-                break
+        returned = self._pump_until(
+            (self.fx.coordinator_server_stream, self.fx.coordinator_client_stream),
+            self.fx.coordinator_client_stream.pop_message)
         self.assertIsNotNone(returned)
         self.assertEqual(returned.message_id, message_id)
         self.assertEqual(returned.kind, wire.RESPONSE)
@@ -147,7 +150,9 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         self.bridge = SecureWorkerRuntimeBridge(authorizer, handler)
         await self.bridge.start()
         service = WorkerChannelRpc(stream=self.fx.worker_client_stream,
-                                   bridge=self.bridge)
+                                   bridge=self.bridge,
+                                   data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
+                                   control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
 
         fields = {
             "binding_version": 1, "operation_id": new_id("op"),
@@ -168,52 +173,209 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         self.fx.coordinator_client_stream.enqueue(kind=wire.DATA,
                                                   message_id=message_id,
                                                   payload=inbound)
-        coordinator_message = None
-        for _ in range(1000):
-            self.fx.coordinator_client_stream.pump()
-            self.fx.coordinator_server_stream.pump()
-            coordinator_message = self.fx.coordinator_server_stream.pop_message()
-            if coordinator_message is not None:
-                break
+        coordinator_message = self._pump_until(
+            (self.fx.coordinator_client_stream, self.fx.coordinator_server_stream),
+            self.fx.coordinator_server_stream.pop_message)
         self.assertIsNotNone(coordinator_message)
         relay = GatewayChannelRelay(
             coordinator_stream=self.fx.coordinator_server_stream,
-            worker_stream=self.fx.worker_server_stream, router=self.fx.router)
+            worker_stream=self.fx.worker_server_stream, router=self.fx.router,
+            data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
+            control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
         relay._forward(coordinator_message)
 
-        worker_message = None
-        for _ in range(1000):
-            self.fx.worker_server_stream.pump()
-            self.fx.worker_client_stream.pump()
-            worker_message = self.fx.worker_client_stream.pop_message()
-            if worker_message is not None:
-                break
+        worker_message = self._pump_until(
+            (self.fx.worker_server_stream, self.fx.worker_client_stream),
+            self.fx.worker_client_stream.pop_message)
         self.assertIsNotNone(worker_message)
         service._admit(worker_message)
         await asyncio.gather(*tuple(service._active))
         self.assertEqual(handler.manifest["fingerprint"], self.manifest["fingerprint"])
         self.assertEqual(self.bridge.status()["active_authorizations"], 0)
 
-        worker_response = None
-        for _ in range(1000):
-            self.fx.worker_client_stream.pump()
-            self.fx.worker_server_stream.pump()
-            worker_response = self.fx.worker_server_stream.pop_message()
-            if worker_response is not None:
-                break
+        worker_response = self._pump_until(
+            (self.fx.worker_client_stream, self.fx.worker_server_stream),
+            self.fx.worker_server_stream.pop_message)
         self.assertIsNotNone(worker_response)
         relay._return(worker_response)
-        returned = None
-        for _ in range(1000):
-            self.fx.coordinator_server_stream.pump()
-            self.fx.coordinator_client_stream.pump()
-            returned = self.fx.coordinator_client_stream.pop_message()
-            if returned is not None:
-                break
+        returned = self._pump_until(
+            (self.fx.coordinator_server_stream, self.fx.coordinator_client_stream),
+            self.fx.coordinator_client_stream.pop_message)
         self.assertIsNotNone(returned)
         result = wire.decode_bundle(returned.payload, fragment_kind=returned.kind)
         self.assertEqual(result.method, "Describe")
         self.assertEqual(result.classification, wire.BUNDLE_RESPONSE)
+
+    async def test_run_keeps_control_responsive_during_real_blocked_step(self):
+        import threading
+        import torch
+        from steamboat_connector.channel_rpc import WorkerChannelRpc
+        from steamboat_runtime.secure_worker_runtime import SecureWorkerRuntimeBridge
+        from steamboat_runtime.worker_state import WorkerHandler
+        from steamboat_runtime.protocol.worker_pb2 import Request
+        from steamboat_runtime.protocol.codec import encode_tensor
+        from steamboat_security.authorization import Authorizer, LocalIdentity
+
+        class Cache:
+            def __init__(self): self.position = 0
+            def lengths(self): return [self.position] * 3
+            def allocated_bytes(self): return self.position * 1536
+            def clear(self): self.position = 0
+
+        class Executor:
+            def __init__(self):
+                self.cache = None
+                self.started = threading.Event()
+                self.release = threading.Event()
+            def new_cache(self):
+                self.cache = Cache()
+                return self.cache
+            def execute(self, hidden, cache, position):
+                cache.position += hidden.shape[1]
+                self.started.set()
+                if not self.release.wait(3):
+                    raise RuntimeError("test did not release blocked compute")
+                return hidden + 1
+
+        authorizer = Authorizer(
+            local_identity=LocalIdentity(
+                self.fx.host["certificate"], self.fx.worker_boot_id,
+                self.manifest["fingerprint"], self.fx.assignment_id),
+            snapshot_store=self.fx.base.snapshot_store, clock=self.fx.base.clock,
+            session_bindings=self.fx.worker_sessions, worker_request_type=Request)
+        executor = Executor()
+        handler = WorkerHandler(self.manifest, "worker-1", executor,
+                                boot_id=self.fx.worker_boot_id)
+        self.bridge = SecureWorkerRuntimeBridge(authorizer, handler)
+        service = WorkerChannelRpc(
+            stream=self.fx.worker_client_stream, bridge=self.bridge,
+            data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
+            control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
+        relay = GatewayChannelRelay(
+            coordinator_stream=self.fx.coordinator_server_stream,
+            worker_stream=self.fx.worker_server_stream, router=self.fx.router,
+            data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
+            control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
+        service_task = asyncio.create_task(service.run())
+        relay_task = asyncio.create_task(relay.run())
+        self.addAsyncCleanup(self._stop_service_tasks, service, relay,
+                             service_task, relay_task, executor)
+
+        async def rpc(method, request, *, lane=wire.DATA):
+            fields, metadata, binding = self.fx._binding_metadata(
+                method, operation_id=new_id("op"), request_id=new_id("req"),
+                session_id=request.session_id if method != "Describe" else "")
+            raw = serialize_message(request)
+            message_id = secrets.token_bytes(16)
+            payload = wire.encode_bundle(method, wire.REQUEST, fragment_kind=lane,
+                                         binding=binding, protobuf=raw)
+            self.fx.coordinator_client_stream.enqueue(kind=lane, message_id=message_id,
+                                                       payload=payload)
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                self.fx.coordinator_client_stream.pump()
+                response = self.fx.coordinator_client_stream.pop_message()
+                if response is not None:
+                    self.assertEqual(response.message_id, message_id)
+                    bundle = wire.decode_bundle(response.payload,
+                                                fragment_kind=response.kind)
+                    return response.kind, bundle.method, bundle.protobuf
+                await asyncio.sleep(0.001)
+            self.fail(f"timed out waiting for {method} response")
+
+        def req(method, **kwargs):
+            base = dict(protocol_version=1,
+                        manifest_fingerprint=self.manifest["fingerprint"],
+                        worker_boot_id=self.fx.worker_boot_id, timeout_ms=5000)
+            if method != "Describe": base["session_id"] = kwargs.pop("session_id")
+            return Request(**(base | kwargs))
+
+        kind, method, raw = await rpc("OpenSession", req(
+            "OpenSession", session_id="rpc-session", lease_token="",
+            max_positions=8, lifetime_ms=30000, idle_lease_ms=10000))
+        from steamboat_runtime.protocol.worker_pb2 import Response as WorkerResponse
+        opened = WorkerResponse.FromString(raw)
+        self.assertEqual((kind, method, opened.code), (wire.RESPONSE, "OpenSession", "OK"))
+        step_task = asyncio.create_task(rpc("Step", req(
+            "Step", session_id="rpc-session", lease_token=opened.lease_token,
+            sequence=0, start_position=0, token_count=1,
+            tensor=encode_tensor(torch.zeros((1, 1, 64))))))
+        self.assertTrue(await asyncio.to_thread(executor.started.wait, 1),
+                        "actual WorkerHandler executor did not enter Step")
+        cancel_kind, cancel_method, cancel_raw = await rpc(
+            "CancelSession", req("CancelSession", session_id="rpc-session",
+                                  lease_token=opened.lease_token), lane=wire.CONTROL)
+        cancelled = WorkerResponse.FromString(cancel_raw)
+        self.assertEqual((cancel_kind, cancel_method, cancelled.code),
+                         (wire.CONTROL_RESPONSE, "CancelSession", "OK"))
+        status_kind, status_method, status_raw = await rpc(
+            "SessionStatus", req("SessionStatus", session_id="rpc-session",
+                                 lease_token=opened.lease_token), lane=wire.CONTROL)
+        status = WorkerResponse.FromString(status_raw)
+        self.assertEqual((status_kind, status_method, status.code),
+                         (wire.CONTROL_RESPONSE, "SessionStatus", "OK"))
+        self.assertTrue(executor.started.is_set())
+        self.assertIsNotNone(executor.cache)
+        self.assertEqual(executor.cache.position, 1)
+        executor.release.set()
+        step_kind, step_method, step_raw = await step_task
+        step = WorkerResponse.FromString(step_raw)
+        self.assertEqual((step_kind, step_method, step.code),
+                         (wire.RESPONSE, "Step", "CANCELLED"))
+        self.assertEqual(self.bridge.status()["active_authorizations"], 0)
+        self.assertEqual(handler.sessions, {})
+
+        # Losing the channel while a native executor owns cache state must not
+        # release the bridge authorization or cache capture ahead of the thread.
+        executor.started.clear()
+        executor.release.clear()
+        _, _, second_open_raw = await rpc("OpenSession", req(
+            "OpenSession", session_id="lost-session", lease_token="",
+            max_positions=8, lifetime_ms=30000, idle_lease_ms=10000))
+        second_open = WorkerResponse.FromString(second_open_raw)
+        lost_step_task = asyncio.create_task(rpc("Step", req(
+            "Step", session_id="lost-session", lease_token=second_open.lease_token,
+            sequence=0, start_position=0, token_count=1,
+            tensor=encode_tensor(torch.zeros((1, 1, 64))))))
+        self.assertTrue(await asyncio.to_thread(executor.started.wait, 1))
+        self.fx.worker_client_stream.close()
+        self.assertGreater(self.bridge.status()["active_authorizations"], 0)
+        self.assertEqual(executor.cache.position, 1)
+        executor.release.set()
+        deadline = time.monotonic() + 1.0
+        while self.bridge.status()["active_authorizations"] and time.monotonic() < deadline:
+            await asyncio.sleep(0.001)
+        self.assertEqual(self.bridge.status()["active_authorizations"], 0)
+        await asyncio.gather(lost_step_task, return_exceptions=True)
+
+    async def _stop_service_tasks(self, service, relay, service_task, relay_task, executor):
+        executor.release.set()
+        service.stop()
+        relay.stop()
+        for task in (service_task, relay_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(service_task, relay_task, return_exceptions=True)
+
+    def test_capture_reservations_are_mandatory_and_cover_all_admissions(self):
+        from steamboat_connector.channel_rpc import WorkerChannelRpc
+        minimum_data = _DATA_LIMIT * _DATA_CAPTURE_BYTES
+        minimum_control = _CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES
+        self.assertGreaterEqual(_DATA_CAPTURE_BYTES, 8 * wire.MAX_PROTOBUF_BYTES)
+        with self.assertRaises(ValueError):
+            GatewayChannelRelay(
+                coordinator_stream=self.fx.coordinator_server_stream,
+                worker_stream=self.fx.worker_server_stream, router=self.fx.router,
+                data_capture_reservation_bytes=minimum_data - 1,
+                control_capture_reservation_bytes=minimum_control)
+        with self.assertRaises(ValueError):
+            from types import SimpleNamespace
+            bridge = SimpleNamespace(authorizer_core=SimpleNamespace(
+                local_identity=SimpleNamespace(boot_id=self.fx.worker_boot_id)))
+            WorkerChannelRpc(
+                stream=self.fx.worker_client_stream, bridge=bridge,
+                data_capture_reservation_bytes=minimum_data,
+                control_capture_reservation_bytes=minimum_control - 1)
 
 
 if __name__ == "__main__":

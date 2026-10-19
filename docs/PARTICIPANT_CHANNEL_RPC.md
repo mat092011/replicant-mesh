@@ -39,8 +39,34 @@ and caller response context is still pending. This component also does not
 provide loaded-model readiness, model execution evidence, multi-device results,
 or completion of C2/CT-12/CT-13.
 
-Focused tests are in `tests/connector/test_channel_rpc.py`. Run them with the
-repository's isolated PyTorch/Protobuf runtime, for example:
+Focused tests are in `tests/connector/test_channel_rpc.py` and require the
+repository's isolated PyTorch/Protobuf runtime.
+
+Each service constructor requires explicit independent data and cleanup
+capture reservations. They must cover all supported admissions before parsing;
+there is no default or implicit capacity. Data admission reserves
+`8 * MAX_PROTOBUF_BYTES + MAX_ENVELOPE_BYTES + MAX_BINDING_BYTES + 64 KiB`
+per operation (currently 8,495,104 bytes), and nine slots require 76,455,936
+bytes. Cleanup admission reserves
+`4 * MAX_CONTROL_PROTOBUF_BYTES + MAX_ENVELOPE_BYTES + MAX_BINDING_BYTES +
+64 KiB` per operation (currently 139,264 bytes), and eight slots require
+1,114,112 bytes. An occupied slot keeps its reservation until compute and
+authorization ownership are released, including after an awaiting RPC is
+canceled. Gateway relay request captures use the same independent caps.
+
+These reservations are separate from ChannelStream receive/reassembly and
+writer queues and GatewayRouter worker-writer reservations. They bound the
+configured RPC capture accounting, not Python allocator overhead, runtime
+fixed state or total process memory. Role-level resource accounting must sum
+co-located reservations and separately account for those costs.
+
+Heartbeat payloads use the fixed 13-byte `C2H1` PING/PONG contract. The worker
+service validates gateway PINGs against ingress generation and logical control
+sequence, while the gateway relay periodically enqueues PINGs through the
+router's shared control counter and checks exact PONG echo/liveness. These are
+transport liveness checks, not evidence of loaded-model readiness.
+
+Run the focused suite with:
 
 ```powershell
 $env:PYTHONPATH = 'src'

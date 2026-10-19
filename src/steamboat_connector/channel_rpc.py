@@ -18,6 +18,10 @@ from steamboat_connector.channel_hello import (
 )
 from steamboat_connector.channel_stream import ChannelStream
 from steamboat_runtime.protocol import METHODS, MAX_MESSAGE_BYTES
+from steamboat_connector.channel_wire import (
+    MAX_BINDING_BYTES, MAX_CONTROL_PROTOBUF_BYTES, MAX_ENVELOPE_BYTES,
+    MAX_PROTOBUF_BYTES,
+)
 from steamboat_runtime.protocol.secure_transport import _run_guarded, SecureTaskPending
 from steamboat_runtime.protocol.wire import (
     Request, Response, parse_message, serialize_message, validate_response,
@@ -34,6 +38,21 @@ _DATA_LIMIT = 9  # one active plus eight pending
 _CONTROL_LIMIT = 8
 _PUMP_INTERVAL = 0.005
 _MONITOR_INTERVAL = 5.0
+# Conservative, explicit retained-capture reservations. Each admission reserves
+# the entire maximum before decoding: wire bundle, raw protobuf copy, parsed
+# protobuf/object allowance, canonical binding, signed envelope and bookkeeping.
+_RPC_FIXED_CAPTURE_BYTES = 64 * 1024
+_DATA_CAPTURE_BYTES = (8 * MAX_PROTOBUF_BYTES + MAX_ENVELOPE_BYTES
+                       + MAX_BINDING_BYTES + _RPC_FIXED_CAPTURE_BYTES)
+_CONTROL_CAPTURE_BYTES = (4 * MAX_CONTROL_PROTOBUF_BYTES + MAX_ENVELOPE_BYTES
+                          + MAX_BINDING_BYTES + _RPC_FIXED_CAPTURE_BYTES)
+_RELAY_CAPTURE_BYTES = _DATA_CAPTURE_BYTES
+
+
+def _capture_budget(value, minimum, name):
+    if type(value) is not int or value < minimum:
+        raise ValueError(f"{name} must cover the full supported admission bound")
+    return value
 
 
 def _delegation_sequence(envelope):
@@ -59,7 +78,9 @@ def _binding(decoded):
 class WorkerChannelRpc:
     """Drive one real worker HELLO stream while dispatching bounded RPC tasks."""
 
-    def __init__(self, *, stream: ChannelStream, bridge):
+    def __init__(self, *, stream: ChannelStream, bridge,
+                 data_capture_reservation_bytes,
+                 control_capture_reservation_bytes):
         if type(stream) is not ChannelStream or type(stream._hello) is not WorkerHelloClient:
             raise TypeError("worker RPC requires a client-side WorkerHelloClient stream")
         hello = stream._hello
@@ -73,10 +94,19 @@ class WorkerChannelRpc:
         self.hello = hello
         self.ingress = hello.ingress
         self.bridge = bridge
+        self.data_capture_reservation_bytes = _capture_budget(
+            data_capture_reservation_bytes, _DATA_LIMIT * _DATA_CAPTURE_BYTES,
+            "worker data capture reservation")
+        self.control_capture_reservation_bytes = _capture_budget(
+            control_capture_reservation_bytes, _CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES,
+            "worker control capture reservation")
         self._accepting = True
         self._active = set()
         self._data_count = 0
         self._control_count = 0
+        self._data_bytes = 0
+        self._control_bytes = 0
+        self._retained_releases = set()
         self._last_monitor = 0.0
 
     async def run(self):
@@ -105,6 +135,9 @@ class WorkerChannelRpc:
         except BaseException:
             self.stop()
             raise
+        finally:
+            if self.stream.closed:
+                self.stop()
 
     def stop(self):
         self._accepting = False
@@ -121,15 +154,29 @@ class WorkerChannelRpc:
     def _admit(self, message):
         if not self._accepting:
             raise ChannelRpcError("worker RPC admission is stopped")
-        decoded = wire.decode_bundle(message.payload, fragment_kind=message.kind)
-        if decoded.classification != wire.REQUEST or decoded.method not in METHODS:
-            raise ChannelRpcError("worker received an unsupported request bundle")
+        if message.kind not in (wire.DATA, wire.CONTROL):
+            raise ChannelRpcError("worker received an invalid RPC frame kind")
         is_control = message.kind == wire.CONTROL
-        if is_control != (decoded.method in _CLEANUP):
-            raise ChannelRpcError("RPC method arrived on the wrong lane")
         if (is_control and self._control_count >= _CONTROL_LIMIT
                 or not is_control and self._data_count >= _DATA_LIMIT):
             raise ChannelRpcError("worker RPC concurrency bound is exhausted")
+        reservation = _CONTROL_CAPTURE_BYTES if is_control else _DATA_CAPTURE_BYTES
+        if is_control:
+            if (self._control_bytes + reservation
+                    > self.control_capture_reservation_bytes):
+                raise ChannelRpcError("worker cleanup capture byte reservation is exhausted")
+            self._control_bytes += reservation
+            self._control_count += 1
+        else:
+            if self._data_bytes + reservation > self.data_capture_reservation_bytes:
+                raise ChannelRpcError("worker data capture byte reservation is exhausted")
+            self._data_bytes += reservation
+            self._data_count += 1
+        decoded = wire.decode_bundle(message.payload, fragment_kind=message.kind)
+        if decoded.classification != wire.REQUEST or decoded.method not in METHODS:
+            raise ChannelRpcError("worker received an unsupported request bundle")
+        if is_control != (decoded.method in _CLEANUP):
+            raise ChannelRpcError("RPC method arrived on the wrong lane")
         if len(decoded.protobuf) > MAX_MESSAGE_BYTES:
             raise ChannelRpcError("worker protobuf exceeds the protocol bound")
         metadata, binding = _binding(decoded)
@@ -146,12 +193,8 @@ class WorkerChannelRpc:
             authorization.fail(cache_may_exist=False)
             authorization.close()
             raise ChannelRpcError("bridge captured a different canonical C1 binding")
-        if is_control:
-            self._control_count += 1
-        else:
-            self._data_count += 1
         task = asyncio.create_task(self._execute(
-            message, decoded, request, authorization, is_control))
+            message, decoded, request, authorization, is_control, reservation))
         self._active.add(task)
         task.add_done_callback(self._task_finished)
 
@@ -160,9 +203,11 @@ class WorkerChannelRpc:
         if not task.cancelled() and task.exception() is not None:
             self.stop()
 
-    async def _execute(self, message, decoded, request, authorization, is_control):
+    async def _execute(self, message, decoded, request, authorization, is_control,
+                       reservation):
         transferred = False
         completed = False
+        secure_pending = None
         try:
             response = await _run_guarded(
                 self.bridge.handler.handle(decoded.method, request), authorization,
@@ -182,6 +227,7 @@ class WorkerChannelRpc:
         except SecureTaskPending as error:
             # _run_guarded retained the still-running compute and authorization owner.
             transferred = bool(getattr(error, "authorization_transferred", False))
+            secure_pending = error
             self.stop()
             raise
         except BaseException:
@@ -193,22 +239,39 @@ class WorkerChannelRpc:
             self.stop()
             raise
         finally:
-            if is_control:
-                self._control_count -= 1
-            else:
-                self._data_count -= 1
+            if not transferred:
+                self._release(is_control, reservation)
+            elif secure_pending is not None:
+                release = asyncio.create_task(
+                    self._release_after(secure_pending.tasks, is_control, reservation))
+                self._retained_releases.add(release)
+                release.add_done_callback(self._retained_releases.discard)
             if not transferred:
                 try:
                     authorization.close()
                 except BaseException:
                     self.stop()
 
+    async def _release_after(self, tasks, is_control, reservation):
+        # An abandoned RPC waiter does not release memory still owned by compute.
+        await asyncio.gather(*tuple(tasks), return_exceptions=True)
+        self._release(is_control, reservation)
+
+    def _release(self, is_control, reservation):
+        if is_control:
+            self._control_count -= 1
+            self._control_bytes -= reservation
+        else:
+            self._data_count -= 1
+            self._data_bytes -= reservation
+
 
 class GatewayChannelRelay:
     """Relay exact worker RPCs between live coordinator and worker HELLO streams."""
 
     def __init__(self, *, coordinator_stream: ChannelStream, worker_stream: ChannelStream,
-                 router):
+                 router, data_capture_reservation_bytes,
+                 control_capture_reservation_bytes):
         if (type(coordinator_stream) is not ChannelStream
                 or type(coordinator_stream._hello) is not CoordinatorHelloServer
                 or type(worker_stream) is not ChannelStream
@@ -226,7 +289,15 @@ class GatewayChannelRelay:
         self.coordinator = coordinator
         self.worker = worker
         self.router = router
+        self.data_capture_reservation_bytes = _capture_budget(
+            data_capture_reservation_bytes, _DATA_LIMIT * _RELAY_CAPTURE_BYTES,
+            "gateway data capture reservation")
+        self.control_capture_reservation_bytes = _capture_budget(
+            control_capture_reservation_bytes, _CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES,
+            "gateway control capture reservation")
         self._pending = {}
+        self._pending_data_bytes = 0
+        self._pending_control_bytes = 0
         self._accepting = True
         self._last_monitor = 0.0
 
@@ -267,6 +338,25 @@ class GatewayChannelRelay:
             if message.kind == wire.HEARTBEAT:
                 return
             raise ChannelRpcError("gateway coordinator sent an invalid RPC frame kind")
+        is_control = message.kind == wire.CONTROL
+        if message.message_id in self._pending:
+            raise ChannelRpcError("coordinator reused a pending wire message ID")
+        control_pending = sum(item[1] in _CLEANUP for item in self._pending.values())
+        data_pending = len(self._pending) - control_pending
+        if ((is_control and control_pending >= _CONTROL_LIMIT)
+                or (not is_control and data_pending >= _DATA_LIMIT)):
+            raise ChannelRpcError("gateway relay pending request bound is exhausted")
+        capture_cost = (_CONTROL_CAPTURE_BYTES if is_control else _RELAY_CAPTURE_BYTES)
+        if is_control:
+            if (self._pending_control_bytes + capture_cost
+                    > self.control_capture_reservation_bytes):
+                raise ChannelRpcError("gateway cleanup capture reservation is exhausted")
+            self._pending_control_bytes += capture_cost
+        else:
+            if (self._pending_data_bytes + capture_cost
+                    > self.data_capture_reservation_bytes):
+                raise ChannelRpcError("gateway data capture reservation is exhausted")
+            self._pending_data_bytes += capture_cost
         decoded = wire.decode_bundle(message.payload, fragment_kind=message.kind)
         if decoded.classification != wire.REQUEST:
             raise ChannelRpcError("gateway coordinator sent a non-request bundle")
@@ -304,24 +394,17 @@ class GatewayChannelRelay:
         # by GatewayRouter. Existing C1 describes without boot/assignment use route's
         # exact selected worker identity.
         metadata = ((METADATA_KEY, binding.encoded),)
-        if message.message_id in self._pending:
-            raise ChannelRpcError("coordinator reused a pending wire message ID")
-        is_control = decoded.method in _CLEANUP
-        lane_limit = 8 if is_control else 9
-        lane_pending = sum(item[1] in _CLEANUP for item in self._pending.values())
-        if (is_control and lane_pending >= lane_limit
-                or not is_control and len(self._pending) - lane_pending >= lane_limit):
-            raise ChannelRpcError("gateway relay pending request bound is exhausted")
         accepted = self.router.submit(
             coordinator=self.coordinator, worker=self.worker, route_guard=route,
             method=decoded.method, metadata=metadata, request_bytes=decoded.protobuf,
             message_id=message.message_id)
         if accepted is not True:
+            self._release_pending(is_control, capture_cost)
             raise ChannelRpcError("gateway worker writer has no bounded admission capacity")
         key = message.message_id
         self._pending[key] = (fields["operation_id"], decoded.method,
                               fields.get("request_id", ""), binding.encoded,
-                              route, request)
+                              route, request, is_control, capture_cost)
 
     def _return(self, message):
         if message.kind not in (wire.RESPONSE, wire.CONTROL_RESPONSE):
@@ -334,7 +417,7 @@ class GatewayChannelRelay:
         entry = self._pending.get(message.message_id)
         if entry is None or entry[1] != decoded.method:
             raise ChannelRpcError("worker response has no exact pending method/message mapping")
-        operation_id, method, request_id, _binding_bytes, route, request = entry
+        operation_id, method, request_id, _binding_bytes, route, request, is_control, capture_cost = entry
         route.assert_live()
         protobuf = parse_message(decoded.protobuf, Response, MAX_MESSAGE_BYTES)
         validate_response(method, request, protobuf)
@@ -347,3 +430,10 @@ class GatewayChannelRelay:
         self.coordinator_stream.enqueue(kind=message.kind, message_id=message.message_id,
                                         payload=response)
         del self._pending[message.message_id]
+        self._release_pending(is_control, capture_cost)
+
+    def _release_pending(self, is_control, capture_cost):
+        if is_control:
+            self._pending_control_bytes -= capture_cost
+        else:
+            self._pending_data_bytes -= capture_cost
