@@ -137,6 +137,8 @@ class SecureCoordinatorService:
                 raise ValueError("runtime guard must be a synchronous callable")
         self.runtime_guard = runtime_guard
         self._runtime_invalidated = threading.Event()
+        self._runtime_notification_lock = threading.Lock()
+        self._runtime_notification_scheduled = False
         self._runtime_async_event = None
         self._owner_loop = None
         if (type(max_generate_streams) is not int or not 1 <= max_generate_streams
@@ -172,10 +174,17 @@ class SecureCoordinatorService:
         self.runtime_owner.unavailable = True
         loop = self._owner_loop
         if loop is not None and not loop.is_closed():
-            try:
-                loop.call_soon_threadsafe(self._apply_runtime_invalidation, reason)
-            except RuntimeError:
-                pass
+            if self._runtime_notification_lock.acquire(blocking=False):
+                try:
+                    if not self._runtime_notification_scheduled:
+                        self._runtime_notification_scheduled = True
+                        try:
+                            loop.call_soon_threadsafe(
+                                self._apply_runtime_invalidation, reason)
+                        except RuntimeError:
+                            self._runtime_notification_scheduled = False
+                finally:
+                    self._runtime_notification_lock.release()
         return True
 
     def _apply_runtime_invalidation(self, reason):
@@ -202,6 +211,8 @@ class SecureCoordinatorService:
                 raise SecureTransportError("runtime guard must return synchronously")
             if result is not None:
                 raise SecureTransportError("runtime guard must return exactly None")
+            if self._runtime_invalidated.is_set():
+                raise AuthorizationRevoked("coordinator runtime was invalidated")
         except BaseException as error:
             self.request_runtime_invalidation("runtime guard refused")
             raise AuthorizationRevoked("coordinator runtime is no longer live") from error
@@ -1215,12 +1226,12 @@ class SecureCoordinatorService:
         else:
             trusted_context = await _maybe_await(self.request_context_factory(
                 authorization, payload))
-        self._check_runtime_guard()
         slot["trusted_context"] = trusted_context
         slot["resource_cleanup_required"] = True
         slot["resource_cleanup_confirmed"] = False
         release_deferred = False
         try:
+            self._check_runtime_guard()
             context_lifetime = self._validate_context(
                 trusted_context, authorization, request_deadline)
             await _assert_live(authorization)
@@ -1387,8 +1398,8 @@ class SecureCoordinatorService:
                 raise
             finally:
                 input_tensor = None
-            self._check_runtime_guard()
             slot["handle"] = handle
+            self._check_runtime_guard()
             try:
                 async for event in handle:
                     self._check_runtime_guard()

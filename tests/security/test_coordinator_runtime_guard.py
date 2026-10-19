@@ -30,9 +30,13 @@ class _Service:
 
 class _Auth:
     binding_bytes = b"binding"
+    complete_calls = 0
 
     async def assert_live(self):
         return None
+
+    async def complete(self, _response):
+        self.complete_calls += 1
 
 
 class _Context:
@@ -57,9 +61,6 @@ class _Context:
 
     def time_remaining(self):
         return 1.0
-
-    def invocation_metadata(self):
-        raise AssertionError("invalidated runtime must refuse before metadata access")
 
     def invocation_metadata(self):
         raise AssertionError("invalidated runtime must refuse before metadata access")
@@ -103,14 +104,18 @@ class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [])
         self.assertTrue(adapter._runtime_invalidated.is_set())
 
-    async def test_invalid_runtime_refuses_before_authorization(self):
-        calls = []
-        adapter = _adapter(lambda: (_ for _ in ()).throw(RuntimeError("stale binding")))
-        adapter.authorizer.authorize = lambda **_kwargs: calls.append("authorize")
+    async def test_late_unary_response_is_not_returned_or_completed(self):
+        adapter = _adapter()
+        auth = _Auth()
+
+        async def describe(_payload, _context):
+            adapter.request_runtime_invalidation("unary completed after stop")
+            return b"result"
+
+        adapter.service.describe_rpc = describe
         with self.assertRaises(AuthorizationRevoked):
-            await adapter._authorize("Describe", b"", {}, _Context())
-        self.assertEqual(calls, [])
-        self.assertTrue(adapter._runtime_invalidated.is_set())
+            await adapter._produce_unary("Describe", b"", _Context(), auth)
+        self.assertEqual(auth.complete_calls, 0)
 
     async def test_awaitable_guard_is_closed_and_rejected(self):
         created = []
@@ -128,6 +133,131 @@ class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
             adapter._check_runtime_guard()
         self.assertEqual(created[0].cr_frame, None)
         self.assertTrue(adapter._runtime_invalidated.is_set())
+
+    async def test_guard_that_invalidates_concurrently_then_returns_none_is_rejected(self):
+        holder = {}
+
+        def guard():
+            holder["adapter"].request_runtime_invalidation("inside guard")
+            return None
+
+        adapter = _adapter(guard)
+        holder["adapter"] = adapter
+        with self.assertRaises(AuthorizationRevoked):
+            adapter._check_runtime_guard()
+
+    async def test_repeated_invalidations_schedule_one_owner_loop_wakeup(self):
+        import asyncio
+        adapter = _adapter()
+        loop = asyncio.get_running_loop()
+        adapter._bind_owner_loop()
+        calls = []
+
+        class LoopProxy:
+            def is_closed(self):
+                return False
+
+            def call_soon_threadsafe(self, callback, *args):
+                calls.append((callback, args))
+                loop.call_soon(callback, *args)
+
+        adapter._owner_loop = LoopProxy()
+        class Acceptor:
+            pauses = 0
+
+            def pause(self):
+                self.pauses += 1
+
+        adapter.acceptor = Acceptor()
+        for _ in range(20):
+            adapter.request_runtime_invalidation("coalesced")
+        await asyncio.sleep(0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(adapter.acceptor.pauses, 1)
+
+    async def test_generate_factory_context_is_owned_before_post_factory_guard(self):
+        import asyncio
+        adapter = _adapter()
+        returned_context = object()
+        cleanup_contexts = []
+
+        async def factory(_authorization, _payload):
+            adapter.request_runtime_invalidation("factory observed stop")
+            return returned_context
+
+        adapter.request_context_factory = factory
+        adapter._capture_cleanup_tasks = lambda _slot: ()
+        adapter._defer_generate_resources = lambda ctx, _tasks, _slot: cleanup_contexts.append(ctx)
+        slot = {"producer_wrapper_tasks": set()}
+        with self.assertRaises(AuthorizationRevoked):
+            await adapter._produce_generate(
+                {}, _Context(), 100.0, _Auth(), slot)
+        self.assertIs(slot["trusted_context"], returned_context)
+        self.assertTrue(slot["resource_cleanup_required"])
+        self.assertEqual(cleanup_contexts, [returned_context])
+
+    async def test_constructor_rejects_async_guard_callable(self):
+        class AsyncCallable:
+            async def __call__(self):
+                return None
+
+        with self.assertRaises(ValueError):
+            _adapter(AsyncCallable())
+
+        async def async_guard():
+            return None
+
+        async def async_generator_guard():
+            yield None
+
+        for guard in (async_guard, async_generator_guard):
+            with self.subTest(guard=guard.__name__), self.assertRaises(ValueError):
+                _adapter(guard)
+
+    async def test_submit_handle_is_owned_before_post_submit_guard(self):
+        import asyncio
+        import types
+        from unittest.mock import patch
+
+        adapter = _adapter()
+        class Handle:
+            session_id = "session"
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            async def result(self):
+                return types.SimpleNamespace(cleanup_complete=True)
+
+        handle = Handle()
+
+        class Coordinator:
+            def submit(self, *_args, **_kwargs):
+                adapter.request_runtime_invalidation("submit returned after stop")
+                return handle
+
+        adapter.service.coordinator = Coordinator()
+        adapter.service.cleanups = set()
+        async def finish(_handle, **_kwargs):
+            return None
+        adapter.service._finish = finish
+        fake_torch = types.SimpleNamespace(tensor=lambda *_a, **_kw: object())
+        trusted_context = types.SimpleNamespace(
+            assert_data_live=lambda: None,
+            hard_monotonic_deadline=100.0)
+        slot = {"producer_wrapper_tasks": set()}
+        with patch.dict(sys.modules, {"torch": fake_torch}):
+            with self.assertRaises(AuthorizationRevoked):
+                await adapter._generate_with_context(
+                    {"input_ids": [1], "new_tokens": 1, "capture_logits": False,
+                     "timeout_seconds": 5}, _Context(), 100.0,
+                    trusted_context, _Auth(), slot, 50.0)
+        self.assertIs(slot["handle"], handle)
+        self.assertTrue(slot["session_cleanup_confirmed"])
+        self.assertEqual(adapter._unreclaimed_generate_slots, [])
 
     async def test_invalidation_wakes_active_authorization_watcher(self):
         import asyncio
