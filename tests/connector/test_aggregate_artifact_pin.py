@@ -11,10 +11,12 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 
 from steamboat_connector.aggregate_artifact_pin import (
-    AggregateArtifactPinError, _validate_group_record, _AssignmentSlice)
+    AggregateArtifactPinError, _validate_group_record, _AssignmentSlice,
+    _validated_worker_boot_mapping, validate_inherited_group_pin)
 
 
 def _record():
@@ -56,6 +58,80 @@ class AggregateArtifactPinRecordTests(unittest.TestCase):
             mutate(value)
             with self.subTest(value=value), self.assertRaises(AggregateArtifactPinError):
                 _validate_group_record(value)
+
+    def test_group_record_rejects_duplicate_worker_boot_identity(self):
+        value = _record()
+        value["assignments"][1]["worker_boot_id"] = value["assignments"][0]["worker_boot_id"]
+        with self.assertRaises(AggregateArtifactPinError):
+            _validate_group_record(value)
+
+    def test_worker_boot_map_rejects_duplicates_before_store_mutation(self):
+        components = ["worker-1", "worker-2", "worker-3"]
+        duplicate = {name: "a" * 32 for name in components}
+        valid = {name: f"{index:032x}" for index, name in enumerate(components, 1)}
+        self.assertFalse(_validated_worker_boot_mapping(components, duplicate))
+        self.assertTrue(_validated_worker_boot_mapping(components, valid))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "inherited descriptors require Linux")
+    def test_inherited_alias_descriptor_is_closed_once_and_reuse_survives(self):
+        fd = os.open(os.devnull, os.O_RDONLY)
+        replacement = []
+        real_close = os.close
+
+        def close_then_reuse(descriptor):
+            real_close(descriptor)
+            if descriptor == fd and not replacement:
+                replacement.append(os.open(os.devnull, os.O_RDONLY))
+                self.assertEqual(replacement[0], fd)
+
+        with mock.patch("steamboat_connector.aggregate_artifact_pin.os.close",
+                        side_effect=close_then_reuse):
+            with self.assertRaises(AggregateArtifactPinError):
+                validate_inherited_group_pin(
+                    fd, fd, root="/irrelevant", uid=os.getuid() if hasattr(os, "getuid") else 0,
+                    record_path="/irrelevant", expected_record={}, component="worker-1",
+                    worker_boot_id="1" * 32, clock_domain="x", captured_mono=0,
+                    catalog_deadline=1, assignment_deadline=1, clock=None,
+                    signed_catalog=b"", signed_assignment=b"", verifier=None)
+        self.assertEqual(os.fstat(replacement[0]).st_mode & 0o170000, 0o100000)
+        real_close(replacement[0])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "inherited descriptors require Linux")
+    def test_invalid_descriptor_values_are_not_closed(self):
+        with mock.patch("steamboat_connector.aggregate_artifact_pin.os.close") as close:
+            with self.assertRaises(AggregateArtifactPinError):
+                validate_inherited_group_pin(
+                    True, object(), root="/irrelevant", uid=0, record_path="/irrelevant",
+                    expected_record={}, component="worker-1", worker_boot_id="1" * 32,
+                    clock_domain="x", captured_mono=0, catalog_deadline=1,
+                    assignment_deadline=1, clock=None, signed_catalog=b"",
+                    signed_assignment=b"", verifier=None)
+        close.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "inherited descriptors require Linux")
+    def test_unknown_alias_close_is_sticky_and_never_retried(self):
+        fd = os.open(os.devnull, os.O_RDONLY)
+        real_close = os.close
+        calls = []
+
+        def close_then_raise(descriptor):
+            calls.append(descriptor)
+            real_close(descriptor)
+            raise OSError("close outcome unknown")
+
+        with mock.patch("steamboat_connector.aggregate_artifact_pin.os.close",
+                        side_effect=close_then_raise):
+            with self.assertRaises(AggregateArtifactPinError) as caught:
+                validate_inherited_group_pin(
+                    fd, fd, root="/irrelevant", uid=0, record_path="/irrelevant",
+                    expected_record={}, component="worker-1", worker_boot_id="1" * 32,
+                    clock_domain="x", captured_mono=0, catalog_deadline=1,
+                    assignment_deadline=1, clock=None, signed_catalog=b"",
+                    signed_assignment=b"", verifier=None)
+            owner = caught.exception.pin_owner
+            with self.assertRaises(Exception):
+                owner.close_after_failed_acquire()
+        self.assertEqual(calls, [fd])
 
     def test_assignment_guard_slice_cannot_release_group_owner(self):
         class Owner:
@@ -175,6 +251,15 @@ class AggregateHostWorkerNumericalFixture(unittest.TestCase):
             self.assertEqual(len({id(view.installer) for view in views}), 1)
             self.assertEqual(installer._used_bytes(state),
                 sum(record["accounted_bytes"] for record in state["installations"].values()))
+            before = installer._load_state()
+            with self.assertRaises(AggregateArtifactPinError):
+                RuntimeArtifactGroupPin.acquire(
+                    views, clock=clock, runtime_boot_id="d" * 32,
+                    worker_boot_ids={component: "e" * 32
+                                     for component in worker_boots})
+            self.assertEqual(installer._load_state(), before)
+            from steamboat_connector.artifact_pin import _pin_record
+            self.assertFalse((Path(installer.root) / _pin_record("host")).exists())
             group = RuntimeArtifactGroupPin.acquire(
                 views, clock=clock, runtime_boot_id="d" * 32,
                 worker_boot_ids=worker_boots)

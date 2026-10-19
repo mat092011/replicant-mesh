@@ -64,19 +64,53 @@ def _validate_group_record(record):
         raise AggregateArtifactPinError("aggregate runtime pin record is malformed")
     components = []
     assignment_ids = set()
+    worker_boot_ids = set()
     for entry in record["assignments"]:
         if (type(entry) is not dict or set(entry) != _ENTRY_FIELDS
                 or entry["component"] not in _COMPONENTS
                 or not valid_typed_id(entry["assignment_id"], "asg")
                 or not _hex(entry["assignment_sha256"], 64)
                 or not _hex(entry["worker_boot_id"], 32)
-                or entry["assignment_id"] in assignment_ids):
+                or entry["assignment_id"] in assignment_ids
+                or entry["worker_boot_id"] in worker_boot_ids):
             raise AggregateArtifactPinError("aggregate runtime pin assignment entry is malformed")
         components.append(entry["component"])
         assignment_ids.add(entry["assignment_id"])
+        worker_boot_ids.add(entry["worker_boot_id"])
     if components != sorted(components) or len(set(components)) != len(components):
         raise AggregateArtifactPinError("aggregate runtime pin entries are not uniquely sorted")
     return record
+
+
+def _validated_worker_boot_mapping(components, worker_boot_ids):
+    """Validate unique component identities before any store lock or write."""
+    return (type(worker_boot_ids) is dict
+            and set(worker_boot_ids) == set(components)
+            and all(_hex(worker_boot_ids.get(component), 32) for component in components)
+            and len(set(worker_boot_ids.values())) == len(components))
+
+
+def _cleanup_inherited_fds(global_fd, role_fd):
+    """Close each explicitly owned descriptor value at most once.
+
+    bools, negative values, and non-integers are not descriptor ownership
+    claims. Keeping them out of the cleanup owner prevents accidental closes
+    of unrelated descriptors (notably fd 0/1 for bool values).
+    """
+    valid = []
+    for descriptor in (global_fd, role_fd):
+        if type(descriptor) is int and descriptor >= 0 and descriptor not in valid:
+            valid.append(descriptor)
+    if not valid:
+        return None
+    owner = _pin.PartialArtifactPinOwner(
+        valid[0], valid[1] if len(valid) > 1 else None)
+    try:
+        owner.close_after_failed_acquire()
+    except BaseException as error:
+        error.pin_owner = owner
+        raise
+    return owner
 
 
 def _read_record(path, uid):
@@ -202,8 +236,7 @@ class RuntimeArtifactGroupPin:
                       for view in views]
         if (any(component not in _COMPONENTS for component in components)
                 or len(set(components)) != len(components)
-                or set(worker_boot_ids) != set(components)
-                or any(not _hex(worker_boot_ids.get(component), 32) for component in components)):
+                or not _validated_worker_boot_mapping(components, worker_boot_ids)):
             raise AggregateArtifactPinError("aggregate worker component or boot mapping is malformed")
         ordered_views = sorted(views, key=lambda view: view.assignment.payload["component"])
         root, uid = installer.root, installer.uid
@@ -598,10 +631,10 @@ def validate_inherited_group_pin(global_fd, role_fd, *, root, uid, record_path,
         return owner, guard
     except BaseException as error:
         if not success:
-            owner = _pin.PartialArtifactPinOwner(global_fd, role_fd)
             try:
-                owner.close_after_failed_acquire()
+                owner = _cleanup_inherited_fds(global_fd, role_fd)
             except BaseException as cleanup_error:
-                cleanup_error.pin_owner = owner
+                if not hasattr(cleanup_error, "pin_owner"):
+                    cleanup_error.pin_owner = None
                 raise cleanup_error from error
         raise
