@@ -869,10 +869,15 @@ The [C2 component record](experiments/2026-10-19-participant-c2-components.md)
 records component 27's latest complete Docker inventory: 562 unique tests
 passed with zero skips/failures/errors in 36.336 seconds, from 415 frozen source
 files and a rebuilt image. It supersedes the historical 474-case component-26
-inventory. Selected native-9 egress checks passed 42 cases, and capture-native1
-passed seven parser controls with native RSS measured only for malformed input;
-valid-data and control high-water deltas were unmeasured. A selected cohort
-validator diagnostic passed 11 tests while main review remains ongoing. Earlier
+inventory. Selected native-9 egress checks passed 42 cases (RPC 8, protobuf
+guard 8, SDK 12, egress 14); independent main reviews accepted the bounded RPC
+and SDK changes, and component 27 has bounded passing native signed-C1
+`WorkerHandler` evidence. This does not establish deployed gateway integration.
+Capture-native1 passed seven parser controls with native RSS measured only for
+malformed input; valid-data and control high-water deltas were unmeasured. The
+selected-cohort validator source review passed and inherited-main native-2
+passed 12 tests, but the validator remains inert without local identities,
+claims or startup. Earlier
 selected probes also include the assigned-artifact pin child handoff and
 watchdog-publication fixture reproduction. RPC/SDK/transport integration and
 aggregate root-group startup remain incomplete or under review. A separate bounded

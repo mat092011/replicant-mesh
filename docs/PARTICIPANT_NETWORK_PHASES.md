@@ -211,17 +211,21 @@ Begin C4 integration and optional C8 UI scaffolding; no community pilot yet.
 **Implementation resumed, 2026-10-19:** the maintainer authorized continuing C2
 after completed C1 publication. The [component record](experiments/2026-10-19-participant-c2-components.md)
 records component 27's latest complete 562-case, skip-free Docker inventory,
-superseding the historical 474-case component 26. Selected native-9 egress
-checks passed, capture-native1 passed parser controls with valid-data and
-control native RSS high-water deltas still unmeasured, and selected cohort
-validation passed 11 diagnostic tests while review continues. The earlier
+superseding the historical 474-case component 26. Selected native-9 passed 42
+cases (RPC 8, protobuf guard 8, SDK 12, egress 14); independent source reviews
+accepted the bounded RPC/SDK changes, and component 27 includes bounded passing
+native signed-C1 `WorkerHandler` evidence. Capture-native1 passed parser controls
+with valid-data and control native RSS high-water deltas still unmeasured. The
+selected-cohort validator source review passed and inherited-main native-2
+passed 12 tests, but the validator remains inert without local identities,
+claims or startup. The earlier
 pinned-artifact child handoff and watchdog-publication fixture also passed their
-bounded probes. RPC ownership, SDK, transport, whole-cohort claims and aggregate
-root-group startup remain incomplete or under review. A separate ZimaBlade OS
-probe verified task-scoped CPU/RAM enforcement. Actual fixed-role backend,
-enrollment, dual-listener gateway, shared resource integration and the outbound
-split-host route remain incomplete; every C2 checkbox remains open and C3 has
-not advanced.
+bounded probes. Full deployed RPC/SDK/transport integration, whole-cohort claims,
+gateway integration and aggregate root-group startup remain incomplete or under
+review. A separate ZimaBlade OS probe verified task-scoped CPU/RAM enforcement.
+Actual fixed-role backend, enrollment, dual-listener gateway, shared resource
+integration and the outbound split-host route remain incomplete; every C2
+checkbox remains open and C3 has not advanced.
 The [connector design](PARTICIPANT_CONNECTOR_DESIGN.md) freezes the required gates.
 
 ## C3 — Validate one GPU execution path

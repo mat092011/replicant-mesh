@@ -445,9 +445,9 @@ root profile cannot establish startup for three workers. Explicitly selected
 C2 aggregate scope/claim policy and its cold-retirement integration remain
 missing; no root-group startup acceptance is recorded.
 
-### RPC, SDK and transport status
+### Historical RPC and SDK diagnostic failures
 
-Native RPC ownership probe 5 demonstrated the production ownership defect with
+As of the earlier native probes, RPC ownership probe 5 demonstrated the production defect with
 the real compute still alive after authentication closed (exit 1; log SHA-256
 `4b78ee6d4b686342d998b0710e8eb85f7fe2ec687b1ef0a7455db78dfb03990c`). A later
 probe corrected the first native bridge assertion but still failed when another
@@ -463,14 +463,12 @@ traced this to `GeneratorExit` when `unittest.assertRaises` cleared frames from
 a caught exception traceback shared with the live pump. The bounded fix creates
 a fresh static `SessionError` so the pump does not retain that shared traceback;
 the previously described shared-traceback-clearing correction was inaccurate.
-SDK remains unaccepted pending source review and full integration. Raw protobuf
-guard 8 passed locally; control/data reservation targets had not been measured
-under native peak load at that point.
+At that point, SDK remained unaccepted. Raw protobuf guard 8 passed locally;
+control/data reservation targets had not been measured under native peak load.
 
-Transport native probe 8 is still under review. The earlier native probe 4
-failed, so neither probe is evidence of a source-accepted, native-green
-framed-stream/router/RPC/SDK path. The successful local socket/accounting
-controls and component-26 tests remain bounded component evidence only.
+These failures are historical diagnostics and are superseded for the bounded
+checks described below. They do not disappear from the record or establish the
+cause of every earlier failure.
 
 ### Remaining C2 integration
 
@@ -504,17 +502,23 @@ suite, while remaining a bounded component gate rather than C2 acceptance.
 
 Transport native-9 used the same frozen 415-file source on the pinned
 component-26 image and passed 42 tests with zero skips/failures/errors in
-8.719 seconds. It covered RPC guard 8, SDK 12 and egress 14 cases. Its log
+8.719 seconds. Its inventory was RPC 8, protobuf guard 8, SDK 12 and egress 14
+cases (42 total). Its log
 SHA-256 is
 `8821b8d01290f99f95c986e95382805f84ffa0811522bbc0cba4a608a0b42e9d`.
 This is selected native component evidence; earlier native probes 4–8 and their
-failures remain retained. It does not establish signed C1 transport integration,
-full RPC ownership, three-role startup or a complete gateway route.
+failures remain retained. Together with independent main reviews of RPC source
+`4f` and SDK source `1c`, which accepted these bounded changes, it establishes
+source-reviewed and native-green selected RPC/SDK/egress controls. The signed C1
+`WorkerHandler` native path also has bounded passing evidence in component 27.
+These results establish progress on actual signed C1 worker handling and its
+selected native paths. They do not establish the deployed dual-listener gateway,
+whole-cohort claims, aggregate root startup or a complete participant route.
 
-The SDK traceback correction addresses the observed pump failure mechanism,
-but native-9's passing inventory alone does not establish reviewed source
-clearance or integrated consumer delivery. RPC/SDK/transport acceptance remains
-limited to these selected controls.
+The SDK traceback correction addresses the observed pump failure mechanism.
+Native-9 and the source reviews do not establish integrated consumer delivery
+or phase acceptance. Transport native-9 is a bounded selected gate; the earlier
+native-probe failures remain historical evidence.
 
 ## Isolated capture parser measurement
 
@@ -532,14 +536,26 @@ new peak; those RSS results are not zero or passing native reservation bounds.
 The parser is an isolated placeholder binding, not signed C1 transport or full
 RPC integration, and does not establish whole-role peak memory.
 
-## Selected cohort validator diagnostic
+## Selected cohort validator: reviewed source and native run
 
 Selected native-1 ran 11 diagnostic tests with zero skips/failures/errors in
 0.105 seconds, log SHA-256
 `4a39250f8e1799d9674094d2bf76d1fe447936a31c8e9d2945616639fe198b2c`.
-Main review is ongoing; the later review inventory adds 12 cases that have not
-run. This diagnostic is not source clearance and establishes no claim,
-startup or selected aggregate-root acceptance.
+Main review subsequently accepted source
+`c3dc33343fe9053fb76fad68450d031df6e15d2e9434405275710b8b16489c73`
+(418 files; review `49d`). The inherited-main native-2 run passed all 12 tests,
+zero skips/failures/errors, in 0.117 seconds. It ran from 2026-10-19
+17:41:58.475Z to 17:41:59.926Z; log SHA-256:
+`a0d3ecd2fdeccbb3872afd41026eb2d82456026f8f378e577352ae83c6591c7e`.
+The earlier 11-case result is retained as the prior diagnostic, not an inventory
+to add to the 12-case run. The accepted code remains an inert policy validator:
+it supplies no local identity, claims or startup. It does not establish selected
+aggregate-root acceptance.
+
+The integrated selected-cohort implementation at `42ab8f0` is a separate
+boundary: it remains an inert validator path without local identities, claims
+or startup integration. The validator source review does not constitute
+aggregate root-loader acceptance.
 
 ## Current C2 boundary
 
