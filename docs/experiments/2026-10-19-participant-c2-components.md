@@ -942,8 +942,8 @@ source head `baa915a0a20bac43e622bde3864372565729de91`, digest
 `c246535e6444887f7cbd21070133f21746cb35d19dc4827e9ab9fb966f7ec744`, log
 SHA-256 `66893295ef85ea364a579e2cdccc8f0efd40473889b9a0b02c61f1103a3f3529`.
 This is a focused test-only correction and does not retroactively change the
-combined run's result. The combined component has not yet been rerun with the
-corrected test.
+combined run's result. At this checkpoint, the combined component had not yet
+been rerun with the corrected test.
 
 The focused host result demonstrates local assembly and a guarded C1 control
 operation under these test fixtures. It does not establish fixed-role process
@@ -981,8 +981,48 @@ tests with 47 passes and one failure (zero skips; 16.214 seconds; log SHA-256
 `8b505b4f741b91deb943c6f2458d3a85fe6264e8f994c42a54acbe72f5cade7f`). Its
 queued-callback invalidation test had not yielded to the event loop before
 awaiting an already-completed future. The test-only fix yields once and checks
-that invalidation is set before awaiting; the corrected run above passed. The
-combined component-33 inventory was not rerun with this consumer change or the
-earlier corrected expiry probe, so neither focused pass changes its recorded
-910-pass/one-failure result. All C2 gates remain open; C3 and research statuses
-are unchanged.
+that invalidation is set before awaiting; the corrected run above passed. At
+this checkpoint, the combined component-33 inventory had not been rerun with
+this consumer change or the earlier corrected expiry probe. The later
+component-34 section below records the subsequent combined rerun. All C2 gates
+remain open; C3 and research statuses are unchanged.
+
+## Component 34: combined rerun with consumer and expiry-probe corrections
+
+The combined bounded component passed 925 unique tests with zero skips,
+failures or errors in 58.626 seconds (2026-10-19 20:51:11.175–20:52:11.882
+UTC). It ran all connector tests, 27 selected security modules and two runtime
+modules, including the 14 consumer tests and corrected expiry AST probe. It
+does not cover the full repository or full C1 regression. Frozen head was
+`4dbeb2639a620b58565bba50f3524e86f04e159c`, with 473 files and source digest
+`e9a7a27ee8479585dd01e106d0da29f11a3eab1aa1046dac8fe257bdebf9853b`. The
+pinned image was
+`sha256:60bf83caede964dbff6de80162912db1e0ccc6ed73ae2b351f151ea7de161c5f`.
+The source proof verified all 473 files with no mismatches (log SHA-256
+`fd9d0b767e199240f116448867e70751a3eb06bacbf2e3e19476fdc7326b6140`); the
+test log SHA-256 is
+`a292fafe60a976f7737904bffef71a1b68caf69dc316d83e9c67ab48e59ca76e`; gate
+record SHA-256 is
+`4b6edad9590e13c01ea0d0c1e30d7727d9f7add8d7246ccca2f96a2b80e35c0f`. The
+container exited zero, was not OOM-killed and was removed. It retained the
+existing component limits: 2 CPUs, 6 GiB, 256 PIDs, 15-second stop, no network,
+read-only root, dropped capabilities, no-new-privileges, init and read-only
+offline artifacts.
+
+A separate main-source-reviewed persistent channel-policy owner passed 11
+focused native tests with zero skips in 0.020 seconds. Its source head was
+`fb3a4b70e273e12e7cba0cac63cc8d38cfb23b79`, digest
+`bfefda8c71c24f301de8bd7aad2e33c775a494dc1959635b8d912e5dc91149f4` (474
+files), with
+log SHA-256
+`b1a2c4529b8db86346f928223b8d3ba811cfcec52c51ec987f0cebcba94312a2`. The
+actual `ChannelPolicyStore` tests cover durable signed-head publication,
+typed key/minimum anchors, fsync/CAS behavior, rollback, expiry renewal and
+bounded quarantine when file-descriptor cleanup is uncertain. The owner does
+not yet integrate an actual transport. On restart, an expired persisted head
+fails closed; any cold re-enrollment must preserve old history and use fresh
+signed activation, boot, root and a head meeting the prior minimum. That
+re-enrollment path is not implemented by this owner. Component 34 predates
+this channel-policy integration, so the 11-test focused result is separate and
+not part of its 925-test count. C2.1–C2.6 and the C2 exit gate remain open; C3
+and research statuses are unchanged.

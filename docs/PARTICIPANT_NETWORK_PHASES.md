@@ -292,8 +292,8 @@ were made through the direct handler against its assigned local stage
 reference (`atol=1e-6`, `rtol=0`), not through RPC. Component 33's combined
 911-test run had 910 passes and one failure, with no skips, on a 471-file
 snapshot; the failure came from an outdated AST test probe, not a passing
-combined result. The corrected probe later passed 12 focused tests, but the
-combined inventory has not been rerun. The bounded run covers connectors, 27
+combined result. The corrected probe later passed 12 focused tests. The
+bounded run covers connectors, 27
 selected security modules and two runtime modules; it is not full C1 or the
 whole repository. Host assembly evidence does not establish fixed-role
 readiness, shared physical resource enforcement or deployed multi-device
@@ -308,9 +308,13 @@ A later focused consumer runtime-guard run passed 48 tests with zero skips in
 run combines existing consumer transport tests, fake-client guard/delivery/
 cancellation tests and actual signed C2 consumer-binding tests. It does not
 wire the binding owner into live C1 RPC or controller delivery. The combined
-component-33 inventory remains at 910 passes and one test-probe failure; it
-has not been rerun with the probe or consumer test corrections. These remain
-focused component results, not C2 phase acceptance; C2.1–C2.6 remain open.
+component-33 result remains at 910 passes and one test-probe failure in the
+historical record. Component 34 subsequently reran that bounded inventory with
+the corrected probe and consumer tests: 925 unique passes, zero skips/failures/
+errors, on a 473-file frozen snapshot. A separate focused persistent channel-
+policy-owner run passed 11 tests, but it was not included in component 34 and
+does not implement transport ownership. These remain focused component results,
+not C2 phase acceptance; C2.1–C2.6 remain open.
 
 ## C3 — Validate one GPU execution path
 

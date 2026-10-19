@@ -1028,7 +1028,23 @@ tests and 13 actual signed C2 consumer-binding tests. It does not wire the
 binding owner into live C1 RPC/controller delivery. The earlier 48-test run
 had one test failure (log SHA-256
 `8b505b4f741b91deb943c6f2458d3a85fe6264e8f994c42a54acbe72f5cade7f`); a
-test-only event-loop yield/check corrected it. Neither this focused run nor
-the expiry-probe rerun changes the combined component-33 result. The report
-retains both attempts and limitations. C2.1–C2.6 remain open; C3 and research
-statuses are unchanged.
+test-only event-loop yield/check corrected it. Component 34 subsequently
+reran the combined inventory with both that consumer test and the corrected
+expiry probe, passing 925 tests; component 33's original one-failure result
+remains in the historical record. A separate persistent channel-policy owner
+also passed 11 focused tests, but is not included in component 34 and does not
+integrate an actual transport. The report retains run hashes and limitations.
+C2.1–C2.6 remain open; C3 and research statuses are unchanged.
+
+**C2 component 34, 2026-10-19:** the bounded inventory passed 925 unique tests
+with zero skips/failures/errors in 58.626 seconds on 473 frozen files at head
+`4dbeb2639a620b58565bba50f3524e86f04e159c` (digest
+`e9a7a27ee8479585dd01e106d0da29f11a3eab1aa1046dac8fe257bdebf9853b`). All
+473 files matched the source proof. The run covered all connector tests, 27
+selected security modules and two runtime modules; it is not the full
+repository or full C1 regression. The focused source-reviewed persistent
+channel-policy owner separately passed 11 tests, but component 34 predates its
+integration. C2 gates remain open; fixed-role readiness, live consumer RPC
+delivery, channel transport ownership, shared physical-resource enforcement
+and CT-11/CT-13 remain outstanding. See the [component record](experiments/2026-10-19-participant-c2-components.md)
+for image, proof and test-log hashes.
