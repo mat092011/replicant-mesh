@@ -944,14 +944,17 @@ class SecureCoordinatorService:
     async def _produce_unary(self, method, data, context, authorization):
         self._check_runtime_guard()
         await _assert_live(authorization)
+        self._check_runtime_guard()
         await self._stream_context(context, authorization).send_initial_metadata(((BINDING_METADATA_KEY,
                                                authorization.binding_bytes),))
         self._check_runtime_guard()
         await _assert_live(authorization)
+        self._check_runtime_guard()
         response = await self._delegate_unary(
             method, data, self._stream_context(context, authorization))
         self._check_runtime_guard()
         await _assert_live(authorization)
+        self._check_runtime_guard()
         await _maybe_await(authorization.complete(response))
         self._check_runtime_guard()
         await _assert_live(authorization)
@@ -1384,6 +1387,7 @@ class SecureCoordinatorService:
             self._check_runtime_guard()
             input_tensor = torch.tensor(
                 [request["input_ids"]], dtype=torch.long)
+            self._check_runtime_guard()
             slot["capture_submission_attempted"] = True
             try:
                 handle = service.coordinator.submit(
@@ -1441,6 +1445,7 @@ class SecureCoordinatorService:
             await service._write(context, terminal, deadline)
             self._check_runtime_guard()
             await _assert_live(authorization)
+            self._check_runtime_guard()
             if terminal["status"] == "completed":
                 await _maybe_await(authorization.complete(terminal))
                 self._check_runtime_guard()

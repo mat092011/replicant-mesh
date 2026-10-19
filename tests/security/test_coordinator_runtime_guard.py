@@ -34,6 +34,9 @@ class _Auth:
     complete_calls = 0
 
     async def assert_live(self):
+        callback = getattr(self, "on_assert_live", None)
+        if callback is not None:
+            callback()
         return None
 
     async def complete(self, _response):
@@ -116,6 +119,44 @@ class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         adapter.service.describe_rpc = describe
         with self.assertRaises(AuthorizationRevoked):
             await adapter._produce_unary("Describe", b"", _Context(), auth)
+        self.assertEqual(auth.complete_calls, 0)
+
+    async def test_runtime_is_rechecked_after_c1_live_check_before_unary_delegate(self):
+        adapter = _adapter()
+        auth = _Auth()
+        calls = []
+        auth.on_assert_live = lambda: (
+            calls.append(True),
+            adapter.request_runtime_invalidation("C1 live check completed after stop")) \
+            if len(calls) == 4 else None
+
+        async def describe(_payload, _context):
+            calls.append("delegate")
+            return b"response"
+
+        adapter.service.describe_rpc = describe
+        with self.assertRaises(AuthorizationRevoked):
+            await adapter._produce_unary("Describe", b"", _Context(), auth)
+        self.assertEqual(calls.count("delegate"), 0)
+        self.assertEqual(auth.complete_calls, 0)
+
+    async def test_runtime_is_rechecked_after_c1_live_check_before_unary_complete(self):
+        adapter = _adapter()
+        auth = _Auth()
+        calls = []
+        auth.on_assert_live = lambda: (
+            calls.append(True),
+            adapter.request_runtime_invalidation("C1 live check completed after stop")) \
+            if len(calls) == 5 else None
+
+        async def describe(_payload, _context):
+            calls.append("delegate")
+            return b"response"
+
+        adapter.service.describe_rpc = describe
+        with self.assertRaises(AuthorizationRevoked):
+            await adapter._produce_unary("Describe", b"", _Context(), auth)
+        self.assertEqual(calls.count("delegate"), 1)
         self.assertEqual(auth.complete_calls, 0)
 
     async def test_awaitable_guard_is_closed_and_rejected(self):
@@ -268,6 +309,103 @@ class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(finish_calls[0][0], handle)
         self.assertTrue(slot["session_cleanup_confirmed"])
         self.assertEqual(adapter._unreclaimed_generate_slots, [])
+
+    async def test_runtime_is_rechecked_after_tensor_creation_before_submit(self):
+        import time
+        import types
+        from unittest.mock import patch
+
+        adapter = _adapter()
+        submit_calls = []
+        deadline = time.monotonic() + 30.0
+        trusted_context = types.SimpleNamespace(
+            assert_data_live=lambda: None, hard_monotonic_deadline=deadline)
+
+        class Coordinator:
+            def submit(self, *_args, **_kwargs):
+                submit_calls.append(True)
+                return object()
+
+        adapter.service.coordinator = Coordinator()
+        adapter.service.cleanups = set()
+        tensor_calls = []
+
+        def tensor(*_args, **_kwargs):
+            tensor_calls.append(True)
+            adapter.request_runtime_invalidation("tensor completed after stop")
+            return object()
+
+        fake_torch = types.SimpleNamespace(long=object(), tensor=tensor)
+        slot = {"producer_wrapper_tasks": set()}
+        with patch.dict(sys.modules, {"torch": fake_torch}):
+            with self.assertRaises(AuthorizationRevoked):
+                await adapter._generate_with_context(
+                    {"input_ids": [1], "new_tokens": 1, "capture_logits": False,
+                     "timeout_seconds": 5}, _Context(), deadline,
+                    trusted_context, _Auth(), slot, 20.0)
+        self.assertEqual(tensor_calls, [True])
+        self.assertEqual(submit_calls, [])
+        self.assertIsNone(slot.get("handle"))
+
+    async def test_runtime_is_rechecked_after_c1_live_check_before_generate_complete(self):
+        import time
+        import types
+        from unittest.mock import patch
+
+        adapter = _adapter()
+        auth = _Auth()
+        auth.on_assert_live = lambda: adapter.request_runtime_invalidation(
+            "C1 live check completed after stop")
+        deadline = time.monotonic() + 30.0
+        result = types.SimpleNamespace(session_id="session", status="completed",
+            token_ids=(), cleanup_complete=True, error=None, error_code=None)
+
+        class Handle:
+            session_id = "session"
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            async def result(self):
+                return result
+
+        handle = Handle()
+        class Coordinator:
+            manifest = {"config": {"vocab_size": 1}}
+
+            def submit(self, *_args, **_kwargs):
+                return handle
+
+        adapter.service.coordinator = Coordinator()
+        adapter.service.cleanups = set()
+        adapter.service.metrics = {"session": types.SimpleNamespace(result=lambda _r: {})}
+        adapter.service.counters = {"rejected_requests": 0, "transport_stalls": 0,
+                                    "disconnected_streams": 0}
+        writes = []
+        async def write(_context, payload, _deadline):
+            writes.append(payload)
+        adapter.service._write = write
+        finishes = []
+        async def finish(_handle, **_kwargs):
+            finishes.append(_handle)
+        adapter.service._finish = finish
+        fake_torch = types.SimpleNamespace(long=object(), tensor=lambda *_a, **_kw: object())
+        trusted_context = types.SimpleNamespace(
+            assert_data_live=lambda: None, hard_monotonic_deadline=deadline)
+        slot = {"producer_wrapper_tasks": set()}
+        with patch.dict(sys.modules, {"torch": fake_torch}):
+            with self.assertRaises(AuthorizationRevoked):
+                await adapter._generate_with_context(
+                    {"input_ids": [1], "new_tokens": 1, "capture_logits": False,
+                     "timeout_seconds": 5}, _Context(), deadline,
+                    trusted_context, auth, slot, 20.0)
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(auth.complete_calls, 0)
+        self.assertTrue(slot["session_cleanup_confirmed"])
+        self.assertEqual(finishes, [handle])
 
     async def test_pending_c1_watcher_remains_owned_before_authorization_close(self):
         import asyncio
