@@ -8,9 +8,9 @@ is confirmed and must not expose a bridge without its runtime guard.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import threading
-import time
 from types import MappingProxyType
 
 from steamboat_connector.aggregate_artifact_pin import InheritedGroupPin
@@ -52,6 +52,10 @@ def _validate_allocations(binding, child_pins, installer, policy, allocations):
     reservation = policy["reservations"].get("host")
     if type(reservation) is not dict:
         raise CredentialError("owner policy has no host reservation")
+    from steamboat_connector.resources import _fit
+    fits, reason = _fit({"host": reservation}, policy["limits"])
+    if not fits:
+        raise CredentialError(f"host reservation exceeds global owner policy: {reason}")
 
     if (type(child_pins) is not ChildArtifactPinSet or child_pins._state != "open"
             or len(child_pins.owners) != len(selected)
@@ -61,25 +65,37 @@ def _validate_allocations(binding, child_pins, installer, policy, allocations):
             or installer.verifier.clock is not binding._clock
             or installer.uid != binding._root_store._uid):
         raise CredentialError("host runtime requires exact live child pins and read-only installer")
+    if any(type(owner) is not InheritedGroupPin for owner in child_pins.owners):
+        raise CredentialError("child pin set contains a non-inherited group owner")
     if installer.root != child_pins.owners[0].root:
         raise CredentialError("read-only installer root differs from inherited artifact pins")
 
     reference_record = None
-    catalog_digest = None
     catalog_model_id = None
     catalog_fingerprint = None
     catalog = None
+    selected_assignments = {
+        item.component: (item.assignment_id, item.worker_boot_id,
+                         item.assignment_sha256)
+        for item in scope.components
+    }
+    if (scope.catalog_sha256 is None
+            or scope.catalog_sha256 != hashlib.sha256(
+                child_pins.owners[0].signed_catalog).hexdigest()
+            or scope.catalog_public_key_sha256 != hashlib.sha256(
+                installer.verifier.public_key).hexdigest()):
+        raise CredentialError("inherited catalog bytes or key differ from selected C2 pins")
+    owner_by_component = {}
     for owner in child_pins.owners:
-        if type(owner) is not InheritedGroupPin:
-            raise CredentialError("child pin set contains a non-inherited group owner")
+        if owner.component in owner_by_component:
+            raise CredentialError("inherited group owner component is duplicated")
+        owner_by_component[owner.component] = owner
         owner.assert_open_descriptors()
         record = dict(owner.record)
         if reference_record is None:
             reference_record = record
-            catalog_digest = record["catalog_sha256"]
             catalog = installer.verifier.verify_catalog(owner.signed_catalog)
-            import hashlib
-            if hashlib.sha256(catalog.document_bytes).hexdigest() != catalog_digest:
+            if hashlib.sha256(catalog.document_bytes).hexdigest() != record["catalog_sha256"]:
                 raise CredentialError("inherited signed catalog differs from its group record")
             catalog_model_id = catalog.payload["model"]["model_id"]
             catalog_fingerprint = catalog.payload["manifest"]["fingerprint"]
@@ -90,12 +106,30 @@ def _validate_allocations(binding, child_pins, installer, policy, allocations):
                 or record["role"] != "host"
                 or record["runtime_boot_id"] != binding._spec.boot_id
                 or record["model_id"] != catalog_model_id
+                or record["catalog_sha256"] != scope.catalog_sha256
                 or owner.root != installer.root or owner.uid != installer.uid
                 or owner.clock is not binding._clock
                 or owner.verifier is not installer.verifier):
             raise CredentialError("inherited group owner differs from selected host or catalog")
-    if catalog_fingerprint != scope.model_id:
-        raise CredentialError("signed catalog fingerprint differs from selected C2 model scope")
+        entries = record["assignments"]
+        if type(entries) is not list or len(entries) != len(selected_assignments):
+            raise CredentialError("inherited group record does not contain the complete selected set")
+        record_assignments = {}
+        for entry in entries:
+            if type(entry) is not dict or set(entry) != {
+                    "component", "assignment_id", "assignment_sha256", "worker_boot_id"}:
+                raise CredentialError("inherited group assignment entry is malformed")
+            component = entry["component"]
+            if component in record_assignments:
+                raise CredentialError("inherited group assignment component is duplicated")
+            record_assignments[component] = (
+                entry["assignment_id"], entry["worker_boot_id"],
+                entry["assignment_sha256"])
+        if record_assignments != selected_assignments:
+            raise CredentialError("inherited group record differs from the complete selected set")
+    if (set(owner_by_component) != set(selected_assignments)
+            or catalog_fingerprint != scope.model_id):
+        raise CredentialError("signed catalog or inherited owners differ from selected C2 scope")
 
     guard_by_component = {}
     for guard in child_pins.guards:
@@ -108,9 +142,19 @@ def _validate_allocations(binding, child_pins, installer, policy, allocations):
                 or guard.account_id != binding._spec.account_id
                 or guard.device_id != binding._spec.device_id
                 or guard.manifest_fingerprint != scope.model_id
+                or guard.catalog_sha256 != scope.catalog_sha256
                 or guard.component in guard_by_component):
             raise CredentialError("inherited assignment guard differs from selected C2 scope")
         guard.check()
+        selected_item = selected.get(guard.component)
+        owner = owner_by_component.get(guard.component)
+        if (selected_item is None or owner is None
+                or guard.pin.owner is not owner
+                or guard.pin.authority is not owner.authority
+                or owner.authority.assignment_id != selected_item.assignment_id
+                or owner.authority.assignment_sha256 != selected_item.assignment_sha256
+                or owner.authority.worker_boot_id != selected_item.worker_boot_id):
+            raise CredentialError("assignment guard is not the exact selected inherited owner slice")
         guard_by_component[guard.component] = guard
     if set(guard_by_component) != set(selected):
         raise CredentialError("inherited assignment guards do not exactly cover selected components")
@@ -129,6 +173,7 @@ def _validate_allocations(binding, child_pins, installer, policy, allocations):
             raise CredentialError("queued calls must be an integer in [0, 8]")
         guard = guard_by_component[component]
         if (guard.assignment_id != selected_item.assignment_id
+                or guard.assignment_sha256 != selected_item.assignment_sha256
                 or guard.pin.record.get("boot_id") != selected_item.worker_boot_id):
             raise CredentialError("inherited assignment tuple differs from selected C2 component")
         view = installer.open_view(guard.assignment_id,
@@ -146,9 +191,11 @@ def _validate_allocations(binding, child_pins, installer, policy, allocations):
         limits = manifest["limits"]
         if (sessions > reservation["sessions"]
                 or cache_positions > limits["worker_cache_positions"]
-                or kv_bytes > limits["worker_cache_bytes"]):
+                or kv_bytes > limits["worker_cache_bytes"]
+                or queued_calls > limits["max_stage_queue"]):
             raise CredentialError("component allocation exceeds signed or assigned limits")
         request_timeout = min(reservation["max_request_seconds"],
+                              policy["limits"]["max_request_seconds"],
                               limits["request_timeout_seconds"])
         owner_limits = {
             "max_sessions": sessions,
@@ -184,13 +231,12 @@ class C2HostRuntime:
         self._authorizers = {}
         self._sessions = {}
         self._bridges = {}
-        self._started_bridges = set()
         self._loop = asyncio.get_running_loop()
         self._invalidated = threading.Event()
         self._state = "assembling"
-        self._load_started = False
         self._close_error = None
         self._close_lock = asyncio.Lock()
+        self._cleanup_tasks = []
         binding.subscribe_teardown(self._binding_invalidated)
 
     @property
@@ -232,23 +278,79 @@ class C2HostRuntime:
                 raise C2HostRuntimeError("host runtime cleanup is uncertain") from self._close_error
             self._state = "closing"
             deadline = self._loop.time() + float(grace_seconds)
+            bridge = None
+            bridges = []
+            handler = None
+            handlers = ()
+            done = set()
+            pending = set()
+            task = None
             try:
-                for bridge in self._bridges.values():
-                    if not getattr(bridge, "_started", False):
-                        continue
+                fence_errors = []
+                # Fence every bridge synchronously before scheduling or awaiting
+                # any stop operation, including bridges whose start was partial.
+                for bridge in tuple(self._bridges.values()):
+                    try:
+                        bridge.request_runtime_invalidation("C2 host runtime is closing")
+                    except BaseException as error:
+                        fence_errors.append(error)
+                if fence_errors:
+                    raise C2HostRuntimeError(
+                        "one or more secure worker bridges could not be fenced") from fence_errors[0]
+
+                bridges = [bridge for bridge in self._bridges.values()
+                           if getattr(bridge, "_started", False)]
+                for bridge in bridges:
+                    self._cleanup_tasks.append(asyncio.create_task(
+                        bridge.stop(grace_seconds=float(grace_seconds))))
+                if self._cleanup_tasks:
                     remaining = deadline - self._loop.time()
-                    if remaining <= 0 or not await asyncio.wait_for(
-                            bridge.stop(grace_seconds=min(5.0, remaining)),
-                            timeout=max(0.001, remaining)):
-                        raise C2HostRuntimeError("secure worker bridge did not confirm cleanup")
-                for handler in self._handlers.values():
+                    if remaining <= 0:
+                        raise C2HostRuntimeError("secure worker bridge cleanup deadline elapsed")
+                    done, pending = await asyncio.wait(
+                        tuple(self._cleanup_tasks), timeout=remaining)
+                    if pending:
+                        raise C2HostRuntimeError("secure worker bridge cleanup was not confirmed")
+                    for task in done:
+                        if task.cancelled() or task.exception() is not None or task.result() is not True:
+                            raise C2HostRuntimeError(
+                                "secure worker bridge did not confirm cleanup")
+                    self._cleanup_tasks.clear()
+
+                handlers = tuple(self._handlers.values())
+                for handler in handlers:
                     remaining = deadline - self._loop.time()
-                    if remaining <= 0 or not await asyncio.wait_for(
-                            handler.shutdown(grace_seconds=remaining),
-                            timeout=max(0.001, remaining)):
-                        raise C2HostRuntimeError("assigned worker handler did not confirm shutdown")
-                self._child_pins.close()
-                self._lease.__exit__(None, None, None)
+                    if remaining <= 0:
+                        raise C2HostRuntimeError("assigned worker cleanup deadline elapsed")
+                    self._cleanup_tasks.append(asyncio.create_task(
+                        handler.shutdown(grace_seconds=remaining)))
+                if self._cleanup_tasks:
+                    remaining = deadline - self._loop.time()
+                    if remaining <= 0:
+                        raise C2HostRuntimeError("assigned worker cleanup deadline elapsed")
+                    done, pending = await asyncio.wait(
+                        tuple(self._cleanup_tasks), timeout=remaining)
+                    if pending:
+                        raise C2HostRuntimeError("assigned worker cleanup was not confirmed")
+                    for task in done:
+                        if task.cancelled() or task.exception() is not None or task.result() is not True:
+                            raise C2HostRuntimeError(
+                                "assigned worker handler did not confirm shutdown")
+                    self._cleanup_tasks.clear()
+
+                # Drop every resident model/executor path before releasing the
+                # selected-root borrow. This does not prove process RSS reclaim.
+                self._bridges.clear()
+                self._handlers.clear()
+                self._authorizers.clear()
+                self._sessions.clear()
+                del bridge, bridges, handler, handlers, done, pending, task
+                lease = self._lease
+                lease.__exit__(None, None, None)
+                self._lease = None
+                self._binding = None
+                self._child_pins = None
+                self._installer = None
                 self._state = "closed"
                 return True
             except BaseException as error:
@@ -262,7 +364,8 @@ async def build_c2_host_runtime(child_binding_owner, child_pin_set, installer, *
                                 owner_policy, component_allocations):
     """Load 1–3 exact selected host stages and start guarded secure bridges.
 
-    Ownership of the child pin set transfers to the returned runtime on success.
+    The caller must retain the child pin set through process reaping. The
+    returned runtime retains a reference while active but never closes it.
     If any model load or bridge start fails, the exception carries
     ``c2_host_runtime_owner`` so the caller can retain it through confirmed
     cleanup or process reaping. Pre-load validation failures release only the
@@ -299,7 +402,6 @@ async def build_c2_host_runtime(child_binding_owner, child_pin_set, installer, *
         for component, (view, guard, owner_limits, allocation) in normalized.items():
             binding.assert_live()
             guard.check()
-            runtime._load_started = True
             handler = build_assigned_worker_handler(view,
                 boot_id=guard.pin.record["boot_id"], clock=binding._clock,
                 enable_queue=allocation["queued_calls"] > 0,
@@ -324,7 +426,6 @@ async def build_c2_host_runtime(child_binding_owner, child_pin_set, installer, *
         for bridge in runtime._bridges.values():
             binding.assert_live()
             await bridge.start()
-            runtime._started_bridges.add(bridge)
             runtime.assert_live()
         runtime._state = "open"
         return runtime
@@ -332,9 +433,6 @@ async def build_c2_host_runtime(child_binding_owner, child_pin_set, installer, *
         if runtime is None:
             lease.__exit__(type(error), error, error.__traceback__)
         else:
-            runtime._started_bridges.update(
-                bridge for bridge in runtime._bridges.values()
-                if getattr(bridge, "_started", False))
             runtime._state = "partial"
             try:
                 error.c2_host_runtime_owner = runtime

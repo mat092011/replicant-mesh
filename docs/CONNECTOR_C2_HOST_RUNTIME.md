@@ -5,9 +5,11 @@ host role from an already validated C2 child binding, inherited signed artifact
 group pins, and a read-only `ArtifactInstaller`. It verifies that the complete
 selected component set, group record, signed catalog fingerprint, assignment
 documents, worker boot IDs, core `Clock`, verifier, account, device, role, and
-artifact root agree before constructing any assigned stage executor. It also
-checks all per-component allocations and the aggregate host session, KV-byte,
-and queued-call reservations before loading the first weight.
+artifact root agree before constructing any assigned stage executor. The
+catalog digest and public-key pin, every selected assignment digest, and the
+complete inherited group record must match. It also checks each component's
+queue ceiling, the aggregate host session/KV/queued-call allocations, and the
+host reservation against global owner limits before loading the first weight.
 
 The builder uses the same selected C2 binding clock for catalog verification,
 assignment guards, worker handlers, session bindings, and authorization. Secure
@@ -17,7 +19,14 @@ shutdown is bounded to five seconds; the returned owner retains the child
 binding lease, pins, handlers, authorizers, sessions, and bridges until cleanup
 is confirmed. If loading or cleanup is uncertain, the raised exception retains
 the partial owner as `c2_host_runtime_owner`; callers must keep it alive until
-cleanup is confirmed or the supervising process is reaped.
+cleanup is confirmed or the supervising process is reaped. The caller retains
+the inherited child pin set through process reaping; this assembler never closes
+those descriptors. It fences every constructed bridge before beginning bounded
+cleanup, then spends one shared five-second deadline across bridge and handler
+shutdown. After that cleanup is confirmed, it drops its
+resident model, executor, and bridge references before releasing the selected-
+root borrow. That does not establish process RSS reclamation; the supervisor
+must still reap the child process.
 
 This is an in-process model/runtime assembly layer. It does not start a process,
 open a network listener, publish readiness, claim a role, or wire transport
@@ -32,8 +41,10 @@ The positive numerical test requires the approved offline model fixture mounted
 read-only at `/artifacts` (or `STEAMBOAT_C2_STARTUP_ARTIFACTS`). It executes
 forced token steps through an actual assigned stage and compares them with the
 same signed shard in the local pipeline reference. This checks assigned-stage
-composition, not cross-device behavior, a complete-model output, network
-admission, or end-to-end readiness. Run the focused module with:
+composition only; the numerical test invokes the handler directly and does not
+prove guarded bridge RPC admission. It does not establish cross-device behavior,
+a complete-model output, network admission, or end-to-end readiness. Run the
+focused module with:
 
 ```text
 python -m unittest tests.connector.test_c2_host_runtime

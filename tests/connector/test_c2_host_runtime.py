@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,9 +17,10 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from steamboat_connector.c2_host_runtime import (
-    C2HostRuntimeError, build_c2_host_runtime,
+    C2HostRuntimeError, _validate_allocations, build_c2_host_runtime,
 )
 from steamboat_connector.runtime_pin_handoff import validate_child_pin
+from steamboat_connector.policy import validate_policy
 from steamboat_security.errors import CredentialError
 
 
@@ -108,7 +110,7 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
         return {component: {"sessions": sessions, "kv_bytes": kv_bytes,
             "cache_positions": cache_positions, "queued_calls": queued_calls}}
 
-    async def test_real_signed_stage_bridge_forced_steps_and_confirmed_close(self):
+    async def test_real_signed_assigned_stage_forced_steps_and_confirmed_close(self):
         import torch
         from steamboat_runtime.model import LayerCache, PipelineModel
         from steamboat_runtime.protocol.codec import decode_tensor, encode_tensor
@@ -161,8 +163,25 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                     protocol_version=1, timeout_ms=1000))
                 self.assertEqual(description.active_sessions, 0)
                 self.assertEqual(description.allocated_cache_bytes, 0)
+                events = []
+                for bridge in runtime._bridges.values():
+                    invalidate = bridge.request_runtime_invalidation
+                    stop = bridge.stop
+                    def record_invalidation(reason, original=invalidate):
+                        events.append("fence")
+                        return original(reason)
+                    async def record_stop(*, grace_seconds, original=stop):
+                        events.append("stop")
+                        return await original(grace_seconds=grace_seconds)
+                    bridge.request_runtime_invalidation = record_invalidation
+                    bridge.stop = record_stop
                 self.assertTrue(await runtime.close(5.0))
-                self.assertEqual(child_pins._state, "closed")
+                self.assertEqual(events[0], "fence")
+                self.assertIn("stop", events)
+                self.assertLess(events.index("fence"), events.index("stop"))
+                self.assertEqual(runtime._handlers, {})
+                self.assertEqual(runtime._bridges, {})
+                self.assertEqual(child_pins._state, "open")
 
     async def test_bad_component_allocation_rejected_before_any_weight_load(self):
         with tempfile.TemporaryDirectory(prefix="c2-host-runtime-preload-") as scratch:
@@ -175,3 +194,48 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                             owner_policy=self.owner_policy(sessions=1),
                             component_allocations=self.allocations(kv_bytes=65536))
                     build.assert_not_called()
+
+    async def test_queue_and_global_policy_rejected_before_any_weight_load(self):
+        with tempfile.TemporaryDirectory(prefix="c2-host-runtime-policy-preload-") as scratch:
+            os.chmod(scratch, 0o700)
+            with self.resources(scratch) as (_fx, child_owner, child_pins, installer):
+                with mock.patch("steamboat_connector.c2_host_runtime.build_assigned_worker_handler",
+                                side_effect=AssertionError("weights loaded before validation")) as build:
+                    with self.assertRaises(CredentialError):
+                        await build_c2_host_runtime(child_owner, child_pins, installer,
+                            owner_policy=self.owner_policy(queued_calls=8),
+                            component_allocations=self.allocations(queued_calls=9))
+                    with self.assertRaises(CredentialError):
+                        policy = self.owner_policy(kv_bytes=800_000)
+                        policy["limits"]["memory_ceiling_bytes"] = 1_000_000
+                        policy["limits"]["memory_headroom_bytes"] = 256_000
+                        await build_c2_host_runtime(child_owner, child_pins, installer,
+                            owner_policy=policy,
+                            component_allocations=self.allocations())
+                    build.assert_not_called()
+
+    async def test_selected_catalog_and_assignment_hash_mismatches_precede_load(self):
+        with tempfile.TemporaryDirectory(prefix="c2-host-runtime-pins-preload-") as scratch:
+            os.chmod(scratch, 0o700)
+            with self.resources(scratch) as (_fx, child_owner, child_pins, installer):
+                with child_owner.borrow() as binding:
+                    original = binding._scope
+                    changed_component = replace(original.components[0],
+                                                assignment_sha256="0" * 64)
+                    mismatched = (
+                        replace(original, catalog_sha256="1" * 64),
+                        replace(original, catalog_public_key_sha256="2" * 64),
+                        replace(original, components=(changed_component,)),
+                    )
+                    with mock.patch("steamboat_connector.c2_host_runtime.build_assigned_worker_handler",
+                                    side_effect=AssertionError("weights loaded before pin matching")) as build:
+                        try:
+                            for candidate in mismatched:
+                                binding._scope = candidate
+                                with self.assertRaises(CredentialError):
+                                    _validate_allocations(binding, child_pins, installer,
+                                        validate_policy(self.owner_policy()),
+                                        self.allocations())
+                        finally:
+                            binding._scope = original
+                        build.assert_not_called()
