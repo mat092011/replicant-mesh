@@ -890,3 +890,25 @@ resource accounting, and the CT-11/CT-13 split-host outbound numerical/lifecycle
 gate. C2 is unpublished;
 C3 and research gate statuses are unchanged. Work uses the laptop and ZimaBlade;
 no additional hardware requirement has been established.
+
+**C2 component update, 2026-10-19:** component 29 rebuilt the bounded full
+Docker inventory after the foreign-owner fixture-only correction: 705 unique
+tests passed, with zero skips, failures or errors, in 38.605 seconds. The frozen
+source snapshot is 432 files (`b35138503cd218d43f37ae024b8c05e82910e64da10ecb6cc06ee74c4503b685`,
+head `1b221ff`); the pinned image is
+`sha256:44301c3d0a5f06a5ef41e3518bc273486a9c18a47c0b118fc211ef3219722f7b`.
+The record retains component 28's two missing-fixture failures and the
+fixture-only resolution. Fresh bounded native runs then passed local launch
+claim (12), global launch claim (15), coordinator (9), route (14), and startup
+seam (57) tests. These are component controls: claim receipts remain inert,
+host/coordinator binding does not establish READY, the route ledger is not
+physical resource integration, and the startup seam uses fake cgroup limits.
+The root-runtime final-lock control also changed from one failure in the old
+implementation to one pass in the new implementation. All artifacts remain
+private and unpublished. The full details, source snapshots, limitations, and
+retained invalid/failed attempts are in the [component record](experiments/2026-10-19-participant-c2-components.md).
+
+C2.1–C2.6 and its exit gate remain open: actual fixed-role enrollment and local
+startup, gateway integration, shared physical CPU/RAM/disk/traffic accounting,
+and CT-11/CT-13 laptop-to-ZimaBlade routed session/lifecycle validation remain
+unproven. No hardware blocker or GPU/performance result is established.

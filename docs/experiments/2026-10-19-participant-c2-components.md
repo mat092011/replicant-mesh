@@ -565,3 +565,68 @@ resource pool, and CT-11/CT-13 laptop-to-ZimaBlade routed numerical and lifecycl
 checks remain pending. C2 remains private and unpublished with every checkbox
 open. C3 has not advanced. The laptop and ZimaBlade remain available; no
 additional-hardware blocker is established.
+
+## Component 29 and latest native controls
+
+Component 29 rebuilt the complete Docker inventory from a frozen 432-file
+source snapshot at head `1b221ffb38eb076eed5ee6bcfc525a28370aa7e7`
+(`b35138503cd218d43f37ae024b8c05e82910e64da10ecb6cc06ee74c4503b685`). The
+pinned image was
+`sha256:44301c3d0a5f06a5ef41e3518bc273486a9c18a47c0b118fc211ef3219722f7b`.
+The test command completed with exit code 0: 705 tests passed, no skips,
+failures or errors, in 38.605 seconds. The container was network-isolated,
+read-only, limited to 2 CPUs, 6 GiB RAM and 256 PIDs, and had a 15-second stop
+timeout; it exited 0, reported no OOM, and was removed. The source proof also
+ran network-isolated with 1 CPU, 256 MiB and 64 PIDs. The component-29 source
+proof, test log and gate evidence are privately retained under hashes
+`232ca697d94fce0b49e94491383755ad69c38fd983ebb5dcf77d3d1907c6bca8`,
+`716987a417e93dfc9ead74191e733eece29126fbfdbad7547a2e1bc279bacd72`, and
+`c36cd1761575ec462fa039589d566b35348d01964855322a2e0c39d916266fc1`.
+
+The component-28 run remains in the record: it had 705 discovered tests, 703
+passes and two failures because its image lacked the foreign-owner fixture.
+Component 29 corrected that fixture in the image only; the inventory and
+resource limits were unchanged. This makes the later pass useful evidence for
+the same component set, not grounds to erase the earlier failure.
+
+The latest bounded native probes also passed: local launch claims, 12 tests
+(snapshot head `95da3cc441d495b6c458dd5f572c0a2875521297`, 432 files); global
+launch claims, 15 tests (head `8d09794bc93164d303158d5ef11ee4aa96badf8c`,
+432 files); coordinator, 9 tests (head `6994e1451ae5f89c4925223381fc2da4bf4fe3a4`,
+432 files); routed-pool rules, 14 tests (head `1f0fd15abdca3b96b6525985c9e697e6b83f9fc5`,
+420 files); and startup seam, 57 tests (head
+`eab7e01ecc0e91b0cb1b7b770a21864f078cd9df`, 434 files). The root-runtime
+final-lock causal control failed once against the old implementation and
+passed once against the new implementation. The startup seam still substitutes
+fake cgroup limits. These fresh runs do not turn claims into Popen authority,
+host/coordinator binding into READY, or the shared route ledger into actual
+resource integration. They also do not establish acceptance of the complete
+selected-root startup path.
+
+The latest local-claim and global-claim test logs are
+`6a4f6e64c7834dbeaaa49fc8ceaaa6a0abdd1ba4fb623114a39afe068c1511bd` and
+`fc87688f78cc3821577af3a278aee2495c52d22a0b7fede3163081f70002918d`;
+coordinator and startup-seam logs are
+`a26491bd41f4ba997fb79bfe9b317eab799b4703a1d26f4dcb2277725619b960` and
+`844be488214021ec82d984a235d305a21d525ea44f4f5a72fa1fb1bc5d2b1bd3`.
+The local and global claim source snapshots contain 432 files each, with
+digests `8f7e9fb3ba07968dccf63647e2f2adb1e55e9bacd00d089c374bc3e1151a3647`
+and `e1f13572e259b41c069780dde66c53015920bbb3d70bcb8d69485764543c8136`.
+
+Failures and invalid harness runs are retained rather than counted as passes:
+the earlier local-claim fsync fixture run had one failure (a complete durable
+record was incorrectly expected to be rejected on reopen); the next local and
+global FD-reuse runs each had one failure because `/dev/null` was assumed to
+allocate a particular descriptor. Corrected native runs use exact `dup2`
+reuse and synchronization barriers. Coordinator attempts included an empty
+parent probe with zero tests (exit 0, not a pass), two setup errors, an expiry
+assertion mismatch (7 passes/1 error), and an inventory mismatch that aborted
+before tests. The latest coordinator run passed its nine tests. These tests are
+bounded software checks; independent acceptance review is still pending.
+
+All C2 checklist items remain open, C3 is unchanged, and the evidence is private
+and unpublished. Actual fixed-role enrollment/local startup/gateway operation,
+shared physical CPU/RAM/disk/traffic and session-queue enforcement, and the
+CT-11/CT-13 laptop-to-ZimaBlade routed numerical/lifecycle gate remain required.
+No supported GPU or pooled-GPU performance result is established, and no new
+hardware blocker has been found.
