@@ -483,7 +483,7 @@ class C2HostProcessFixture:
         capture = _DATA_LIMIT * _DATA_CAPTURE_BYTES + _CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES
         policy = _policy(communication=communication, capture=capture)
         policy["limits"].update(memory_ceiling_bytes=1 << 31,
-            memory_headroom_bytes=16 << 20, disk_ceiling_bytes=1 << 30,
+            memory_headroom_bytes=16 << 20, disk_ceiling_bytes=256 << 20,
             send_bytes_per_second=1 << 30, receive_bytes_per_second=1 << 30,
             total_network_bytes=1 << 34, cleanup_send_bytes_per_second=1 << 28,
             cleanup_receive_bytes_per_second=1 << 28,
