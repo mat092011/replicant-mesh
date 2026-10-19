@@ -80,9 +80,14 @@ class AssignedStageExecutor:
                 self.guard.check()
             except Exception as error:
                 raise AssignedArtifactError("active assigned runtime pin is invalid") from error
+            active_assignment = self.view.assignment
             if (self.guard.assignment_id != self.assignment_id
                     or self.guard.component != self.worker_name
-                    or self.guard.manifest_fingerprint != self.manifest_fingerprint):
+                    or self.guard.manifest_fingerprint != self.manifest_fingerprint
+                    or self.guard.assignment_sha256 != self.assignment_sha256
+                    or active_assignment is None
+                    or active_assignment.document_sha256 != self.assignment_sha256
+                    or self.view.manifest.get("fingerprint") != self.manifest_fingerprint):
                 raise AssignedArtifactError("runtime pin guard identity changed")
             return
         manifest, assignment, component = _validated_assignment(self.view)
@@ -138,6 +143,8 @@ def build_assigned_worker_handler(view, *, boot_id=None, clock=None,
         raise AssignedArtifactError("worker guard must be an inherited runtime assignment guard")
     if pin is not None and guard is not None:
         raise AssignedArtifactError("provide either a parent pin or a validated child guard")
+    if guard is not None and clock is not None and clock is not guard.child_clock:
+        raise AssignedArtifactError("worker clock must match the inherited guard Clock")
     if pin is None and guard is None:
         if allow_unpinned_test_only is not True:
             raise AssignedArtifactError("production worker construction requires a runtime artifact pin")
@@ -164,7 +171,26 @@ def build_assigned_worker_handler(view, *, boot_id=None, clock=None,
         "queue_capacity": queue_capacity,
         "on_supervision": on_supervision,
     }
-    if clock is not None:
-        options["clock"] = clock
+    if guard is not None:
+        security_clock = guard.child_clock
+    elif clock is not None:
+        security_clock = clock
+    else:
+        security_clock = None
+    if security_clock is not None:
+        # WorkerHandler's clock is a monotonic callback, while policy expiry
+        # requires the exact core Clock and its uncertainty-aware samples.
+        # Keep those roles separate and never replace the guard's Clock.
+        from steamboat_security.clock import Clock
+        if type(security_clock) is not Clock:
+            raise AssignedArtifactError("worker security clock must be the core Clock")
+
+        def worker_monotonic_clock():
+            try:
+                return security_clock.sample().monotonic
+            except Exception as error:
+                raise AssignedArtifactError("worker security clock is unavailable") from error
+
+        options["clock"] = worker_monotonic_clock
     return WorkerHandler(executor.manifest, executor.worker_name, executor,
                          **options)

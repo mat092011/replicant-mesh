@@ -6,7 +6,7 @@ supervisor that reaps the child and confirms an empty cgroup may release them.
 """
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 try:
     import fcntl
 except ImportError:  # Keep module importable for cross-platform test discovery.
@@ -18,6 +18,7 @@ from pathlib import Path
 import secrets
 import stat
 import sys
+from threading import Lock
 from types import MappingProxyType
 
 from steamboat_security.clock import Clock
@@ -75,10 +76,11 @@ def _lock(root, filename, uid, mode, *, nonblocking=True):
             fcntl.flock(descriptor, flags)
         except BlockingIOError as error:
             os.close(descriptor)
+            descriptor = None
             raise ArtifactPinBusy("artifact store or runtime role is pinned") from error
         return descriptor
     except BaseException:
-        if descriptor >= 0:
+        if descriptor is not None:
             try:
                 os.close(descriptor)
             except OSError:
@@ -120,12 +122,18 @@ def _validate_store_pin_entry(root, name, *, uid):
 
 
 def _close_inherited_descriptors(descriptors):
+    closed = set()
+    errors = []
     for fd in descriptors:
+        if fd in closed:
+            continue
+        closed.add(fd)
         try:
             os.set_inheritable(fd, False)
             os.close(fd)
-        except (OSError, TypeError, ValueError):
-            pass
+        except (OSError, TypeError, ValueError) as error:
+            errors.append(error)
+    return errors
 
 
 def _write_pin_record(root, filename, record, uid):
@@ -178,25 +186,41 @@ def _remove_old_pin_record(root, filename, uid, *, expected=None):
         os.close(directory)
 
 
-@dataclass(frozen=True)
+@dataclass
 class RuntimeAssignmentGuard:
-    """In-memory execution fence paired with a live inherited pin."""
+    """Clock-clipped signed-authority fence paired with a live descriptor pin."""
 
-    pin: "RuntimeArtifactPin"
+    pin: object
     child_clock: Clock
     child_verifier: object
     clock_domain: str
     captured_mono: float
-    catalog_deadline: float
-    assignment_deadline: float
+    parent_catalog_deadline: float
+    parent_assignment_deadline: float
+    child_catalog_deadline: float
+    child_assignment_deadline: float
+    catalog_issued_at: int
+    catalog_expires_at: int
+    assignment_issued_at: int
+    assignment_expires_at: int
     component: str
     manifest_fingerprint: str
     assignment_id: str
     account_id: str
     device_id: str
     role: str
-    child_catalog_deadline: float
-    child_assignment_deadline: float
+    assignment_sha256: str
+    catalog_sha256: str
+    record_snapshot: object
+    _deadline_lock: object = field(default_factory=Lock, init=False, repr=False)
+    _catalog_deadline: float = field(default=0.0, init=False, repr=False)
+    _assignment_deadline: float = field(default=0.0, init=False, repr=False)
+
+    def __post_init__(self):
+        self._catalog_deadline = min(self.parent_catalog_deadline,
+                                     self.child_catalog_deadline)
+        self._assignment_deadline = min(self.parent_assignment_deadline,
+                                         self.child_assignment_deadline)
 
     def check(self):
         if type(self.child_clock) is not Clock:
@@ -204,31 +228,99 @@ class RuntimeAssignmentGuard:
         from steamboat_runtime.protocol.clock import clock_identity
         if not self.clock_domain or clock_identity() != self.clock_domain:
             raise ArtifactPinError("parent and child monotonic clock domains differ")
-        try:
-            sample = self.child_clock.sample()
-        except Exception as error:
-            raise ArtifactPinError("runtime clock is not trusted") from error
-        if (sample.monotonic < self.captured_mono
-                or sample.monotonic >= min(self.catalog_deadline,
-                                           self.assignment_deadline)):
-            raise ArtifactPinError("assigned runtime pin validity has expired")
-        # The child verifier's conservative caps were captured once at guard
-        # construction; recurring calls remain in-memory and nonblocking.
-        self.pin.assert_open_descriptors()
-        if sample.monotonic >= min(self.child_catalog_deadline,
-                                   self.child_assignment_deadline):
-            raise ArtifactPinError("child verifier validity has expired")
-        if (self.record_identity != self.pin.record
-                or self.pin.record.get("assignment_id") != self.assignment_id
-                or self.pin.record.get("account_id") != self.account_id
-                or self.pin.record.get("device_id") != self.device_id
-                or self.pin.record.get("role") != self.role):
-            raise ArtifactPinError("runtime assignment scope changed")
-        return sample
+        with self._deadline_lock:
+            try:
+                sample = self.child_clock.sample()
+            except Exception as error:
+                raise ArtifactPinError("runtime clock is not trusted") from error
+            catalog_candidate = (sample.monotonic + self.catalog_expires_at
+                                 - sample.latest_wall)
+            assignment_candidate = (sample.monotonic + self.assignment_expires_at
+                                   - sample.latest_wall)
+            self._catalog_deadline = min(self._catalog_deadline,
+                                         self.parent_catalog_deadline,
+                                         self.child_catalog_deadline,
+                                         catalog_candidate)
+            self._assignment_deadline = min(self._assignment_deadline,
+                                            self.parent_assignment_deadline,
+                                            self.child_assignment_deadline,
+                                            assignment_candidate)
+            if (sample.monotonic < self.captured_mono
+                    or self.catalog_issued_at > sample.earliest_wall
+                    or self.assignment_issued_at > sample.earliest_wall
+                    or sample.latest_wall >= self.catalog_expires_at
+                    or sample.latest_wall >= self.assignment_expires_at
+                    or sample.monotonic >= min(self._catalog_deadline,
+                                               self._assignment_deadline)):
+                raise ArtifactPinError("assigned runtime pin validity has expired")
+            self.pin.assert_open_descriptors()
+            if (dict(self.pin.record) != dict(self.record_snapshot)
+                    or self.pin.record.get("assignment_id") != self.assignment_id
+                    or self.pin.record.get("account_id") != self.account_id
+                    or self.pin.record.get("device_id") != self.device_id
+                    or self.pin.record.get("role") != self.role
+                    or self.pin.record.get("assignment_sha256") != self.assignment_sha256
+                    or self.pin.record.get("catalog_sha256") != self.catalog_sha256):
+                raise ArtifactPinError("runtime assignment scope changed")
+            return sample
 
-    @property
-    def record_identity(self):
-        return self.pin.record
+    def close(self):
+        """Close child-owned inherited descriptors without issuing LOCK_UN."""
+        if not isinstance(self.pin, InheritedArtifactPin):
+            raise ArtifactPinError("only a child guard owns inherited descriptors")
+        self.pin.close()
+
+
+class InheritedArtifactPin:
+    """Child-side owner retaining inherited flock descriptions for its lifetime."""
+
+    def __init__(self, *, global_fd, role_fd, root, uid, role, record,
+                 global_identity, role_identity):
+        self.global_fd = global_fd
+        self.role_fd = role_fd
+        self.root = Path(root)
+        self.uid = uid
+        self.role = role
+        self.record = MappingProxyType(dict(record))
+        self._global_identity = global_identity
+        self._role_identity = role_identity
+        self._close_state = "open"
+
+    @staticmethod
+    def _identity(fd):
+        info = os.fstat(fd)
+        return (info.st_dev, info.st_ino, info.st_uid, stat.S_IMODE(info.st_mode),
+                info.st_nlink, info.st_size)
+
+    def assert_open_descriptors(self):
+        if self._close_state != "open":
+            raise ArtifactPinError("child runtime pin descriptors are unavailable")
+        try:
+            current = (self._identity(self.global_fd), self._identity(self.role_fd))
+        except (OSError, TypeError, ValueError) as error:
+            raise ArtifactPinError("child runtime pin descriptor was closed") from error
+        if current != (self._global_identity, self._role_identity):
+            raise ArtifactPinError("child runtime pin descriptor identity changed")
+        return True
+
+    def close(self):
+        if self._close_state == "closed":
+            return
+        if self._close_state == "faulted":
+            raise ArtifactPinError("child runtime pin descriptor cleanup is faulted")
+        self._close_state = "closing"
+        errors = []
+        for field_name in ("role_fd", "global_fd"):
+            descriptor = getattr(self, field_name)
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                errors.append(error)
+            else:
+                setattr(self, field_name, None)
+        self._close_state = "faulted" if errors else "closed"
+        if errors:
+            raise ArtifactPinError("child runtime pin descriptor cleanup failed") from errors[0]
 
 
 class RuntimeArtifactPin:
@@ -256,6 +348,10 @@ class RuntimeArtifactPin:
         self.clock_domain = clock_domain
         self.clock = clock
         self._released = False
+        self._release_faulted = False
+        self._close_state = {"role": "open", "global": "open"}
+        self._global_identity = InheritedArtifactPin._identity(global_fd)
+        self._role_identity = InheritedArtifactPin._identity(role_fd)
 
     @classmethod
     def acquire(cls, view, *, clock, boot_id):
@@ -303,6 +399,7 @@ class RuntimeArtifactPin:
                 "device_id": view.device_id, "role": view.role,
                 "assignment_id": view.assignment_id,
                 "catalog_sha256": hashlib.sha256(catalog_bytes).hexdigest(),
+                "assignment_sha256": hashlib.sha256(assignment_bytes).hexdigest(),
                 "boot_id": boot_id,
             }
             _write_pin_record(root, record_name, record, uid)
@@ -334,20 +431,15 @@ class RuntimeArtifactPin:
             raise ArtifactPinError("verifier did not retain signed authority deadlines") from error
 
     def assert_open_descriptors(self):
-        if self._released:
+        if self._released or self._release_faulted:
             raise ArtifactPinError("runtime artifact pin was released")
-        for fd, name in ((self.global_fd, GLOBAL_LOCK),
-                         (self.role_fd, ROLE_LOCKS[self.record["role"]])):
-            try:
-                info = os.fstat(fd)
-                named = os.stat(Path(self.root) / name, follow_symlinks=False)
-            except (OSError, TypeError, ValueError) as error:
-                raise ArtifactPinError("runtime pin descriptor is no longer valid") from error
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid
-                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
-                    or info.st_size != 0
-                    or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)):
-                raise ArtifactPinError("runtime pin lock inode changed")
+        try:
+            current = (InheritedArtifactPin._identity(self.global_fd),
+                       InheritedArtifactPin._identity(self.role_fd))
+        except (OSError, TypeError, ValueError) as error:
+            raise ArtifactPinError("runtime pin descriptor is no longer valid") from error
+        if current != (self._global_identity, self._role_identity):
+            raise ArtifactPinError("runtime pin lock inode changed")
         return True
 
     def make_guard(self, *, child_clock, child_verifier):
@@ -377,9 +469,14 @@ class RuntimeArtifactPin:
         guard = RuntimeAssignmentGuard(
             self, child_clock, child_verifier, self.clock_domain, self.captured_mono,
             self.catalog_deadline, self.assignment_deadline,
+            child_catalog_deadline, child_assignment_deadline,
+            catalog.payload["issued_at"], catalog.payload["expires_at"],
+            assignment.payload["issued_at"], assignment.payload["expires_at"],
             payload["component"], payload["manifest_fingerprint"],
             payload["assignment_id"], payload["account_id"], payload["device_id"],
-            payload["role"], child_catalog_deadline, child_assignment_deadline)
+            payload["role"], hashlib.sha256(self.signed_assignment).hexdigest(),
+            hashlib.sha256(self.signed_catalog).hexdigest(),
+            MappingProxyType(dict(self.record)))
         guard.check()
         return guard
 
@@ -398,27 +495,40 @@ class RuntimeArtifactPin:
         """Drop parent ownership; caller must already have reaped child/cgroup."""
         if self._released:
             return
+        if self._release_faulted:
+            raise ArtifactPinError("runtime pin cleanup is faulted")
         _remove_old_pin_record(self.root, self.record_path.name, self.uid,
                                expected=self.record)
         release_error = None
-        for descriptor in (self.role_fd, self.global_fd):
+        for name in ("role", "global"):
+            descriptor = getattr(self, name + "_fd")
+            if descriptor is None:
+                continue
             try:
                 os.close(descriptor)
             except OSError as error:
                 release_error = release_error or error
-        self._released = True
+                # close(2) errors leave descriptor state ambiguous. Never retry
+                # this number: it may already have been reused by the process.
+                self._close_state[name] = "unknown"
+                self._release_faulted = True
+            else:
+                setattr(self, name + "_fd", None)
+                self._close_state[name] = "closed"
         if release_error is not None:
             raise ArtifactPinError("runtime pin descriptor cleanup failed") from release_error
+        self._released = True
 
 
 def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
                            expected_record, clock_domain, captured_mono,
                            catalog_deadline, assignment_deadline, clock,
                            signed_catalog, signed_assignment, verifier):
-    """Validate inherited descriptors and exact private record, then close raw FDs.
+    """Validate inherited descriptors and return a child owner retaining them.
 
-    The parent retains its own open descriptions and locks. Closing inherited
-    descriptors here cannot unlock them while parent descriptors remain open.
+    The returned guard owns its descriptor copies for the full runtime lifetime;
+    its close method uses close(2), never LOCK_UN, and is for trusted process
+    teardown after compute has stopped.
     """
     raw = (global_fd, role_fd)
     try:
@@ -433,7 +543,8 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
             or record_target.name != _pin_record(role)
             or type(expected_record) is not dict
             or set(expected_record) != {"version", "pin_id", "account_id", "device_id",
-                                       "role", "assignment_id", "catalog_sha256", "boot_id"}
+                                       "role", "assignment_id", "catalog_sha256",
+                                       "assignment_sha256", "boot_id"}
             or type(expected_record.get("version")) is not int
             or expected_record.get("version") != 1
             or type(expected_record.get("pin_id")) is not str
@@ -446,6 +557,9 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
             or type(expected_record.get("catalog_sha256")) is not str
             or len(expected_record["catalog_sha256"]) != 64
             or any(c not in "0123456789abcdef" for c in expected_record["catalog_sha256"])
+            or type(expected_record.get("assignment_sha256")) is not str
+            or len(expected_record["assignment_sha256"]) != 64
+            or any(c not in "0123456789abcdef" for c in expected_record["assignment_sha256"])
             or type(expected_record.get("boot_id")) is not str
             or len(expected_record["boot_id"]) != 32
                 or any(c not in "0123456789abcdef" for c in expected_record["boot_id"])):
@@ -458,8 +572,11 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
                 or captured_mono >= min(catalog_deadline, assignment_deadline)):
             raise ArtifactPinError("inherited runtime pin clock fence is malformed")
     except BaseException:
-        _close_inherited_descriptors(raw)
+        close_errors = _close_inherited_descriptors(raw)
+        if close_errors:
+            raise ArtifactPinError("invalid inherited pin descriptor cleanup failed") from close_errors[0]
         raise
+    success = False
     try:
         for fd, lock_name in zip(raw, (GLOBAL_LOCK, ROLE_LOCKS[role])):
             info = os.fstat(fd)
@@ -510,6 +627,8 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
                 signed_assignment, catalog, account_id=record["account_id"],
                 device_id=record["device_id"], role=role)
             if (assignment.payload["assignment_id"] != record["assignment_id"]
+                    or hashlib.sha256(assignment.document_bytes).hexdigest()
+                    != record["assignment_sha256"]
                     or hashlib.sha256(catalog.document_bytes).hexdigest()
                     != record["catalog_sha256"]):
                 raise ArtifactPinError("signed child authority differs from pin record")
@@ -522,15 +641,27 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
                 or sample.monotonic >= min(catalog_deadline, assignment_deadline)):
             raise ArtifactPinError("inherited pin validity expired")
         payload = assignment.payload
-        inherited_pin = SimpleNamespace(record=dict(record),
-                                        assert_open_descriptors=lambda: True)
+        inherited_pin = InheritedArtifactPin(
+            global_fd=global_fd, role_fd=role_fd, root=root_path, uid=uid,
+            role=role, record=record,
+            global_identity=InheritedArtifactPin._identity(global_fd),
+            role_identity=InheritedArtifactPin._identity(role_fd))
         guard = RuntimeAssignmentGuard(
             inherited_pin, clock, verifier, clock_domain, float(captured_mono),
             float(catalog_deadline), float(assignment_deadline),
+            child_catalog_deadline, child_assignment_deadline,
+            catalog.payload["issued_at"], catalog.payload["expires_at"],
+            assignment.payload["issued_at"], assignment.payload["expires_at"],
             payload["component"], payload["manifest_fingerprint"],
             payload["assignment_id"], payload["account_id"], payload["device_id"],
-            payload["role"], child_catalog_deadline, child_assignment_deadline)
+            payload["role"], hashlib.sha256(signed_assignment).hexdigest(),
+            hashlib.sha256(signed_catalog).hexdigest(),
+            MappingProxyType(dict(record)))
         guard.check()
+        success = True
         return guard
     finally:
-        _close_inherited_descriptors(raw)
+        if not success:
+            close_errors = _close_inherited_descriptors(raw)
+            if close_errors:
+                raise ArtifactPinError("invalid inherited pin descriptor cleanup failed") from close_errors[0]

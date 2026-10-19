@@ -186,20 +186,22 @@ class AssignedExecutorTests(unittest.TestCase):
             assigned_executor.build_assigned_worker_handler(_view())
 
     def test_pinned_guard_cache_and_execute_do_not_reenter_installer(self):
-        import time
         from steamboat_connector.artifact_pin import RuntimeAssignmentGuard
         from steamboat_security.clock import Clock
 
         view = _view()
         record = {"assignment_id": ASSIGNMENT_ID, "account_id": ACCOUNT_ID,
-                  "device_id": DEVICE_ID, "role": "host"}
+                  "device_id": DEVICE_ID, "role": "host",
+                  "assignment_sha256": "a" * 64, "catalog_sha256": "d" * 64}
         pin = SimpleNamespace(record=record,
                               assert_open_descriptors=mock.Mock(return_value=True))
+        clock = Clock(wall=lambda: 1000.0, monotonic=lambda: 50.0,
+                      uncertainty_seconds=lambda: 0.0)
         guard = RuntimeAssignmentGuard(
-            pin, Clock(uncertainty_seconds=lambda: 0.0), object(), "test-domain",
-            0.0, time.monotonic() + 10000, time.monotonic() + 10000,
+            pin, clock, object(), "test-domain", 50.0,
+            150.0, 150.0, 150.0, 150.0, 900, 1100, 900, 1100,
             "worker-2", "f" * 64, ASSIGNMENT_ID, ACCOUNT_ID, DEVICE_ID, "host",
-            time.monotonic() + 10000, time.monotonic() + 10000)
+            "a" * 64, "d" * 64, dict(record))
         with mock.patch("steamboat_runtime.protocol.clock.clock_identity",
                         return_value="test-domain"):
             executor = assigned_executor.AssignedStageExecutor(view, guard=guard)
@@ -216,6 +218,22 @@ class AssignedExecutorTests(unittest.TestCase):
         view._locked_manifest.assert_not_called()
         view.new_layer_cache.assert_not_called()
         self.assertEqual(pin.assert_open_descriptors.call_count, 5)
+
+    def test_worker_handler_gets_monotonic_callback_separate_from_security_clock(self):
+        from steamboat_security.clock import Clock
+
+        view = _view()
+        clock = Clock(wall=lambda: 1000.0, monotonic=lambda: 55.0,
+                      uncertainty_seconds=lambda: 0.0)
+        factory = mock.Mock(return_value=object())
+        fake_worker_state = SimpleNamespace(WorkerHandler=factory)
+        with mock.patch.dict(sys.modules,
+                {"steamboat_runtime.worker_state": fake_worker_state}):
+            assigned_executor.build_assigned_worker_handler(
+                view, clock=clock, allow_unpinned_test_only=True)
+        callback = factory.call_args.kwargs["clock"]
+        self.assertTrue(callable(callback))
+        self.assertEqual(callback(), 55.0)
 
 
 if __name__ == "__main__":
