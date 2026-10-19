@@ -158,6 +158,39 @@ class ProcessStartSeamTests(unittest.TestCase):
                 self.backend.observe_owned_ready(handle)
         self.assertIsNotNone(self.owner["process"].poll())
 
+    def test_final_process_poll_exception_consumes_handle_and_returns_false(self):
+        def spawn_with_one_poll_error(*args, **kwargs):
+            child = FakeProcess(args[0], kwargs, self.cgroup)
+            original_poll = child.poll
+            calls = []
+
+            def poll_once_fails():
+                if not calls:
+                    calls.append(True)
+                    raise OSError("poll failed")
+                return original_poll()
+
+            child.poll = poll_once_fails
+            self.owner["process"] = child
+            return child
+
+        with mock.patch.object(process_supervisor.subprocess, "Popen",
+                               side_effect=spawn_with_one_poll_error):
+            handle = self.backend.spawn_owned_start("host", sample_policy())
+            self.assertIsNotNone(handle)
+            self.assertFalse(self.backend.observe_owned_ready(handle))
+            with self.assertRaisesRegex(ValueError, "already observed"):
+                self.backend.observe_owned_ready(handle)
+        self.assertNotIn("host", self.backend.status())
+        self.assertIsNotNone(self.owner["process"].poll())
+
+        # The compatibility wrapper retains its boolean failure contract when
+        # its final process observation fails as well.
+        with mock.patch.object(process_supervisor.subprocess, "Popen",
+                               side_effect=spawn_with_one_poll_error):
+            self.assertFalse(self.backend.start("host", sample_policy()))
+        self.assertNotIn("host", self.backend.status())
+
     def test_pre_popen_check_must_return_exact_none_and_precedes_spawn(self):
         calls = []
 

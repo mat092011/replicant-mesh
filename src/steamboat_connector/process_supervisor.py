@@ -923,23 +923,31 @@ class ProcessRoleBackend:
                 # A failed READY observer is terminal for this handle. Keep
                 # the process owned and use the existing bounded stop path.
                 ready = False
+                observation_failed = True
+            else:
+                observation_failed = False
             with self._lock:
                 cancelled = (self._owned.get(handle._role) is not owned
                              or owned.stopping
                              or self._cancelled(intent, handle._cancel_event))
                 process_live = False
+                poll_failed = False
                 if not cancelled:
                     with owned.escalation_lock:
-                        process_live = owned.process.poll() is None
-                        if not process_live:
-                            owned.leader_reaped = True
-                            owned.reaped_event.set()
+                        try:
+                            process_live = owned.process.poll() is None
+                        except Exception:
+                            poll_failed = True
+                        else:
+                            if not process_live:
+                                owned.leader_reaped = True
+                                owned.reaped_event.set()
                     cancelled = (self._owned.get(handle._role) is not owned
                                  or owned.stopping
                                  or self._cancelled(intent, handle._cancel_event))
                     if not cancelled:
                         owned.starting = False
-                        owned.ready = bool(ready and process_live)
+                        owned.ready = bool(ready and process_live and not poll_failed)
                         # Stop/drain are lock-free fences. Recheck after the
                         # readiness write so a fence racing the poll cannot
                         # be overwritten by this observation.
@@ -948,14 +956,20 @@ class ProcessRoleBackend:
                                      or self._cancelled(intent, handle._cancel_event))
                         if cancelled:
                             owned.ready = False
-                result = bool(not cancelled and owned.ready)
+                result = bool(not cancelled and not observation_failed
+                              and not poll_failed and owned.ready)
                 handle._state = "consumed"
                 if self._pending_starts.get(handle._role) is handle:
                     del self._pending_starts[handle._role]
             if not result:
                 self._cancel_intent(intent)
                 if not intent.final_stop_requested:
-                    self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
+                    try:
+                        self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
+                    except Exception:
+                        # Keep the strong owner and stop intent when cleanup
+                        # itself encounters an uncertain process observation.
+                        pass
             self._forget_start_intent(handle._role, intent)
             return result
         finally:

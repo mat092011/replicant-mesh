@@ -29,7 +29,10 @@ consumed before close attempts so an ambiguous close error cannot cause cleanup
 to close a descriptor number that has since been reused. READY observation
 accepts only a current handle made by the same backend, one time, with a timeout
 from zero through 30 seconds. The compatibility `start` method calls both
-phases and keeps its boolean result.
+phases and keeps its boolean result. An operational failure during READY
+reading or the final process-liveness observation consumes the handle, returns
+false, and attempts the existing bounded stop; uncertain cleanup keeps the
+process owner retained.
 
 This seam is local process lifecycle support. It does not connect process starts
 to C2 claims or enablement, prove loaded runtime readiness, add a coordinator
