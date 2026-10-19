@@ -764,8 +764,14 @@ class TrafficBudget:
                                                  retained_owner=self) from error
                 else:
                     state = copy.deepcopy(self._memory.state)
-                _validate_state(state, allocation_id=self.allocation_id, uid=self.uid,
-                                clock_domain=self.clock_domain)
+                try:
+                    _validate_state(state, allocation_id=self.allocation_id, uid=self.uid,
+                                    clock_domain=self.clock_domain)
+                except TrafficBudgetError as error:
+                    self._latch_fault("persistent traffic ledger validation failed")
+                    raise TrafficBudgetError(
+                        "persistent traffic ledger validation failed",
+                        retained_owner=self) from error
                 if state["policy_sha256"] != self._requested_policy_sha256:
                     self._policy_mismatch = True
                     raise TrafficBudgetError("explicit policy refresh is required",
@@ -777,6 +783,7 @@ class TrafficBudget:
                 deadline = item["deadline_ns"]
                 allowance_size = item["max_bytes"]
                 self._write_socket_state(state, known_count=None)
+                durable_reservation_state = copy.deepcopy(state)
 
                 # A grant is never used after its 100 ms lifetime, even if
                 # acquiring the ledger took most of that interval.
@@ -839,16 +846,18 @@ class TrafficBudget:
                     unknown = True
                     result = None
 
-                settle_now = self._now(state)
-                settlement = self._settle_socket_record(
-                    state, item, 0 if unknown else known_count,
-                    known=not unknown, now=settle_now)
                 try:
+                    settle_now = self._now(state)
+                    settlement = self._settle_socket_record(
+                        state, item, 0 if unknown else known_count,
+                        known=not unknown, now=settle_now)
                     self._write_socket_state(state, known_count=known_count)
                 except BaseException as error:
-                    self._latch_fault("traffic ledger settlement outcome is unknown", state)
+                    self._latch_fault(
+                        "post-socket clock or settlement outcome is unknown",
+                        durable_reservation_state)
                     raise TrafficSocketIOError(
-                        "traffic settlement failed after socket IO",
+                        "post-socket clock or settlement failed; full reservation retained",
                         known_count=known_count, io_outcome_uncertain=unknown,
                         metering_uncertain=True) from error
                 if unknown:

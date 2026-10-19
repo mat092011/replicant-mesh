@@ -8,7 +8,7 @@ from tests.connector.test_traffic_budget import (
     _memory_budget, _policy, ALLOC, DOMAIN,
 )
 from steamboat_connector.traffic_budget import (
-    MemoryTrafficStore, TrafficBudget, TrafficBudgetDenied,
+    MemoryTrafficStore, TrafficBudget, TrafficBudgetDenied, TrafficBudgetError,
 )
 from tests.security import test_gateway_coordinator_tls as gateway_fixture_tests
 
@@ -406,6 +406,152 @@ class ChannelSocketTests(unittest.TestCase):
         self.assertGreater(driver.socket_byte_counts[0], 0)
         self.assertFalse(driver.io_outcome_uncertain)
         self.assertTrue(driver.metering_uncertain)
+
+    def test_post_io_clock_failure_preserves_known_send_and_full_reservation(self):
+        class RollbackAfterSendSocket(self.PartialSocket):
+            def __init__(self, sock, clock):
+                super().__init__(sock)
+                self.clock = clock
+
+            def send(self, data):
+                count = self.sock.send(data[:97])
+                self.clock.mono -= 1.0
+                self.clock.wall -= 1.0
+                return count
+
+        budget, store, clock = _memory_budget(policy=_policy(
+            global_total=2_000_000, role_total=500_000,
+            send_rate=1_000_000, role_send_rate=200_000,
+            cleanup_total=10_000, cleanup_rate=100_000,
+            role_cleanup_rate=30_000))
+        budget.bind_role("coordinator", COORD_BOOT)
+        client_socket, peer_socket = self._connected_pair()
+        client_tls, unused_tls = self._owners()
+        wrapper = RollbackAfterSendSocket(client_socket, clock)
+        driver = ChannelSocket(wrapper, client_tls, budget,
+                               role="coordinator", boot_id=COORD_BOOT,
+                               test_socket=True)
+        self.addCleanup(driver.close)
+        self.addCleanup(unused_tls.close)
+        self.addCleanup(peer_socket.close)
+        with self.assertRaises(ChannelSocketError):
+            driver.pump()
+        self.assertGreater(driver.socket_byte_counts[0], 0)
+        self.assertFalse(driver.io_outcome_uncertain)
+        self.assertTrue(driver.metering_uncertain)
+        peer_socket.settimeout(1)
+        self.assertGreater(len(peer_socket.recv(256)), 0)
+        row, = store.state["reservations"]
+        self.assertEqual(row["status"], "open")
+        self.assertGreater(row["max_bytes"], 0)
+        self.assertIsNone(row["actual_bytes"])
+
+    def test_post_io_clock_failure_preserves_known_receive_count(self):
+        class RollbackAfterReceiveSocket(self.PartialSocket):
+            def __init__(self, sock, clock):
+                super().__init__(sock)
+                self.clock = clock
+                self.first_read = False
+
+            def recv(self, size):
+                result = self.sock.recv(size)
+                self.clock.mono -= 1.0
+                self.clock.wall -= 1.0
+                return result
+
+        budget, store, clock = _memory_budget(policy=_policy(
+            global_total=2_000_000, role_total=500_000,
+            send_rate=1_000_000, role_send_rate=200_000,
+            cleanup_total=10_000, cleanup_rate=100_000,
+            role_cleanup_rate=30_000))
+        budget.bind_role("coordinator", COORD_BOOT)
+        client_socket, peer_socket = self._connected_pair()
+        client_tls, unused_tls = self._owners()
+        peer_socket.sendall(b"known receive payload")
+        wrapper = RollbackAfterReceiveSocket(client_socket, clock)
+        driver = ChannelSocket(wrapper, client_tls, budget,
+                               role="coordinator", boot_id=COORD_BOOT,
+                               test_socket=True)
+        self.addCleanup(driver.close)
+        self.addCleanup(unused_tls.close)
+        self.addCleanup(peer_socket.close)
+        with self.assertRaises(ChannelSocketError):
+            driver.pump()
+        self.assertEqual(driver.socket_byte_counts[1], len(b"known receive payload"))
+        self.assertFalse(driver.io_outcome_uncertain)
+        self.assertTrue(driver.metering_uncertain)
+        row, = store.state["reservations"]
+        self.assertEqual(row["status"], "open")
+        self.assertGreater(row["max_bytes"], 0)
+        self.assertIsNone(row["actual_bytes"])
+
+    def test_unknown_io_post_clock_failure_preserves_both_uncertainty_flags(self):
+        class SendThenUnknownSocket(self.PartialSocket):
+            def __init__(self, sock, clock):
+                super().__init__(sock)
+                self.clock = clock
+
+            def send(self, data):
+                self.sock.send(data[:97])
+                self.clock.mono -= 1.0
+                self.clock.wall -= 1.0
+                raise OSError(5, "outcome unavailable")
+
+        budget, store, clock = _memory_budget(policy=_policy(
+            global_total=2_000_000, role_total=500_000,
+            send_rate=1_000_000, role_send_rate=200_000,
+            cleanup_total=10_000, cleanup_rate=100_000,
+            role_cleanup_rate=30_000))
+        budget.bind_role("coordinator", COORD_BOOT)
+        client_socket, peer_socket = self._connected_pair()
+        client_tls, unused_tls = self._owners()
+        driver = ChannelSocket(SendThenUnknownSocket(client_socket, clock),
+                               client_tls, budget, role="coordinator",
+                               boot_id=COORD_BOOT, test_socket=True)
+        self.addCleanup(driver.close)
+        self.addCleanup(unused_tls.close)
+        self.addCleanup(peer_socket.close)
+        with self.assertRaises(ChannelSocketError):
+            driver.pump()
+        self.assertEqual(driver.socket_byte_counts, (0, 0))
+        self.assertTrue(driver.io_outcome_uncertain)
+        self.assertTrue(driver.metering_uncertain)
+        peer_socket.settimeout(1)
+        self.assertGreater(len(peer_socket.recv(256)), 0)
+        row, = store.state["reservations"]
+        self.assertEqual(row["status"], "open")
+        self.assertIsNone(row["actual_bytes"])
+        self.assertGreater(row["max_bytes"], 0)
+
+    def test_invalid_ledger_state_faults_same_budget_owner(self):
+        budget, store, _clock = _memory_budget(policy=_policy(
+            global_total=2_000_000, role_total=500_000,
+            send_rate=1_000_000, role_send_rate=200_000,
+            cleanup_total=10_000, cleanup_rate=100_000,
+            role_cleanup_rate=30_000))
+        budget.bind_role("coordinator", COORD_BOOT)
+        client_socket, peer_socket = self._connected_pair()
+        client_tls, unused_tls = self._owners()
+        wrapper = self.PartialSocket(client_socket)
+        driver = ChannelSocket(wrapper, client_tls, budget,
+                               role="coordinator", boot_id=COORD_BOOT,
+                               test_socket=True)
+        self.addCleanup(driver.close)
+        self.addCleanup(unused_tls.close)
+        self.addCleanup(peer_socket.close)
+        store.state["version"] = 99
+        with self.assertRaises(ChannelSocketError):
+            driver.pump()
+        self.assertTrue(budget._faulted)
+        self.assertEqual(wrapper.send_calls, 0)
+        self.assertEqual(wrapper.recv_calls, 0)
+        store.state["version"] = 2
+        with self.assertRaises(TrafficBudgetError):
+            budget.run_socket_io(
+                wrapper, client_tls, "coordinator", COORD_BOOT,
+                "send", "data", b"must-not-send", test_socket=True)
+        self.assertEqual(wrapper.send_calls, 0)
+        self.assertEqual(wrapper.recv_calls, 0)
 
     def test_policy_revocation_during_durable_reservation_prevents_send(self):
         class RevokingStore(MemoryTrafficStore):
