@@ -209,26 +209,45 @@ class C2ChildBindingIntegrationTests(unittest.TestCase):
     def test_teardown_callback_can_close_owner_without_deadlock(self):
         child = open_c2_child_binding(parse_c2_child_config(_host_config(self.fx)),
             clock=self.fx.clock, expected_uid=os.geteuid())
-        with child.borrow() as binding:
-            binding.subscribe_teardown(lambda _reason: child.close())
-        child.close()
+        original = self.fx.header_path.read_bytes()
+        self.fx._private(self.fx.header_path, original + b" ")
+        close_count = []
+        real_close = RootGenerationStore.close
+        def count_close(store):
+            if store is child._root_store:
+                close_count.append(True)
+            return real_close(store)
+        try:
+            with patch.object(RootGenerationStore, "close", count_close):
+                with child.borrow() as binding:
+                    binding.subscribe_teardown(lambda _reason: child.close())
+                    with self.assertRaises(CredentialError):
+                        binding.assert_live()
+        finally:
+            self.fx._private(self.fx.header_path, original)
         self.assertEqual(child._root_store._root_fd, -1)
         child.close()
+        self.assertEqual(close_count, [True])
 
     def test_close_during_borrowed_guard_keeps_root_fds_until_lease_exits(self):
         child = open_c2_child_binding(parse_c2_child_config(_host_config(self.fx)),
             clock=self.fx.clock, expected_uid=os.geteuid())
         entered, proceed = threading.Event(), threading.Event()
         outcome = []
-        with child.borrow() as binding:
-            binding_type = type(binding)
-            original_guard = binding_type.assert_live
+        real_read_selected = RootGenerationStore.read_selected
 
-        def blocked_guard(instance):
-            entered.set()
-            if not proceed.wait(5):
-                raise AssertionError("guard barrier timed out")
-            return original_guard(instance)
+        def blocked_selected_read(store, validate):
+            if store is not child._root_store:
+                return real_read_selected(store, validate)
+
+            def validated(selector, artifacts, active):
+                result = validate(selector, artifacts, active)
+                entered.set()  # Actual selected bytes have reached real validation.
+                if not proceed.wait(5):
+                    raise AssertionError("selected-root validation barrier timed out")
+                return result
+
+            return real_read_selected(store, validated)
 
         def guarded_use():
             try:
@@ -237,10 +256,10 @@ class C2ChildBindingIntegrationTests(unittest.TestCase):
             except BaseException as error:
                 outcome.append(error)
 
-        with patch.object(binding_type, "assert_live", blocked_guard):
+        with patch.object(RootGenerationStore, "read_selected", blocked_selected_read):
             worker = threading.Thread(target=guarded_use)
             worker.start()
-            self.assertTrue(entered.wait(5), "borrowed guard did not reach barrier")
+            self.assertTrue(entered.wait(5), "actual selected-root validation did not reach barrier")
             root_fd = child._root_store._root_fd
             child.close()  # Must return while the guarded borrow remains active.
             os.fstat(root_fd)
@@ -269,8 +288,9 @@ class C2ChildBindingIntegrationTests(unittest.TestCase):
             child = open_c2_child_binding(parse_c2_child_config(document),
                 clock=fx.clock, expected_uid=os.geteuid())
             try:
-                self.assertEqual(child.binding.local_identity.boot_id,
-                                 fx.coordinator_spec.boot_id)
+                with child.borrow() as binding:
+                    self.assertEqual(binding.local_identity.boot_id,
+                                     fx.coordinator_spec.boot_id)
                 child.assert_live()
             finally:
                 child.close()
