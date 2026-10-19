@@ -13,7 +13,8 @@ also passed. Trial 76, Native ZimaBlade run 3, Trial 77 and full-history DIAG3
 failures remain recorded with unknown causes; Trial 78 does not explain them,
 and no hardware cause is established. Separate-device evidence retains its own
 frozen source and image identities. The AMD 890M GPU backend remains
-unvalidated. Work stops after C1 as requested.
+unvalidated. The original stop-after-C1 instruction was historical; C2 resumed
+on 2026-10-19 and remains in progress and unaccepted.
 
 This document owns the C0–C9 execution sequence, task checklists and engineering
 exit criteria. The [architecture plan](PARTICIPANT_NETWORK_PLAN.md) explains the
@@ -209,14 +210,18 @@ Begin C4 integration and optional C8 UI scaffolding; no community pilot yet.
 
 **Implementation resumed, 2026-10-19:** the maintainer authorized continuing C2
 after completed C1 publication. The [component record](experiments/2026-10-19-participant-c2-components.md)
-records the latest complete 474-case, skip-free Docker inventory, followed by
-selected source and native probes. The pinned-artifact child handoff and watchdog
-publication fixture passed their bounded probes. RPC ownership, SDK, transport
-and aggregate root-group integration remain incomplete or under review; these
-follow-ups do not change the full-inventory result. A separate ZimaBlade OS probe
-verified task-scoped CPU/RAM enforcement. Actual combined daemon enforcement,
-both authenticated gateway hops and the outbound split-host route remain
-incomplete; every C2 checkbox remains open and C3 has not advanced.
+records component 27's latest complete 562-case, skip-free Docker inventory,
+superseding the historical 474-case component 26. Selected native-9 egress
+checks passed, capture-native1 passed parser controls with valid-data and
+control native RSS high-water deltas still unmeasured, and selected cohort
+validation passed 11 diagnostic tests while review continues. The earlier
+pinned-artifact child handoff and watchdog-publication fixture also passed their
+bounded probes. RPC ownership, SDK, transport, whole-cohort claims and aggregate
+root-group startup remain incomplete or under review. A separate ZimaBlade OS
+probe verified task-scoped CPU/RAM enforcement. Actual fixed-role backend,
+enrollment, dual-listener gateway, shared resource integration and the outbound
+split-host route remain incomplete; every C2 checkbox remains open and C3 has
+not advanced.
 The [connector design](PARTICIPANT_CONNECTOR_DESIGN.md) freezes the required gates.
 
 ## C3 — Validate one GPU execution path

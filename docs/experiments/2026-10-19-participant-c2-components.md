@@ -391,13 +391,14 @@ research gate is claimed. C2 remains unpublished until all of its gates pass.
 
 ## Follow-up evidence after component 26
 
-The component-26 result above remains the latest complete component inventory:
+Component 26 remains a historical complete inventory:
 474 passed, zero skipped, failed or errored, in 26.529 seconds, from frozen
 source `afc889c302625f5871f9273059d80206fbb1b4eca09a71984e2d6983c4383818`
 (395 files), with image
 `sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`.
-Later probes exercise selected code and integrations; they do not relabel that
-inventory or establish a new full-pipeline pass.
+Component 27 below supersedes it as the latest complete component inventory.
+The selected native probes exercise bounded code paths and do not establish a
+full participant-pipeline pass.
 
 ### Assigned artifact pin handoff
 
@@ -448,7 +449,7 @@ missing; no root-group startup acceptance is recorded.
 
 Native RPC ownership probe 5 demonstrated the production ownership defect with
 the real compute still alive after authentication closed (exit 1; log SHA-256
-`06296ed941d3c0ddb73128467a6912a1e55582db834ba9137c365a363023e738`). A later
+`4b78ee6d4b686342d998b0710e8eb85f7fe2ec687b1ef0a7455db78dfb03990c`). A later
 probe corrected the first native bridge assertion but still failed when another
 legitimate open stream remained alive. A follow-up closed that stream; probe 7
 passed both body-cancel and stream-loss cases and zero-resource assertions, but
@@ -458,12 +459,13 @@ record. RPC ownership therefore remains source-review/native-unaccepted.
 
 Native SDK probe 6 ran 12 cases with 11 passing and one failing in 2.845
 seconds: short-request C1 expiry killed the global pump. Diagnostic expiry 7
-attributed the failure to `GeneratorExit` from a caught exception traceback
-shared with the live pump and cleared by `unittest.assertRaises`. A one-line
-source correction to clear that shared traceback was identified, but no passing
-native rerun is recorded. SDK remains unaccepted. Raw protobuf guard 8 passed
-locally; control/data reservation targets have not yet been measured under
-native peak load.
+traced this to `GeneratorExit` when `unittest.assertRaises` cleared frames from
+a caught exception traceback shared with the live pump. The bounded fix creates
+a fresh static `SessionError` so the pump does not retain that shared traceback;
+the previously described shared-traceback-clearing correction was inaccurate.
+SDK remains unaccepted pending source review and full integration. Raw protobuf
+guard 8 passed locally; control/data reservation targets had not been measured
+under native peak load at that point.
 
 Transport native probe 8 is still under review. The earlier native probe 4
 failed, so neither probe is evidence of a source-accepted, native-green
@@ -477,3 +479,73 @@ aggregate root-group startup, resource-pool integration and CT-11/CT-13 laptop
 plus ZimaBlade routed numerical/lifecycle evidence remain incomplete. These
 are the outstanding gates; no additional hardware blocker has been established.
 All C2 checklist items remain open, and C3 has not advanced.
+
+## Component 27: rebuilt full component inventory
+
+The rebuilt component gate passed **562 unique tests, zero skips/failures/errors,
+36.336 seconds**. Its frozen source is
+`0bdc0d109ad9da18aace2c191e829e1c0ed2fb80e5edbbf57651cffcb678dab9`
+(415 files); the rebuilt image is
+`sha256:f662e256c8daae02a7e7b55fb5b9e55571c5a6776610ab7fbc7374d9a4d94e56`.
+All 415 source files matched the baked source proof, whose log SHA-256 is
+`970fd0a451fe8be9606568c01d9dbe01eb29e3e7ec10af176d52b605c6236ba5`.
+The test log SHA-256 is
+`41f178de09f23139ee8518d925b230256dd55ceb6c1cd42dd837391257cf13aa`;
+the gate record hash is
+`1f456c5e4c87954f91e2402b16663b865780bdcb7834fe37eb370aafa3584427`.
+The test container ran on Linux/amd64 with 2 CPUs, 6 GiB, 256 PIDs, no network,
+read-only root, all capabilities dropped, no-new-privileges, init and 15-second
+stop timeout; `/tmp` was capped at 256 MiB and lab tmpfs at 16 MiB. It ran from
+2026-10-19 17:34:44.281Z to 17:35:22.313Z, exited 0, reported no OOM kill and
+was removed. This supersedes component 26 as the latest complete component
+suite, while remaining a bounded component gate rather than C2 acceptance.
+
+## Selected native egress checks
+
+Transport native-9 used the same frozen 415-file source on the pinned
+component-26 image and passed 42 tests with zero skips/failures/errors in
+8.719 seconds. It covered RPC guard 8, SDK 12 and egress 14 cases. Its log
+SHA-256 is
+`8821b8d01290f99f95c986e95382805f84ffa0811522bbc0cba4a608a0b42e9d`.
+This is selected native component evidence; earlier native probes 4–8 and their
+failures remain retained. It does not establish signed C1 transport integration,
+full RPC ownership, three-role startup or a complete gateway route.
+
+The SDK traceback correction addresses the observed pump failure mechanism,
+but native-9's passing inventory alone does not establish reviewed source
+clearance or integrated consumer delivery. RPC/SDK/transport acceptance remains
+limited to these selected controls.
+
+## Isolated capture parser measurement
+
+Capture native-1 ran seven tests with zero skips/failures/errors in 2.482
+seconds using a 417-file source overlay on the pinned component-26 image. The
+source is `33a9729871a286a6dbfe621d56e2a25f61b4275513a21b3fd1a014b328c48389`;
+the log SHA-256 is
+`87bcebedca9bba2c091e217508742489c23a3837a8682ac7c9a7781a4cd233c5`.
+The isolated parser/wire placeholder measured Python `tracemalloc` peaks of
+1,476,215 bytes for max-data, 943,692 bytes for control-density and 2,702,485
+bytes for malformed-shape input. Native peak RSS delta was measurable only for
+the malformed-shape case: 2,457,600 bytes. The valid max-data and control
+measurements were unmeasured because the process high-water baseline masked a
+new peak; those RSS results are not zero or passing native reservation bounds.
+The parser is an isolated placeholder binding, not signed C1 transport or full
+RPC integration, and does not establish whole-role peak memory.
+
+## Selected cohort validator diagnostic
+
+Selected native-1 ran 11 diagnostic tests with zero skips/failures/errors in
+0.105 seconds, log SHA-256
+`4a39250f8e1799d9674094d2bf76d1fe447936a31c8e9d2945616639fe198b2c`.
+Main review is ongoing; the later review inventory adds 12 cases that have not
+run. This diagnostic is not source clearance and establishes no claim,
+startup or selected aggregate-root acceptance.
+
+## Current C2 boundary
+
+The whole-cohort claim, root loader, fixed-role backend integration,
+authenticated enrollment, actual dual-listener gateway, shared physical
+resource pool, and CT-11/CT-13 laptop-to-ZimaBlade routed numerical and lifecycle
+checks remain pending. C2 remains private and unpublished with every checkbox
+open. C3 has not advanced. The laptop and ZimaBlade remain available; no
+additional-hardware blocker is established.

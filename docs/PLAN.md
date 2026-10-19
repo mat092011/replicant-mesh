@@ -860,21 +860,28 @@ bounded physical RST7, Drain4 and Remove4 evidence, M1/M2 controls and focused
 preserved with unknown causes; Trial 78 does not explain them, and no hardware
 cause is established. The full run was on the laptop; it does not replace or
 change the separately frozen split-host evidence. C2–C9 and research P0–P8
-statuses remain unchanged. Work stops after C1 as requested.
+statuses remain unchanged at that C1 acceptance point. The stop-after-C1
+instruction was subsequently superseded when C2 work resumed on 2026-10-19.
 
 **C2 resumed, 2026-10-19:** the maintainer authorized further implementation
 after the completed C1 stop point. C1 remains accepted and published at `89ea4b1`.
 The [C2 component record](experiments/2026-10-19-participant-c2-components.md)
-records the latest complete 474-case, skip-free Docker component gate, including
-shared-store assigned-handler numerical comparison, real process ownership,
-explicit gateway admission and actual `WorkerHandler` stream-loss cleanup. Later
-selected probes add a passing assigned-artifact pin child handoff and a
-watchdog-publication fixture reproduction; native RPC/SDK/transport and aggregate
-root-group checks remain unresolved or under review. A separate bounded
+records component 27's latest complete Docker inventory: 562 unique tests
+passed with zero skips/failures/errors in 36.336 seconds, from 415 frozen source
+files and a rebuilt image. It supersedes the historical 474-case component-26
+inventory. Selected native-9 egress checks passed 42 cases, and capture-native1
+passed seven parser controls with native RSS measured only for malformed input;
+valid-data and control high-water deltas were unmeasured. A selected cohort
+validator diagnostic passed 11 tests while main review remains ongoing. Earlier
+selected probes also include the assigned-artifact pin child handoff and
+watchdog-publication fixture reproduction. RPC/SDK/transport integration and
+aggregate root-group startup remain incomplete or under review. A separate bounded
 ZimaBlade OS probe measured kernel CPU throttling and a role memory-limit OOM
 kill, with task cleanup. These are component results, not phase acceptance.
 C2.1–C2.6 and its exit gate remain open pending actual daemon/resource
-integration, both authenticated gateway hops, a source-accepted native transport
-path, and the split-host outbound numerical/lifecycle gate. C2 is unpublished;
+integration, whole-cohort claims and root loading, fixed-role backend and
+enrollment integration, the actual dual-listener gateway, shared physical
+resource accounting, and the CT-11/CT-13 split-host outbound numerical/lifecycle
+gate. C2 is unpublished;
 C3 and research gate statuses are unchanged. Work uses the laptop and ZimaBlade;
 no additional hardware requirement has been established.
