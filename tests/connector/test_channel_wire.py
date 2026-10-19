@@ -233,9 +233,9 @@ class ChannelWireTests(unittest.TestCase):
         capacity = 10_000
         tracemalloc.start()
         try:
-            decoder = wire.FragmentDecoder(GENERATION, reassembly_capacity=capacity)
-            _, baseline = tracemalloc.get_traced_memory()
+            baseline, _ = tracemalloc.get_traced_memory()
             tracemalloc.reset_peak()
+            decoder = wire.FragmentDecoder(GENERATION, reassembly_capacity=capacity)
             for index in range(capacity):
                 flags = wire.START if index == 0 else 0
                 if index == capacity - 1:
@@ -255,10 +255,10 @@ class ChannelWireTests(unittest.TestCase):
         capacity = 130_623
         tracemalloc.start()
         try:
+            baseline, _ = tracemalloc.get_traced_memory()
+            tracemalloc.reset_peak()
             decoder = wire.FragmentDecoder(GENERATION,
                                            reassembly_capacity=capacity)
-            _, baseline = tracemalloc.get_traced_memory()
-            tracemalloc.reset_peak()
             for index in range(65_536):
                 flags = wire.START if index == 0 else 0
                 if index == 65_535:
@@ -275,12 +275,12 @@ class ChannelWireTests(unittest.TestCase):
 
     def test_maximum_payload_split_frames_stays_within_advertised_reservation(self):
         payload = b"m" * wire.MAX_BUNDLE_BYTES
-        decoder = wire.FragmentDecoder(GENERATION,
-                                       reassembly_capacity=wire.MAX_BUNDLE_BYTES)
         tracemalloc.start()
         try:
-            _, baseline = tracemalloc.get_traced_memory()
+            baseline, _ = tracemalloc.get_traced_memory()
             tracemalloc.reset_peak()
+            decoder = wire.FragmentDecoder(GENERATION,
+                                           reassembly_capacity=wire.MAX_BUNDLE_BYTES)
             iterator = wire.iter_fragments(
                 payload, kind=wire.DATA, generation=GENERATION,
                 message_id=DATA_ID, fragment_payload_bytes=wire.MAX_FRAGMENT_BYTES)
