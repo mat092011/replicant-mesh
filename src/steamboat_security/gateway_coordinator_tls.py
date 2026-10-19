@@ -61,6 +61,12 @@ def is_owned_gateway_coordinator_tls(value):
         return value in _OWNERS and value._token is _TOKEN
 
 
+def _register_gateway_coordinator_tls_owner(value):
+    """Register a freshly completed fixed-profile owner for internal consumers."""
+    with _MINT_LOCK:
+        _OWNERS.add(value)
+
+
 def is_authenticated_coordinator_channel(value):
     if type(value) is not AuthenticatedCoordinatorChannel:
         return False
@@ -349,8 +355,7 @@ class OwnedGatewayCoordinatorTLS:
                                   _credential_time_deadline(
                                       sample, profile.not_after.timestamp()))
             owner._drive_handshake_locked()
-            with _MINT_LOCK:
-                _OWNERS.add(owner)
+            _register_gateway_coordinator_tls_owner(owner)
             return owner
         except BaseException:
             if owner is not None:

@@ -34,6 +34,15 @@ class GatewayEgressError(ScopeError):
 _GUARD_TOKEN = object()
 _GUARD_LOCK = threading.Lock()
 _MINTED_GUARDS = weakref.WeakSet()
+_MINTED_EGRESS = weakref.WeakSet()
+
+
+def is_owned_gateway_coordinator_egress(value):
+    """Recognize only a constructed egress owner with its minted TLS child."""
+    if type(value) is not GatewayCoordinatorEgress:
+        return False
+    with _GUARD_LOCK:
+        return value in _MINTED_EGRESS and is_owned_worker_tls(value._tls)
 
 
 def _pem_from_der(value):
@@ -167,6 +176,8 @@ class GatewayCoordinatorEgress:
         if self._tls.handshake_complete:
             self._verify_gateway_peer()
         self._initialized = True
+        with _GUARD_LOCK:
+            _MINTED_EGRESS.add(self)
 
     def __setattr__(self, name, value):
         if getattr(self, "_initialized", False) and name in {
