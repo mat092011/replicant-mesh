@@ -251,7 +251,8 @@ class C2LocalClaimTests(unittest.TestCase):
         root_fd = store._fd
         self.assertNotEqual(root_fd, replacement_fd)
         fsync_entered, fsync_release = threading.Event(), threading.Event()
-        close_started, close_done = threading.Event(), threading.Event()
+        close_started, close_waiting, close_done = (threading.Event(),
+            threading.Event(), threading.Event())
         result, failure, reused_fd = [], [], []
         original_fsync = os.fsync
 
@@ -273,13 +274,24 @@ class C2LocalClaimTests(unittest.TestCase):
 
         claimant = threading.Thread(target=do_claim)
         closer = threading.Thread(target=do_close_and_reuse)
+        condition = store._lifetime
+        class ObservedCondition:
+            def __enter__(self): condition.__enter__(); return self
+            def __exit__(self, *args): return condition.__exit__(*args)
+            def wait(self, timeout=None):
+                if threading.current_thread() is closer:
+                    close_waiting.set()
+                return condition.wait(timeout)
+            def notify_all(self): return condition.notify_all()
+        store._lifetime = ObservedCondition()
         try:
             with mock.patch.object(claim_module.os, "fsync", blocked_fsync):
                 claimant.start()
                 self.assertTrue(fsync_entered.wait(5))
                 closer.start()
                 self.assertTrue(close_started.wait(5))
-                self.assertFalse(close_done.wait(0.1), "close raced an active root fsync")
+                self.assertTrue(close_waiting.wait(5), "close did not wait for claim ownership")
+                self.assertFalse(close_done.is_set(), "close completed during root fsync")
                 self.assertTrue(stat.S_ISDIR(os.fstat(root_fd).st_mode))
                 fsync_release.set()
                 claimant.join(5); closer.join(5)
