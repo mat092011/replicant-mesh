@@ -364,10 +364,10 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
         from tests.security.test_gateway_ingress import GatewayIngressTests
         from steamboat_security import channel_tls
         from steamboat_security.channel_tls import OwnedWorkerTLS
-        import shutil
 
         fixture = GatewayIngressTests()
         fixture.setUp()
+        self.addCleanup(fixture.tearDown)
         original_remove = channel_tls.shutil.rmtree
         with mock.patch.object(channel_tls.shutil, "rmtree",
                                side_effect=OSError("credential removal uncertain")):
@@ -377,8 +377,14 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
                 gateway_ca_pem=fixture.fixture.gateway_ca,
                 endpoint_host="gateway.example.net", endpoint_port=443,
                 clock=fixture.fixture.clock)
-        self.assertTrue(channel_tls.is_owned_worker_tls(tls))
         private_directory = tls._private_directory
+        self.addCleanup(lambda: original_remove(private_directory, ignore_errors=True)
+                        if private_directory else None)
+        self.addCleanup(fixture.tls_owner.close)
+        self.assertTrue(private_directory and os.path.isdir(private_directory))
+        self.assertFalse(channel_tls.is_owned_worker_tls(tls))
+        self.assertTrue(tls.cleanup_uncertain)
+        self.assertEqual(tls.cleanup_status, "uncertain")
         pins, runner = object(), object()
         service = object.__new__(C2HostService)
         service._signal_stop = False
@@ -393,19 +399,14 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
         service._runner = runner
         service._close_error = None
         service._shutdown_proven = False
-        try:
-            with self.assertRaisesRegex(C2HostServiceError,
-                                        "credential cleanup is uncertain"):
-                await service._shutdown([])
-            self.assertTrue(tls.cleanup_uncertain)
-            self.assertEqual(tls.cleanup_status, "uncertain")
-            self.assertIs(service._child_pins, pins)
-            self.assertIs(service._runner, runner)
-            self.assertFalse(service._shutdown_proven)
-        finally:
-            original_remove(private_directory, ignore_errors=True)
-            fixture.tls_owner.close()
-            fixture.tearDown()
+        with self.assertRaisesRegex(C2HostServiceError,
+                                    "not the fixed worker TLS type"):
+            await service._shutdown([])
+        self.assertTrue(tls.cleanup_uncertain)
+        self.assertEqual(tls.cleanup_status, "uncertain")
+        self.assertIs(service._child_pins, pins)
+        self.assertIs(service._runner, runner)
+        self.assertFalse(service._shutdown_proven)
 
     async def test_raw_socket_close_uncertainty_is_not_retried_on_shutdown(self):
         from tests.connector.test_channel_socket import ChannelSocketTests
@@ -554,6 +555,12 @@ class C2HostServiceSocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         sockets = [TrackedSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                  fail_close=first_close_raises),
                    TrackedSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))]
+
+        def close_fixture_fds():
+            for tracked in sockets:
+                if tracked.sock.fileno() != -1:
+                    tracked.sock.close()
+
         service = object.__new__(C2HostService)
         service._signal_stop = False
         service._stop_requested = threading.Event()
@@ -594,6 +601,7 @@ class C2HostServiceSocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         except BaseException:
             for patcher in reversed(patches):
                 patcher.stop()
+            close_fixture_fds()
             tls.close()
             fixture.tls_owner.close()
             fixture.tearDown()
@@ -615,6 +623,9 @@ class C2HostServiceSocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         finally:
             for patcher in reversed(patches):
                 patcher.stop()
+            for tracked in sockets:
+                if tracked.sock.fileno() != -1:
+                    tracked.sock.close()
             tls.close()
             fixture.tls_owner.close()
             fixture.tearDown()
@@ -646,6 +657,9 @@ class C2HostServiceSocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         finally:
             for patcher in reversed(patches):
                 patcher.stop()
+            for tracked in sockets:
+                if tracked.sock.fileno() != -1:
+                    tracked.sock.close()
             tls.close()
             fixture.tls_owner.close()
             fixture.tearDown()
