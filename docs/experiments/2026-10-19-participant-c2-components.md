@@ -654,3 +654,103 @@ shared physical CPU/RAM/disk/traffic and session-queue enforcement, and the
 CT-11/CT-13 laptop-to-ZimaBlade routed numerical/lifecycle gate remain required.
 No supported GPU or pooled-GPU performance result is established, and no new
 hardware blocker has been found.
+
+## Component 30: combined connector and selected-security inventory
+
+Component 30 is the latest complete combined inventory. It covered all
+connector tests and 24 selected security modules; it was not a full repository
+inventory or the full C1 regression. The frozen source was head
+`5a007e81139a50eb54fe0f8c7caa4044b52739f5`, with 445 files and digest
+`2d2083006e25afbb5c7569781f394835baf528ac9ca8dae7619a767db05caa18`. The
+pinned Linux/amd64 image was
+`sha256:42ee4553918ba7b636d3a374d84f96094f1daed30cf97b4be50798cf3b5f6798`.
+The all-source proof verified 445 files with zero mismatches. The inventory
+passed 770 unique tests with zero skips, failures or errors in 45.992 seconds,
+from 2026-10-19 19:04:44.454Z to 19:05:32.459Z. The container exited 0, was
+not OOM-killed, and was removed. It ran with 2 CPUs, 6 GiB memory, 256 PIDs,
+no network, read-only root, all capabilities dropped, no-new-privileges, init,
+a 15-second stop timeout, 256 MiB `/tmp` and 16 MiB lab tmpfs.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Component-30 all-source proof log | `655887c6215184cda7fc9d10c40e1811fe1fc0d6a4387715dd571575e338c19f` |
+| Component-30 test log | `42200d2d6cbc1b849a64616d189116e8ceeb7e946837b77c22a70be8a182f958` |
+| Component-30 gate record | `4c8e7c282faee789b4e77d94fa2b451c3e88b24b92b09e470685a18a2611ce67` |
+
+The post-run test command attached to the inspected container and exited 0;
+the retained invocation was `docker start --attach
+36bfa93e4ebb2f8bf39a6783aade4434579035e083d8f136142f9e7f82bece84`. Container
+metadata confirmed the pinned image, limits and read-only artifact/gate mounts.
+The source proof and test outcomes are component evidence only. They do not
+establish full C1 regression coverage, deployed C2 integration or phase
+acceptance.
+
+## Focused deadline follow-up and retained diagnostic failures
+
+The final-window causal comparison ran four deadline-retention tests. The old
+implementation failed all four assertions (no test errors or skips); the new
+implementation passed all four with zero errors or skips. The old run used two
+historical single-file overrides over a newer frozen image, so it is a hybrid
+causal comparison, not a baked-source proof. This compares the historical
+`1b`/`6994` implementation with the newer `4354` source. The logs are
+`86dea0290f67877d312fade1dff13552bdc2bed53ec9be79d4ac4c4d5b9eb467` (old) and
+`e6f8cf8cda5c3a9d284aae56428f93392345bc5d72833bbe37871b31410c0527` (new).
+The new side used a 435-file source snapshot at `4354` and pinned image
+`sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`.
+
+A separate first-window causal probe also ran four deadline-retention tests.
+The old `60d` two-file hybrid failed all four expected-expiration assertions,
+with zero test errors or skips; the corrected new source passed all four. The
+old and new log hashes are
+`8c654fdbc143a81c85e338148340f811ff17614bab363c46ea8c4ab9709a6c0e` and
+`a80f5339d2658e418e5d711f9ed144fe5cfe181b43be49735496d63d780d2926`.
+Neither hybrid old-source result is a baked-source proof.
+
+A further native focused run passed 41 deadline tests with zero skips,
+failures or errors in 1.139 seconds. It used the 437-file source overlay at
+head `fb1ae266ca8155f7eb92cb0d17b7d4938bc4ba0c`, digest
+`37c654a02be351caf9fdf6664741085e8caa634bef55ab01b3cac1d9175ffa1b`; its log
+SHA-256 is `98c316c8011fdd2d1c274dc6b52ea61ab412b261635c67c7f9da5779e922b2b0`.
+The later two added assertions instrumented tests only; the combined 770-case
+inventory was not rerun after that test-only change. Focused passes therefore
+remain distinct from the complete component-30 result.
+
+Earlier deadline native attempts are retained: native-1 ran 33 tests with 30
+passes, one failure and two errors; native-3 ran 37 with 36 passes and one
+error. The errors included time-bound fixture setup/expiry behavior, and the
+initial deadline implementation did not retain the tightest observed deadline.
+The later focused controls above test the correction; they do not erase the
+failed runs.
+
+Gateway mux native attempts are also retained rather than counted as passes:
+native-1 ran 3 tests (one pass, two failures); native-2 ran 7 (one pass, five
+failures, one error); native-3 ran 7 (two passes, five failures); and native-4
+ran 7 (six passes, one error). Early failures exposed the test driver's missed
+coordinator-client pump, a malformed Describe fixture, and the real fragment
+writer's earlier rejection of a reused ID. The test driver and fixtures were
+corrected, including a boundary-specific duplicate-ID assertion; later mux
+coverage is part of the component-30 inventory. These historical counts are
+not additive to its 770 unique cases.
+
+Owner-consent remains a separate unintegrated path. Its first native probe ran
+10 tests: eight passed, one failed and one errored. The failure concerned
+concurrent role-change epoch observation; the error was an invalid empty-role
+fixture. A later focused native probe passed 13 tests with zero skips, log
+SHA-256 `3b5328363a8cb2d3e4202dd7c169c4bf73324d02a84c6c4ed96b57d484d9618a`,
+on a 440-file source at `ef72979` with digest
+`eaa8fff820ba19787f73cfb1c8c1a4f95beb2b381988a889a52c6f6aeea62558`. Its
+source review is still pending and the implementation is not integrated or
+ready. No startup/readiness claim follows from the component inventory or
+these focused probes.
+
+## Current C2 boundary after component 30
+
+C2 remains private and unaccepted, with every C2.1–C2.6 checkbox open. The
+combined suite does not establish actual owner-consent startup, fixed-role
+backend enforcement, authenticated enrollment, deployed dual-listener gateway
+operation, aggregate selected-root startup, shared physical CPU/RAM/disk/
+traffic and session-queue enforcement, or CT-11/CT-13 laptop-to-ZimaBlade
+routed numerical and lifecycle acceptance. Deadline-floor focused tests do
+not complete these integrations. C3 remains unchanged; no supported GPU or
+pooled-GPU performance result is established, and no additional hardware
+blocker has been identified.

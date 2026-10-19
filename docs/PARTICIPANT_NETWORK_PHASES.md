@@ -248,6 +248,22 @@ Every C2 checkbox remains open; C3 has not advanced. Local startup, actual
 enrollment/roles/gateway, shared CPU/RAM/disk/traffic enforcement and the CT-11/
 CT-13 laptop-to-ZimaBlade routed lifecycle gate remain outstanding.
 
+**Component 30, 2026-10-19:** the bounded connector plus 24 selected security
+modules inventory passed 770 unique tests with zero skips/failures/errors in
+45.992 seconds. It used frozen source head `5a007e8` (445 files; digest
+`2d2083006e25afbb5c7569781f394835baf528ac9ca8dae7619a767db05caa18`) and
+pinned image `sha256:42ee4553918ba7b636d3a374d84f96094f1daed30cf97b4be50798cf3b5f6798`;
+all baked source matched and the container exited 0 without OOM. This is not the
+full repository or full C1 regression. Focused deadline controls passed on a
+later 437-file native source overlay, but the 770-case combined inventory was
+not rerun after two subsequent test-only instrumentation assertions. A separate
+unintegrated owner-consent implementation passed a focused 13-test native probe
+but still awaits source review; its earlier 10-test probe had one failure and
+one error. See the
+[component evidence record](experiments/2026-10-19-participant-c2-components.md)
+for hashes, retained failures and exact scope. Every C2 task and its phase exit
+gate remain open; C3 has not advanced.
+
 ## C3 — Validate one GPU execution path
 
 **Outcome:** one explicitly supported GPU/backend/precision combination preserves

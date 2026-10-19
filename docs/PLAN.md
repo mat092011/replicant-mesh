@@ -920,3 +920,40 @@ C2.1–C2.6 and its exit gate remain open: actual fixed-role enrollment and loca
 startup, gateway integration, shared physical CPU/RAM/disk/traffic accounting,
 and CT-11/CT-13 laptop-to-ZimaBlade routed session/lifecycle validation remain
 unproven. No hardware blocker or GPU/performance result is established.
+
+**C2 component update, 2026-10-19:** component 30 rebuilt the bounded connector
+and selected-security inventory at frozen head `5a007e8` (445 files; source
+digest `2d2083006e25afbb5c7569781f394835baf528ac9ca8dae7619a767db05caa18`).
+It passed 770 unique tests with zero skips, failures or errors in 45.992 seconds.
+The pinned Linux/amd64 image was
+`sha256:42ee4553918ba7b636d3a374d84f96094f1daed30cf97b4be50798cf3b5f6798`;
+all 445 baked source files matched, and the container exited 0 without OOM.
+This is the connector plus 24 selected security modules, not a full-repository
+or full C1 regression. The test log is
+`42200d2d6cbc1b849a64616d189116e8ceeb7e946837b77c22a70be8a182f958`, source
+proof log `655887c6215184cda7fc9d10c40e1811fe1fc0d6a4387715dd571575e338c19f`,
+and gate record `4c8e7c282faee789b4e77d94fa2b451c3e88b24b92b09e470685a18a2611ce67`.
+The bounded container used 2 CPUs, 6 GiB RAM, 256 PIDs, no network, read-only
+root, all capabilities dropped, no-new-privileges, init, a 15-second stop
+timeout, and 256/16 MiB `/tmp` and lab tmpfs limits.
+
+Focused final-window deadline controls provide separate evidence: an old
+implementation comparison failed all four expected-retention assertions, while
+the new implementation passed all four; this old run used two historical
+single-file overrides and is not a baked-source proof. A later 41-test native
+deadline probe passed with zero skips on a 437-file source overlay at
+`fb1ae26` (digest
+`37c654a02be351caf9fdf6664741085e8caa634bef55ab01b3cac1d9175ffa1b`), in
+1.139 seconds. The component-30 combined inventory was not rerun after the
+subsequent two test-only instrumentation assertions. A separate,
+unintegrated owner-consent implementation passed a focused 13-test native probe
+but still awaits source review; an earlier 10-test probe had one failure and
+one error. It is not integrated or ready. The component record retains these
+outcomes and earlier deadline and gateway-mux failures.
+
+C2.1–C2.6 remain open. In particular, owner-consent/local startup, actual
+fixed-role enrollment and backend enforcement, the deployed dual-listener
+gateway, shared physical resource accounting, session-queue enforcement, and
+the CT-11/CT-13 laptop-to-ZimaBlade routed numerical/lifecycle gate remain
+unproven. C3 and research P0–P8 statuses are unchanged; the candidate remains
+private and unpublished.
