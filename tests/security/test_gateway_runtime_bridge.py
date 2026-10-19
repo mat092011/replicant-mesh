@@ -32,7 +32,7 @@ class GatewayRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.auth_fixture = gateway_tests.GatewayAuthorizationTests(
             methodName="test_gateway_open_step_close_share_c1_and_ingress_session_ownership")
         self.auth_fixture.setUp()
-        self.addCleanup(self.auth_fixture.tearDown)
+        self.addCleanup(self.auth_fixture.doCleanups)
         self.handler = _UnitOnlyWorkerHandler()
         worker = self.auth_fixture.fixture.payload["workers"][0]
         self.handler.manifest = {
@@ -282,7 +282,7 @@ class GatewayRuntimeNativeHandlerTests(unittest.IsolatedAsyncioTestCase):
         auth_fixture = gateway_tests.GatewayAuthorizationTests(
             methodName="test_gateway_open_step_close_share_c1_and_ingress_session_ownership")
         auth_fixture.setUp()
-        self.addCleanup(auth_fixture.tearDown)
+        self.addCleanup(auth_fixture.doCleanups)
         f = auth_fixture
         worker = f.fixture.payload["workers"][0]
 
@@ -310,11 +310,11 @@ class GatewayRuntimeNativeHandlerTests(unittest.IsolatedAsyncioTestCase):
                 return Cache(self.start, self.end)
 
             def execute(self, hidden, cache, position):
+                cache.bytes = 64
                 self.started.set()
                 if not self.release.wait(10):
                     raise TimeoutError("test executor was not released")
                 cache.position = position + hidden.shape[1]
-                cache.bytes = 64
                 return hidden.clone()
 
         manifest = load_manifest(os.environ["STEAMBOAT_ASSIGNED_TEST_SOURCE"])
