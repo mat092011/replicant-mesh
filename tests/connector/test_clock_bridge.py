@@ -29,6 +29,7 @@ _LINUX = sys.platform.startswith("linux") and hasattr(os, "fork")
 def _fork_clock_sample(owner, *, alter_metadata=None, stop_while_blocked=False,
                        stop_after_cached_wall=False, send_rights_count=0):
     """Fork before the server thread starts; transfer closed handoff metadata."""
+    owner.begin_spawn()
     metadata_read, metadata_write = os.pipe()
     result_read, result_write = os.pipe()
     pid = os.fork()
@@ -131,6 +132,59 @@ class ClockBridgeMetadataTests(unittest.TestCase):
         with self.assertRaises(ClockBridgeError):
             bridge_module._metadata({**valid, "child_pid": True})
 
+    def test_child_stop_pending_and_uncertain_close_states_are_sticky(self):
+        entered, release = threading.Event(), threading.Event()
+
+        class SlowSocket:
+            def __init__(self):
+                self.close_calls = 0
+
+            def shutdown(self, _how):
+                entered.set()
+                release.wait(1.0)
+
+            def close(self):
+                self.close_calls += 1
+
+        child = object.__new__(ChildClockBridge)
+        child._state_lock = threading.Lock()
+        child._closed = False
+        child._close_uncertain = False
+        child._stop_state = "open"
+        child._snapshot = object()
+        child._sock = SlowSocket()
+        result = []
+        stopping = threading.Thread(target=lambda: result.append(child.stop()))
+        stopping.start()
+        self.assertTrue(entered.wait(1.0))
+        self.assertFalse(child.stop())
+        release.set()
+        stopping.join(1.0)
+        self.assertEqual(result, [True])
+        self.assertTrue(child.stop())
+        self.assertEqual(child._sock, None)
+
+        class AmbiguousSocket:
+            def __init__(self):
+                self.close_calls = 0
+
+            def shutdown(self, _how):
+                pass
+
+            def close(self):
+                self.close_calls += 1
+                raise OSError("ambiguous close")
+
+        child._closed = False
+        child._close_uncertain = False
+        child._stop_state = "open"
+        ambiguous = AmbiguousSocket()
+        child._sock = ambiguous
+        self.assertFalse(child.stop())
+        self.assertFalse(child.stop())
+        self.assertEqual(child._sock, None)
+        self.assertEqual(ambiguous.close_calls, 1)
+
 
 @unittest.skipUnless(_LINUX, "requires native Linux AF_UNIX credentials and fork")
 class ClockBridgeTests(unittest.TestCase):
@@ -192,8 +246,8 @@ class ClockBridgeTests(unittest.TestCase):
         self.assertEqual(tag, b"E")
 
     def test_unexpected_rights_are_closed_before_server_rejects_request(self):
-        owner = self._owner()
         before = _open_fd_count()
+        owner = self._owner()
         payload, status = _fork_clock_sample(owner, send_rights_count=40)
         tag, _, _ = _RESULT.unpack(payload)
         owner._server_thread.join(1.0)
@@ -201,6 +255,126 @@ class ClockBridgeTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(tag, b"E")
         self.assertEqual(_open_fd_count(), before)
+
+    def test_stop_during_spawn_retains_descriptor_and_late_pid_until_reaped(self):
+        owner = self._owner()
+        child_fd = owner.begin_spawn()
+        owner.stop()
+        self.assertEqual(active_clock_bridge_generations(), 1)
+        self.assertEqual(os.fstat(child_fd).st_mode & 0o170000, 0o140000)
+        pid = os.fork()
+        if pid == 0:
+            owner.close_inherited_parent_copy()
+            signal.pause()
+            os._exit(0)
+        self.assertIsNone(owner.bind_child(pid, os.getuid()))
+        self.assertEqual(owner._child_pid, pid)
+        self.assertTrue(owner.close_parent_child_copy())
+        self.assertFalse(owner.quiescent)
+        os.kill(pid, signal.SIGTERM)
+        os.waitpid(pid, 0)
+        self.assertTrue(owner.confirm_child_reaped(pid))
+        owner.finalize_stop()
+        self.assertTrue(owner.quiescent)
+        self.assertEqual(active_clock_bridge_generations(), 0)
+
+    def test_stop_after_fork_before_bind_publishes_late_pid(self):
+        owner = self._owner()
+        child_fd = owner.begin_spawn()
+        pid = os.fork()
+        if pid == 0:
+            owner.close_inherited_parent_copy()
+            signal.pause()
+            os._exit(0)
+        owner.stop()
+        self.assertEqual(os.fstat(child_fd).st_mode & 0o170000, 0o140000)
+        self.assertIsNone(owner.bind_child(pid, os.getuid()))
+        self.assertTrue(owner.close_parent_child_copy())
+        self.assertFalse(owner.quiescent)
+        os.kill(pid, signal.SIGTERM)
+        os.waitpid(pid, 0)
+        owner.confirm_child_reaped(pid)
+        owner.finalize_stop()
+        self.assertTrue(owner.quiescent)
+
+    def test_pending_spawn_retains_slot_and_fd_number_until_no_child_is_proven(self):
+        owner = self._owner()
+        child_fd = owner.begin_spawn()
+        owner.stop()
+        replacement = os.open(os.devnull, os.O_RDONLY)
+        try:
+            self.assertNotEqual(replacement, child_fd)
+            self.assertEqual(active_clock_bridge_generations(), 1)
+        finally:
+            os.close(replacement)
+        self.assertTrue(owner.cancel_spawn_without_child())
+        self.assertTrue(owner.quiescent)
+        self.assertEqual(active_clock_bridge_generations(), 0)
+
+    def test_stop_does_not_wait_for_global_slot_lock(self):
+        owner = self._owner()
+        bridge_module._SLOT_LOCK.acquire()
+        try:
+            started = time.monotonic()
+            owner.stop()
+            self.assertLess(time.monotonic() - started, 0.1)
+            self.assertIn(owner, bridge_module._SLOTS)
+        finally:
+            bridge_module._SLOT_LOCK.release()
+        owner.finalize_stop()
+        self.assertNotIn(owner, bridge_module._SLOTS)
+
+    def test_received_descriptor_close_uncertainty_is_typed(self):
+        left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        source = os.open(os.devnull, os.O_RDONLY)
+        original_close = os.close
+        try:
+            left.sendmsg([b"x"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                  array.array("i", [source]).tobytes())])
+            def close_then_report(fd):
+                original_close(fd)
+                raise OSError("ambiguous close")
+
+            with mock.patch.object(bridge_module.os, "close", side_effect=close_then_report):
+                with self.assertRaises(bridge_module._DescriptorCleanupUncertain):
+                    bridge_module._recvmsg_checked(right, 1)
+        finally:
+            left.close()
+            right.close()
+            original_close(source)
+
+    def test_received_descriptor_close_failure_sticks_owner_in_isolated_process(self):
+        read_fd, write_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            os.close(read_fd)
+            owner = OwnedClockBridge(Clock.system(uncertainty_seconds=lambda: 0.01))
+            original_close = os.close
+            server_pid = os.getpid()
+            def fail_after_closing_devnull(fd):
+                info = os.fstat(fd)
+                target = os.stat(os.devnull)
+                original_close(fd)
+                if (os.getpid() == server_pid
+                        and (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino)):
+                    raise OSError("ambiguous received-FD close")
+
+            try:
+                with mock.patch.object(bridge_module.os, "close", side_effect=fail_after_closing_devnull):
+                    _fork_clock_sample(owner, send_rights_count=1)
+                result = owner.close_uncertain and not owner.quiescent
+                owner.stop()
+                result = result and owner in bridge_module._SLOTS
+            except BaseException:
+                result = False
+            os.write(write_fd, b"1" if result else b"0")
+            os._exit(0)
+        os.close(write_fd)
+        result = os.read(read_fd, 1)
+        os.close(read_fd)
+        _pid, status = os.waitpid(pid, 0)
+        self.assertEqual(status, 0)
+        self.assertEqual(result, b"1")
 
     def test_parent_without_known_uncertainty_fails_closed(self):
         owner = self._owner(Clock())
@@ -285,6 +459,7 @@ class ClockBridgeTests(unittest.TestCase):
 
     def test_thread_start_failure_retains_actual_child_identity_until_reap(self):
         owner = self._owner()
+        owner.begin_spawn()
         pid = os.fork()
         if pid == 0:
             owner.close_inherited_parent_copy()

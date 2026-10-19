@@ -9,14 +9,21 @@ credentials bind each message to the expected parent or child PID and UID.
 There are no commands, JSON payloads, callback imports or remotely selected
 clock values in the protocol.
 
-The parent creates `OwnedClockBridge(clock)` before process creation, passes
-`child_fd` to the fixed child, binds the actual Popen PID and UID with
-`bind_child`, and transfers the returned closed `child_metadata` to that child.
+The parent creates `OwnedClockBridge(clock)` before process creation and calls
+`begin_spawn()` immediately before Popen/fork. That lease reserves the slot and
+protects the child descriptor number until the caller reports the actual PID
+with `bind_child`, closes its inherited copy, and later confirms reap. A caller
+may use `cancel_spawn_without_child()` only when it knows process creation
+definitely did not produce a child. An unknown Popen outcome retains the lease
+and descriptor indefinitely. After `begin_spawn`, pass the returned `child_fd`
+to the fixed child, bind the actual Popen PID and UID, and transfer the returned
+closed `child_metadata` to that child.
 The metadata contains exactly the endpoint FD, server nonce, generation, both
-process identities and the kernel boot ID. The child constructs
+process identities and the kernel boot ID. Once `bind_child` has created this
+metadata, the parent should close its inherited descriptor copy with
+`close_parent_child_copy` and transfer the metadata. The child constructs
 `ChildClockBridge(metadata)` and gives `owner.clock` to its C2 binding and every
-other clock-dependent owner. Once Popen has inherited the descriptor, the
-parent must call `close_parent_child_copy`; a forked child must call
+other clock-dependent owner. A forked child must call
 `close_inherited_parent_copy` and transfer the child endpoint wrapper with
 `detach_inherited_child_copy` before it starts the bridge. The fixed bootstrap
 and C2 child schema do not yet transport this metadata; an integration must
@@ -40,8 +47,9 @@ This is a same-kernel clock handoff. It does not measure network time accuracy,
 make the parent's Clock trusted, or prove that a separate remote device shares
 its clock domain.
 
-At most eight generations can be reserved process-wide. An unbound live owner
-is not quiescent and continues to consume its slot. A slot is released only
+At most eight generations can be reserved in the connector process. A pending
+spawn lease, including a stopped lease with unknown outcome, continues to
+consume its slot. An unbound live owner is not quiescent. A slot is released only
 after stop is terminal, both owned endpoints are confirmed closed, the service
 thread has actually ended, and any bound child has been confirmed reaped.
 `stop()` acknowledges the stop request and uses a nonblocking owner-lock

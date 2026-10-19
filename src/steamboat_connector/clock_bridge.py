@@ -42,6 +42,10 @@ class ClockBridgeError(ClockError):
     """The trusted clock handoff failed or was fenced."""
 
 
+class _DescriptorCleanupUncertain(ClockBridgeError):
+    """A consumed descriptor could not be confirmed closed."""
+
+
 def _require_linux():
     if (not sys.platform.startswith("linux") or not hasattr(socket, "SOCK_SEQPACKET")
             or not hasattr(socket, "SO_PASSCRED") or not hasattr(time, "CLOCK_BOOTTIME")):
@@ -127,7 +131,7 @@ def _recvmsg_checked(sock, payload_bytes):
         except OSError as error:
             close_error = close_error or error
     if close_error is not None:
-        raise ClockBridgeError("received descriptor cleanup is uncertain") from close_error
+        raise _DescriptorCleanupUncertain("received descriptor cleanup is uncertain") from close_error
     if (flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or invalid_control or rights
             or len(credentials) != 1):
         raise ClockBridgeError("clock bridge ancillary data or frame is invalid")
@@ -172,8 +176,9 @@ def active_clock_bridge_generations():
 class OwnedClockBridge:
     """Parent-side owner of one trusted Clock and one inherited child endpoint.
 
-    Construct before process creation, pass ``child_fd`` to the fixed child,
-    then call ``bind_child`` with the PID actually returned by Popen. The
+    Construct before process creation, call ``begin_spawn`` to acquire a
+    handoff lease, pass its descriptor to the fixed child, then call
+    ``bind_child`` with the PID actually returned by Popen. The
     caller must close its child-end copy after Popen and retain this owner until
     both its service thread has exited and the child has been confirmed reaped.
     """
@@ -198,36 +203,85 @@ class OwnedClockBridge:
         self._request_seen = threading.Event()
         self._lock = threading.Lock()
         self._server_thread = None
-        self._parent_sock, self._child_sock = socket.socketpair(
-            socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        self._slot_reserved = False
+        self._endpoint_state = {"parent": "open", "child": "open"}
+        self._terminal = False
+        self._close_uncertain = False
+        self._spawn_pending = False
+        self._handoff_pending = False
+        self._child_may_exist = False
+        # Reserve before opening descriptors, and never perform socket I/O
+        # while holding the process-wide generation lock.
+        with _SLOT_LOCK:
+            if len(_SLOTS) >= MAX_GENERATIONS:
+                raise ClockBridgeError("global clock bridge generation ceiling is full")
+            _SLOTS.add(self)
+            self._slot_reserved = True
+        try:
+            self._parent_sock, self._child_sock = socket.socketpair(
+                socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        except BaseException:
+            with _SLOT_LOCK:
+                _SLOTS.discard(self)
+                self._slot_reserved = False
+            raise
         try:
             self._parent_sock.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
             self._child_sock.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
             self._parent_sock.setblocking(False)
             self._child_sock.setblocking(False)
         except BaseException:
-            self._child_sock.close()
-            self._parent_sock.close()
+            child_sock, parent_sock = self._child_sock, self._parent_sock
             self._child_sock = self._parent_sock = None
+            for endpoint, sock in (("child", child_sock), ("parent", parent_sock)):
+                try:
+                    sock.close()
+                except OSError:
+                    self._endpoint_state[endpoint] = "uncertain"
+                    self._close_uncertain = True
+                else:
+                    self._endpoint_state[endpoint] = "closed"
+            self._terminal = True
+            if not self._close_uncertain:
+                with _SLOT_LOCK:
+                    _SLOTS.discard(self)
+                    self._slot_reserved = False
             raise
-        self._slot_reserved = False
-        self._endpoint_state = {"parent": "open", "child": "open"}
-        self._terminal = False
-        self._close_uncertain = False
-        with _SLOT_LOCK:
-            if len(_SLOTS) >= MAX_GENERATIONS:
-                self._close_socket_attribute("_child_sock")
-                self._close_socket_attribute("_parent_sock")
-                raise ClockBridgeError("global clock bridge generation ceiling is full")
-            _SLOTS.add(self)
-            self._slot_reserved = True
 
     @property
     def child_fd(self):
         sock = self._child_sock
-        if sock is None or self._stopping.is_set():
+        if (sock is None or self._endpoint_state["child"] != "open"
+                or not self._handoff_pending or self._stopping.is_set()):
             raise ClockBridgeError("inherited child endpoint is no longer available")
         return sock.fileno()
+
+    def begin_spawn(self):
+        """Acquire a generation lease before calling Popen/fork.
+
+        Keep the lease until bind_child publishes the returned PID, or
+        cancel_spawn_without_child records a trusted definite no-child result.
+        If spawn outcome is unknown, retain this owner indefinitely.
+        """
+        with self._lock:
+            if self._terminal or self._stopping.is_set() or self._spawn_pending:
+                raise ClockBridgeError("clock bridge spawn lease is unavailable")
+            self._spawn_pending = True
+            self._handoff_pending = True
+            self._child_may_exist = True
+            return self.child_fd
+
+    def cancel_spawn_without_child(self):
+        """Release a pending spawn lease only when the caller knows no child exists."""
+        with self._lock:
+            if not self._spawn_pending or self._child_pid is not None:
+                return False
+            self._spawn_pending = False
+            self._handoff_pending = False
+            self._child_may_exist = False
+            self._child_reaped = True
+        self.stop()
+        return True
 
     def bind_child(self, pid: int, uid: int):
         if not _exact_identity(pid, positive=True) or not _exact_identity(uid, positive=False):
@@ -236,9 +290,15 @@ class OwnedClockBridge:
             raise ClockBridgeError("clock bridge child UID differs from the configured UID")
         start_error = None
         with self._lock:
-            if self._child_pid is not None or self._stopping.is_set():
-                raise ClockBridgeError("clock bridge child was already bound or stopped")
+            if self._child_pid is not None or not self._spawn_pending:
+                raise ClockBridgeError("clock bridge child was not pending or was already bound")
             self._child_pid, self._child_uid = pid, uid
+            self._spawn_pending = False
+            if self._stopping.is_set():
+                # The Popen result arrived after stop. Record the actual PID;
+                # do not start a service thread for a fenced child.
+                self._terminal = True
+                return None
             thread = threading.Thread(target=self._serve, name="owned-clock-bridge", daemon=True)
             self._server_thread = thread
             try:
@@ -252,15 +312,17 @@ class OwnedClockBridge:
         if start_error is not None:
             self._close_socket_attribute("_child_sock", nonblocking=True)
             self._close_socket_attribute("_parent_sock", nonblocking=True)
+            with self._lock:
+                self._handoff_pending = False
             raise ClockBridgeError("clock bridge server thread could not start") from start_error
-        return self.child_metadata
+        return self._bound_child_metadata()
 
-    @property
-    def child_metadata(self):
-        if self._child_pid is None:
-            raise ClockBridgeError("clock bridge has no bound child")
+    def _bound_child_metadata(self):
+        sock = self._child_sock
+        if sock is None or not self._handoff_pending or self._child_pid is None:
+            raise ClockBridgeError("inherited child endpoint is no longer available")
         return {
-            "fd": self.child_fd,
+            "fd": sock.fileno(),
             "server_nonce": self._nonce.hex(),
             "generation": self._generation.hex(),
             "child_uid": self._child_uid,
@@ -270,11 +332,20 @@ class OwnedClockBridge:
             "boot_domain": self._boot_domain,
         }
 
+    @property
+    def child_metadata(self):
+        return self._bound_child_metadata()
+
     def close_parent_child_copy(self):
         """Consume and close the parent's inherited-end copy exactly once."""
         # The child inherited a duplicate descriptor. shutdown() would fence
         # the shared socket endpoint in the child as well as in this process.
-        return self._close_socket_attribute("_child_sock", shutdown=False)
+        result = self._close_socket_attribute("_child_sock", shutdown=False)
+        if result is True:
+            with self._lock:
+                self._handoff_pending = False
+            self._maybe_release_slot()
+        return result
 
     def close_inherited_parent_copy(self):
         """In a forked child, close its accidental copy of the parent endpoint."""
@@ -375,6 +446,9 @@ class OwnedClockBridge:
                 if sock.send(reply) != len(reply):
                     return
                 expected_sequence += 1
+        except _DescriptorCleanupUncertain:
+            self._close_uncertain = True
+            return
         except (OSError, ClockBridgeError, ValueError, OverflowError):
             return
         finally:
@@ -387,7 +461,10 @@ class OwnedClockBridge:
         """Request stop without waiting for the owner lock or parent Clock."""
         self._stopping.set()
         self._terminal = True
-        self._close_socket_attribute("_child_sock", nonblocking=True)
+        # During Popen/fork, keep the borrowed child descriptor owned until
+        # the caller publishes the PID and closes its copy, or proves no child.
+        if not self._handoff_pending:
+            self._close_socket_attribute("_child_sock", nonblocking=True)
         self._close_socket_attribute("_parent_sock", nonblocking=True)
         self._maybe_release_slot()
         # True acknowledges the stop request only. Callers use close_complete
@@ -405,6 +482,7 @@ class OwnedClockBridge:
             if self._child_pid is None or pid != self._child_pid:
                 return False
             self._child_reaped = True
+            self._child_may_exist = False
         self._maybe_release_slot()
         return True
 
@@ -417,7 +495,9 @@ class OwnedClockBridge:
             result = (self._terminal and not self._close_uncertain
                       and all(state == "closed" for state in self._endpoint_state.values())
                       and (thread is None or not thread.is_alive())
-                      and (self._child_pid is None or self._child_reaped))
+                      and (self._child_pid is None or self._child_reaped)
+                      and not self._spawn_pending and not self._handoff_pending
+                      and not self._child_may_exist)
         finally:
             self._lock.release()
         if result:
@@ -446,14 +526,18 @@ class OwnedClockBridge:
             ready = (self._terminal and not self._close_uncertain
                      and all(state == "closed" for state in self._endpoint_state.values())
                      and (thread is None or not thread.is_alive())
-                     and (self._child_pid is None or self._child_reaped))
+                     and (self._child_pid is None or self._child_reaped)
+                     and not self._spawn_pending and not self._handoff_pending
+                     and not self._child_may_exist)
         finally:
             self._lock.release()
-        if ready and self._slot_reserved:
-            with _SLOT_LOCK:
+        if ready and self._slot_reserved and _SLOT_LOCK.acquire(blocking=False):
+            try:
                 if self._slot_reserved:
                     _SLOTS.discard(self)
                     self._slot_reserved = False
+            finally:
+                _SLOT_LOCK.release()
         return ready
 
 
@@ -493,6 +577,7 @@ class ChildClockBridge:
         self._faulted = False
         self._closed = False
         self._close_uncertain = False
+        self._stop_state = "open"
         self._state_lock = threading.Lock()
         self._generation_token = object()
         try:
@@ -573,9 +658,11 @@ class ChildClockBridge:
                 self._sequence += 1
                 return _ValidatedReply(adjusted_wall, receive_mono, adjusted_uncertainty,
                                        self._offset)
-        except BaseException:
+        except BaseException as error:
             with self._state_lock:
                 self._faulted = True
+                if isinstance(error, _DescriptorCleanupUncertain):
+                    self._close_uncertain = True
             raise
 
     def _wall(self):
@@ -632,12 +719,15 @@ class ChildClockBridge:
 
     def stop(self):
         with self._state_lock:
-            if self._closed:
-                return not self._close_uncertain
+            if self._stop_state != "open":
+                return self._stop_state == "closed"
+            self._stop_state = "closing"
             self._closed = True
             self._snapshot = None
             sock, self._sock = self._sock, None
         if sock is None:
+            with self._state_lock:
+                self._stop_state = "closed"
             return True
         error = None
         try:
@@ -651,4 +741,8 @@ class ChildClockBridge:
         if error is not None:
             with self._state_lock:
                 self._close_uncertain = True
+                self._stop_state = "uncertain"
+        else:
+            with self._state_lock:
+                self._stop_state = "closed"
         return error is None
