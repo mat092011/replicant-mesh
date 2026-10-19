@@ -128,6 +128,7 @@ class GatewayChannelMultiplexer:
         self._pump_lock = threading.Lock()
         self._stop_lock = threading.Lock()
         self._close_once = set()
+        self._close_completed = set()
         self._stuck = []
         self._failure = None
         self._claims_finalized = False
@@ -342,7 +343,7 @@ class GatewayChannelMultiplexer:
                     _RETAINED_MUXES.add(self)
             return
         try:
-            clean = (len(self._close_once) == 1 + len(self._workers)
+            clean = (len(self._close_completed) == 1 + len(self._workers)
                      and not self._stuck and not self._pending
                      and not self._capture_by_id and self._failure is None)
             with _CLAIM_LOCK:
@@ -377,5 +378,7 @@ class GatewayChannelMultiplexer:
                     stream.close()
                 except BaseException as error:
                     self._stuck.append((stream, type(error).__name__))
+                finally:
+                    self._close_completed.add(marker)
         self._finalize_retirement()
 

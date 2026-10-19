@@ -7,12 +7,14 @@ import copy
 import json
 import asyncio
 import threading
+from unittest.mock import patch
 
 from steamboat_connector import channel_wire as wire
 from steamboat_connector import gateway_mux as mux_impl
 from steamboat_connector.gateway_mux import GatewayChannelMultiplexer, GatewayMuxError
 from steamboat_connector.channel_rpc import _CONTROL_CAPTURE_BYTES, _RELAY_CAPTURE_BYTES
 from steamboat_connector.channel_heartbeat import PING, PONG, decode_heartbeat, encode_heartbeat
+from steamboat_connector.channel_stream import ChannelStream
 from steamboat_runtime.protocol import PROTOCOL_VERSION
 from steamboat_runtime.protocol.wire import Request, Response, serialize_message
 from steamboat_security.codec import METADATA_KEY, WORKER_SERVICE, encode_binding
@@ -534,13 +536,14 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
         stream = self.fx.coordinator_server_stream
         original_pump = stream.pump
 
-        def blocked_pump():
-            entered.set()
-            if not release.wait(1.0):
-                raise AssertionError("pump barrier timed out")
-            return original_pump()
+        def blocked_pump(instance):
+            if instance is stream:
+                entered.set()
+                if not release.wait(1.0):
+                    raise AssertionError("pump barrier timed out")
+            return original_pump() if instance is stream else original_pump_unbound(instance)
 
-        stream.pump = blocked_pump
+        original_pump_unbound = ChannelStream.pump
 
         def pump_thread():
             try:
@@ -549,18 +552,19 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
                 errors.append(error)
 
         thread = threading.Thread(target=pump_thread, daemon=True)
-        thread.start()
-        self.assertTrue(entered.wait(1.0), "pump did not reach test barrier")
-        mux.stop()
-        self.assertFalse(mux._accepting)
-        self.assertIn(mux, mux_impl._RETAINED_MUXES)
-        for resource in mux._claim_resources:
-            claim = mux_impl._RESOURCE_CLAIMS.get(id(resource))
-            self.assertIsNotNone(claim)
-            self.assertIs(claim[0], resource)
-            self.assertIs(claim[1], mux)
-        release.set()
-        thread.join(1.0)
+        with patch.object(ChannelStream, "pump", new=blocked_pump):
+            thread.start()
+            self.assertTrue(entered.wait(1.0), "pump did not reach test barrier")
+            mux.stop()
+            self.assertFalse(mux._accepting)
+            self.assertIn(mux, mux_impl._RETAINED_MUXES)
+            for resource in mux._claim_resources:
+                claim = mux_impl._RESOURCE_CLAIMS.get(id(resource))
+                self.assertIsNotNone(claim)
+                self.assertIs(claim[0], resource)
+                self.assertIs(claim[1], mux)
+            release.set()
+            thread.join(1.0)
         self.assertFalse(thread.is_alive(), "pump did not leave after stop")
         self.assertTrue(errors)
         self.assertTrue(all(stream.closed for stream in
@@ -568,6 +572,52 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
                              *self.fx.worker_server_streams)))
         self.assertIn(mux, mux_impl._RETAINED_MUXES)
         self.assertFalse(mux._claims_finalized)
+
+    def test_close_in_progress_keeps_claims_and_mux_capacity_reserved(self):
+        mux = self._mux()
+        entered = threading.Event()
+        release = threading.Event()
+        errors = []
+        last_stream = self.fx.worker_server_streams[-1]
+        original_close = ChannelStream.close
+
+        def blocked_close(instance):
+            if instance is last_stream:
+                entered.set()
+                if not release.wait(1.0):
+                    raise AssertionError("close barrier timed out")
+            return original_close(instance)
+
+        def stop_thread():
+            try:
+                mux.stop()
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=stop_thread, daemon=True)
+        with patch.object(ChannelStream, "close", new=blocked_close):
+            thread.start()
+            self.assertTrue(entered.wait(1.0), "last close did not reach barrier")
+            self.assertTrue(mux in mux_impl._LIVE_MUXES
+                            or mux in mux_impl._RETAINED_MUXES)
+            self.assertFalse(mux._claims_finalized)
+            # Model a concurrently finishing pump after it releases ownership:
+            # an in-flight close is still not a completed close outcome.
+            mux._finalize_retirement()
+            self.assertIn(mux, mux_impl._RETAINED_MUXES)
+            self.assertFalse(mux._claims_finalized)
+            for resource in mux._claim_resources:
+                claim = mux_impl._RESOURCE_CLAIMS.get(id(resource))
+                self.assertIsNotNone(claim)
+                self.assertIs(claim[0], resource)
+                self.assertIs(claim[1], mux)
+            release.set()
+            thread.join(1.0)
+        self.assertFalse(thread.is_alive(), "stop did not leave after close returned")
+        self.assertFalse(errors)
+        self.assertTrue(mux._claims_finalized)
+        self.assertNotIn(mux, mux_impl._LIVE_MUXES)
+        self.assertNotIn(mux, mux_impl._RETAINED_MUXES)
 
 
 if __name__ == "__main__":
