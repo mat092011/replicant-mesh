@@ -1,0 +1,30 @@
+# Offline artifact/assigned-loader tests; no daemon readiness or real-route claim.
+name: steamboat-participant-artifacts
+services:
+  artifacts:
+    image: steamboat-participant-artifacts:c2a-cpu-v1
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: docker/participant-connector/Dockerfile.artifacts
+    init: true
+    network_mode: none
+    restart: "no"
+    cpus: 2.0
+    mem_limit: 6g
+    pids_limit: 256
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:size=268435456, /app/.lab:size=16777216]
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      STEAMBOAT_ASSIGNED_TEST_SOURCE: /artifacts
+      STEAMBOAT_ASSIGNED_TEST_SCRATCH: /tmp/assigned-validation
+    volumes:
+      - pytorch-artifacts:/artifacts:ro
+volumes:
+  pytorch-artifacts:
+    external: true
+    name: steamboat-pytorch-m1_pytorch-artifacts

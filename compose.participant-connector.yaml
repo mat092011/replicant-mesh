@@ -1,0 +1,19 @@
+# Local foundation only; execution backends/real enforcement/real routes pending.
+name: steamboat-participant-c2a
+services:
+  connector:
+    image: steamboat-participant-connector:c2a-foundation-v1
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: docker/participant-connector/Dockerfile
+    init: true
+    network_mode: none
+    restart: "no"
+    cpus: 1.0
+    mem_limit: 256m
+    pids_limit: 64
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:size=16777216, /app/.lab:size=16777216]
