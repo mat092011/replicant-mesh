@@ -23,6 +23,8 @@ from steamboat_runtime.protocol.secure_transport import (
     MAX_CANCELLATION_GRACE_SECONDS,
     SecureCoordinatorClient,
     SecureTaskPending,
+    _pending_task_descendants,
+    _retain_tasks,
 )
 from steamboat_runtime.protocol.secure_connector import SecureConnectorPending
 
@@ -117,15 +119,20 @@ class ConsumerRun:
         self._event_slots = asyncio.Semaphore(MAX_PENDING_EVENTS)
         self._result = loop.create_future()
         self._result.add_done_callback(_observe_future)
-        self.closed = loop.create_future()
+        self._closed = loop.create_future()
         self._task = None
         self._iterated = False
         self._cancel_requested = False
+        self._cancel_sent = False
         self._context = None
 
     @property
     def result(self):
-        return self._result
+        return asyncio.shield(self._result)
+
+    @property
+    def closed(self):
+        return asyncio.shield(self._closed)
 
     def __aiter__(self):
         if self._iterated:
@@ -134,7 +141,7 @@ class ConsumerRun:
         return self
 
     def _task_finished(self, task):
-        if not self.closed.done():
+        if not self._closed.done():
             if task.cancelled():
                 error = ConnectorError(
                     "CANCELLED",
@@ -154,7 +161,7 @@ class ConsumerRun:
             if self._queue.empty():
                 self._queue.put_nowait(_Failure(error))
                 self._queue.put_nowait(_END)
-            self.closed.set_result(None)
+            self._closed.set_result(None)
         elif not task.cancelled():
             task.exception()
 
@@ -173,7 +180,7 @@ class ConsumerRun:
 
     async def aclose(self):
         self._transport.cancel(self.request_id)
-        await self.closed
+        await asyncio.shield(self._closed)
         self._discard_output()
         self._transport._release(self.request_id, self)
 
@@ -341,7 +348,7 @@ class ConsumerRun:
         finally:
             if stream is not None:
                 try:
-                    await self._transport._await_cleanup(stream.aclose())
+                    await self._transport._await_cleanup(stream.aclose(), context)
                 except _PENDING_ERRORS as error:
                     self._transport._mark_uncertain(error, context)
                     preserve_context = context is not None
@@ -374,8 +381,8 @@ class ConsumerRun:
                     self._result.set_exception(failure)
                 self._queue.put_nowait(_Failure(failure))
                 self._queue.put_nowait(_END)
-            if not self.closed.done():
-                self.closed.set_result(None)
+            if not self._closed.done():
+                self._closed.set_result(None)
 
 
 class SecureConsumerTransport:
@@ -400,6 +407,8 @@ class SecureConsumerTransport:
         self._recent_order = deque()
         self._pending_tasks = set()
         self._pending_contexts = set()
+        self._pending_context_owners = {}
+        self._pending_watchers = set()
         self._unavailable = False
         self._lock = threading.RLock()
 
@@ -419,7 +428,10 @@ class SecureConsumerTransport:
                 raise ConnectorError(
                     "UNAVAILABLE", "secure consumer transport is unavailable"
                 )
-            if submission.request_id in self._recent_ids:
+            if (
+                submission.request_id in self._active
+                or submission.request_id in self._recent_ids
+            ):
                 raise ConnectorError(
                     "DUPLICATE", "request identity was already submitted"
                 )
@@ -460,6 +472,16 @@ class SecureConsumerTransport:
                 )
             run._cancel_requested = True
             loop, task = run._loop, run._task
+            if run._cancel_sent:
+                return MappingProxyType(
+                    {
+                        "request_id": request_id,
+                        "accepted": True,
+                        "state": "cancel_intent_recorded",
+                        "remote_reclamation_confirmed": False,
+                    }
+                )
+            run._cancel_sent = True
         loop.call_soon_threadsafe(task.cancel)
         return MappingProxyType(
             {
@@ -510,41 +532,60 @@ class SecureConsumerTransport:
         try:
             done, pending = await asyncio.wait((task,), timeout=remaining)
         except asyncio.CancelledError:
-            await self._cancel_bounded(task)
+            await self._cancel_bounded(task, context=context)
             raise
         if pending:
-            await self._cancel_bounded(task)
+            await self._cancel_bounded(task, context=context)
             raise ConnectorError(
                 "DEADLINE_EXCEEDED", "consumer request deadline elapsed"
             )
         return task.result()
 
-    async def _await_cleanup(self, awaitable):
+    async def _await_cleanup(self, awaitable, context=None):
         task = asyncio.ensure_future(awaitable)
-        done, pending = await asyncio.wait(
-            (task,), timeout=MAX_CANCELLATION_GRACE_SECONDS
-        )
+        try:
+            done, pending = await asyncio.wait(
+                (task,), timeout=MAX_CANCELLATION_GRACE_SECONDS
+            )
+        except asyncio.CancelledError:
+            error = SecureTaskPending(
+                (task,),
+                "consumer cleanup wait was interrupted; task ownership retained",
+            )
+            self._mark_uncertain(error, context)
+            raise error
         if pending:
-            await self._cancel_bounded(task)
+            await self._cancel_bounded(task, context=context)
         return task.result()
 
-    async def _cancel_bounded(self, task):
+    async def _cancel_bounded(self, task, *, context=None):
         if not task.done():
             task.cancel()
-        done, pending = await asyncio.wait(
-            (task,), timeout=MAX_CANCELLATION_GRACE_SECONDS
-        )
-        if pending:
-            error = SecureTaskPending(
-                (task,), "consumer transport operation remains pending"
+        try:
+            done, pending = await asyncio.wait(
+                (task,), timeout=MAX_CANCELLATION_GRACE_SECONDS
             )
-            self._mark_uncertain(error, None)
+        except asyncio.CancelledError:
+            tasks = tuple({task, *_pending_task_descendants((task,))})
+            error = SecureTaskPending(
+                tasks,
+                "consumer cancellation wait was interrupted; task ownership retained",
+            )
+            self._mark_uncertain(error, context)
+            raise error
+        if pending:
+            tasks = tuple({task, *_pending_task_descendants((task,))})
+            error = SecureTaskPending(
+                tasks, "consumer transport operation remains pending"
+            )
+            self._mark_uncertain(error, context)
             raise error
         try:
             task.result()
         except asyncio.CancelledError:
             return
         except _PENDING_ERRORS as error:
+            self._mark_uncertain(error, context)
             raise error
         except BaseException:
             return
@@ -553,26 +594,71 @@ class SecureConsumerTransport:
         with self._lock:
             self._unavailable = True
             tasks = tuple(error.tasks) if isinstance(error, _PENDING_ERRORS) else ()
+            tasks = tuple(dict.fromkeys((*tasks, *_pending_task_descendants(tasks))))
             for task in tasks:
                 if task not in self._pending_tasks:
                     self._pending_tasks.add(task)
                     task.add_done_callback(self._pending_tasks.discard)
+                    _retain_tasks((task,))
             if context is not None:
                 self._pending_contexts.add(context)
-                if tasks:
-                    remaining = set(tasks)
+                owner = self._pending_context_owners.setdefault(
+                    context, {"roots": set(), "generation": 0, "watcher": None}
+                )
+                new_roots = set(tasks) - owner["roots"]
+                if new_roots:
+                    owner["roots"].update(new_roots)
+                    owner["generation"] += 1
+                if tasks and owner["watcher"] is None:
+                    watcher = asyncio.create_task(
+                        self._watch_context_tasks(context),
+                        name="consumer-cleanup-" + str(id(context)),
+                    )
+                    owner["watcher"] = watcher
+                    self._pending_watchers.add(watcher)
+                    watcher.add_done_callback(self._pending_watcher_done)
 
-                    def release_when_done(task):
-                        remaining.discard(task)
-                        if not remaining:
-                            try:
-                                context.close()
-                            finally:
-                                with self._lock:
-                                    self._pending_contexts.discard(context)
+    def _pending_watcher_done(self, task):
+        self._pending_watchers.discard(task)
+        _observe_future(task)
 
-                    for task in tasks:
-                        task.add_done_callback(release_when_done)
+    async def _watch_context_tasks(self, context):
+        while True:
+            with self._lock:
+                owner = self._pending_context_owners.get(context)
+                if owner is None:
+                    return
+                roots = tuple(owner["roots"])
+                generation = owner["generation"]
+            await self._wait_task_graph(roots)
+            with self._lock:
+                owner = self._pending_context_owners.get(context)
+                if owner is None:
+                    return
+                if owner["generation"] != generation:
+                    continue
+                context.close()
+                self._pending_contexts.discard(context)
+                del self._pending_context_owners[context]
+                return
+
+    async def _wait_task_graph(self, tasks):
+        roots = set(tasks)
+        while roots:
+            live = tuple(task for task in roots if not task.done())
+            if live:
+                done, _ = await asyncio.wait(live, return_when=asyncio.FIRST_COMPLETED)
+            else:
+                done = roots
+            descendants = set(_pending_task_descendants(done))
+            if descendants:
+                with self._lock:
+                    for task in descendants:
+                        if task not in self._pending_tasks:
+                            self._pending_tasks.add(task)
+                            task.add_done_callback(self._pending_tasks.discard)
+                            _retain_tasks((task,))
+            roots = (roots - set(done)) | descendants
 
     def _release(self, request_id, run):
         with self._lock:

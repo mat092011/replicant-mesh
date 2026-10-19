@@ -184,6 +184,37 @@ class SecureConsumerTransportTests(unittest.IsolatedAsyncioTestCase):
             run._discard_output()
             transport._release(run.request_id, run)
 
+    async def test_active_id_remains_reserved_after_recent_cache_eviction(self):
+        gate = asyncio.Event()
+
+        class Client(FakeClient):
+            async def tokenize(self, prompt, *, trusted_request_context):
+                self.tokenize_calls.append((prompt, trusted_request_context))
+                if prompt == "held request":
+                    await gate.wait()
+                return [11]
+
+        client = Client()
+        authorizer = FakeAuthorizer()
+        transport = SecureConsumerTransport._for_tests(client, authorizer)
+        active_submission = self.submission()
+        active_submission = ConsumerSubmission(
+            active_submission.request_id, "held request", 1, 300
+        )
+        active = await transport.submit(active_submission)
+        for _ in range(256):
+            run = await transport.submit(self.submission(tokens=1))
+            await self.finish(run)
+        self.assertNotIn(active.request_id, transport._recent_ids)
+        with self.assertRaises(ConnectorError) as duplicate:
+            await transport.submit(active_submission)
+        self.assertEqual(duplicate.exception.code, "DUPLICATE")
+        self.assertIs(transport._active[active.request_id], active)
+        transport.cancel(active.request_id)
+        await active.closed
+        active._discard_output()
+        transport._release(active.request_id, active)
+
     async def test_cancel_is_fast_local_intent_and_does_not_claim_reclamation(self):
         gate = asyncio.Event()
 
@@ -204,6 +235,143 @@ class SecureConsumerTransportTests(unittest.IsolatedAsyncioTestCase):
             await run.result
         self.assertEqual(cancelled.exception.code, "CANCELLED")
         self.assertEqual(client.generate_calls, [])
+
+    async def test_repeated_cancel_is_idempotent(self):
+        gate = asyncio.Event()
+
+        async def wait_tokenize(_prompt, _context):
+            await gate.wait()
+            return [1]
+
+        client = FakeClient(tokenize=wait_tokenize)
+        transport = SecureConsumerTransport._for_tests(client, FakeAuthorizer())
+        run = await transport.submit(self.submission())
+        first = transport.cancel(run.request_id)
+        second = transport.cancel(run.request_id)
+        self.assertEqual(first["state"], second["state"])
+        await asyncio.sleep(0)
+        self.assertEqual(run._task.cancelling(), 1)
+        await run.closed
+        run._discard_output()
+        transport._release(run.request_id, run)
+
+    async def test_cancelled_aclose_waiter_does_not_cancel_shared_closed_state(self):
+        gate = asyncio.Event()
+
+        async def wait_tokenize(_prompt, _context):
+            await gate.wait()
+            return [1]
+
+        client = FakeClient(tokenize=wait_tokenize)
+        transport = SecureConsumerTransport._for_tests(client, FakeAuthorizer())
+        run = await transport.submit(self.submission())
+        close_waiter = asyncio.create_task(run.aclose())
+        await asyncio.sleep(0)
+        close_waiter.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await close_waiter
+        self.assertFalse(run._closed.cancelled())
+        await asyncio.wait_for(run.closed, timeout=1)
+        run._discard_output()
+        transport._release(run.request_id, run)
+
+    async def test_interrupted_cleanup_wait_retains_task_graph_and_context(self):
+        gate = asyncio.Event()
+        started = asyncio.Event()
+        child_tasks = []
+        transport = self.transport
+        context = FakeContext("req_" + "b" * 32, time.monotonic() + 30)
+
+        async def close_stream():
+            async def wait_for_close():
+                started.set()
+                await gate.wait()
+
+            child = asyncio.create_task(wait_for_close())
+            child_tasks.append(child)
+            await asyncio.shield(child)
+
+        with patch(
+            "steamboat_connector.consumer_transport.MAX_CANCELLATION_GRACE_SECONDS", 0.5
+        ):
+            cleanup_wait = asyncio.create_task(
+                transport._await_cleanup(close_stream(), context)
+            )
+            await started.wait()
+            cleanup_wait.cancel()
+            with self.assertRaises(SecureTaskPending) as pending:
+                await cleanup_wait
+        self.assertFalse(context.closed)
+        self.assertFalse(transport.status()["available"])
+        self.assertEqual(len(child_tasks), 1)
+        self.assertIn(pending.exception.tasks[0], transport._pending_tasks)
+        owner = transport._pending_context_owners[context]
+        gate.set()
+        await asyncio.wait_for(child_tasks[0], timeout=1)
+        await asyncio.wait_for(owner["watcher"], timeout=1)
+        self.assertTrue(context.closed)
+
+    async def test_interrupted_bounded_cancel_retains_c1_reported_descendant(self):
+        gate = asyncio.Event()
+        started = asyncio.Event()
+        child_tasks = []
+        context = FakeContext("req_" + "c" * 32, time.monotonic() + 30)
+        transport = self.transport
+
+        async def operation():
+            async def child_work():
+                started.set()
+                await gate.wait()
+
+            child = asyncio.create_task(child_work())
+            child_tasks.append(child)
+            try:
+                await asyncio.shield(child)
+            except asyncio.CancelledError:
+                raise SecureTaskPending((child,), "operation reported pending child")
+
+        operation_task = asyncio.create_task(operation())
+        await started.wait()
+        with self.assertRaises(SecureTaskPending) as pending:
+            await transport._cancel_bounded(operation_task, context=context)
+        self.assertIn(child_tasks[0], pending.exception.tasks)
+        self.assertIn(child_tasks[0], transport._pending_tasks)
+        self.assertFalse(context.closed)
+        owner = transport._pending_context_owners[context]
+        gate.set()
+        await asyncio.wait_for(child_tasks[0], timeout=1)
+        await asyncio.wait_for(owner["watcher"], timeout=1)
+        self.assertTrue(context.closed)
+
+    async def test_pending_context_waits_for_all_groups_and_nested_descendants(self):
+        first_gate = asyncio.Event()
+        nested_gate = asyncio.Event()
+        context = FakeContext("req_" + "a" * 32, time.monotonic() + 30)
+
+        async def first_group():
+            await first_gate.wait()
+
+        async def nested_child():
+            await nested_gate.wait()
+
+        async def second_group():
+            child = asyncio.create_task(nested_child())
+            raise SecureTaskPending((child,), "nested cleanup still pending")
+
+        first = asyncio.create_task(first_group())
+        second = asyncio.create_task(second_group())
+        transport = self.transport
+        transport._mark_uncertain(SecureTaskPending((first,)), context)
+        transport._mark_uncertain(SecureTaskPending((second,)), context)
+        await asyncio.sleep(0)
+        first_gate.set()
+        await first
+        await asyncio.sleep(0.01)
+        self.assertFalse(context.closed)
+        self.assertGreaterEqual(transport.status()["pending_secure_tasks"], 1)
+        nested_gate.set()
+        await asyncio.wait_for(transport._pending_context_owners[context]["watcher"], 1)
+        self.assertTrue(context.closed)
 
     async def test_immediate_cancel_before_driver_start_still_closes_run(self):
         run = await self.transport.submit(self.submission())
