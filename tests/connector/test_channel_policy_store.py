@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,8 @@ from steamboat_connector.channel_policy_store import (
     LOCK_NAME,
     PersistentChannelPolicyStore,
     _QUARANTINE,
+    _QUARANTINE_LOCK,
+    _QUARANTINE_MARKER,
 )
 from steamboat_security.channel_policy import canonical_json, sign_channel_policy
 from steamboat_security.clock import Clock
@@ -150,14 +153,19 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
             self.open_existing()
         self.assertEqual((self.root / HEAD_NAME).read_bytes(), original_bytes)
 
-        # This same live owner can move to a fresh signed revision after the
-        # prior policy expires; the core store performs all checks and commit.
-        self.wall, self.mono = 1000.0, 50.0
+        # A separately provisioned cold generation uses its own monotonic clock.
+        # No clock rollback is used to simulate cold re-enrollment.
         live_root = self.root.parent / "live-policy"
         live_root.mkdir(mode=0o700)
         os.chmod(live_root, 0o700)
-        owner = self.provision(root=live_root)
-        self.wall, self.mono = 1100.0, 150.0
+        fresh_time = {"wall": 1000.0, "mono": 50.0}
+        fresh_clock = Clock(wall=lambda: fresh_time["wall"],
+                            monotonic=lambda: fresh_time["mono"],
+                            uncertainty_seconds=lambda: 0.0)
+        owner = PersistentChannelPolicyStore.provision(
+            live_root, **{**self.config, "clock": fresh_clock})
+        owner.install(self.sign())
+        fresh_time.update(wall=1100.0, mono=150.0)
         renewed = {**self.payload, "revision": 2, "issued_at": 1100,
                    "expires_at": 1200}
         self.assertEqual(owner.install(self.sign(renewed)).revision, 2)
@@ -196,9 +204,10 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
 
         owner = PersistentChannelPolicyStore.provision(
             self.root, **self.config, _fault_hook=fail)
-        with self.assertRaises(StorageError) as caught:
+        with self.assertRaises(SnapshotError) as caught:
             owner.install(self.sign())
-        self.assertIsInstance(caught.exception.__cause__, OSError)
+        self.assertIsInstance(caught.exception.__cause__, StorageError)
+        self.assertIsInstance(caught.exception.__cause__.__cause__, OSError)
         self.assertTrue(owner.faulted)
         self.assertIsNone(owner._store._view)
         self.assertTrue((self.root / LOCK_NAME).exists())
@@ -227,7 +236,7 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
         before = owner.current()
         data = (self.root / HEAD_NAME).read_bytes()
         (self.root / HEAD_NAME).write_bytes(data + b" ")
-        advanced = {**self.payload, "revision": 2, "issued_at": 1001,
+        advanced = {**self.payload, "revision": 2, "issued_at": 1000,
                     "expires_at": 1101}
         with self.assertRaises(StorageError):
             owner.install(self.sign(advanced))
@@ -244,27 +253,92 @@ class PersistentChannelPolicyStoreTests(unittest.TestCase):
     def test_ancestor_close_uncertainty_does_not_double_close_reused_fd(self):
         actual_close = os.close
         result = {}
+        close_count = {"value": 0}
 
         def close_then_reuse(fd):
-            if not result:
+            close_count["value"] += 1
+            if close_count["value"] == 1:
                 actual_close(fd)
                 reused = os.open(os.devnull, os.O_RDONLY)
                 result["reused"] = reused
                 raise OSError("close reported failure after releasing descriptor")
+            if close_count["value"] == 2:
+                actual_close(fd)
+                raise KeyboardInterrupt("cleanup close reported failure after release")
             return actual_close(fd)
 
-        before = len(_QUARANTINE)
+        before = sum(value is not None for value in _QUARANTINE)
         try:
             with patch("steamboat_connector.channel_policy_store.os.close",
                        side_effect=close_then_reuse):
-                with self.assertRaises(StorageError):
+                with self.assertRaises(StorageError) as caught:
                     PersistentChannelPolicyStore.provision(
                         self.root, **self.config)
-            self.assertEqual(len(_QUARANTINE), before + 1)
+            after = sum(value is not None for value in _QUARANTINE)
+            self.assertEqual(after, before + 1)
+            self.assertTrue(hasattr(caught.exception, "channel_policy_owner"))
+            self.assertIn(caught.exception.channel_policy_owner, _QUARANTINE)
             os.fstat(result["reused"])
         finally:
             if "reused" in result:
                 actual_close(result["reused"])
+
+    def test_inflight_initializations_reserve_all_quarantine_capacity(self):
+        first_root = self.root.parent / "capacity-first"
+        second_root = self.root.parent / "capacity-second"
+        first_root.mkdir(mode=0o700)
+        second_root.mkdir(mode=0o700)
+        os.chmod(first_root, 0o700)
+        os.chmod(second_root, 0o700)
+        with _QUARANTINE_LOCK:
+            prior = list(_QUARANTINE)
+            _QUARANTINE[:] = [_QUARANTINE_MARKER] * (len(_QUARANTINE) - 1) + [None]
+
+        actual_open = os.open
+        entered = threading.Event()
+        resume = threading.Event()
+        results = {}
+
+        def blocked_open(*args, **kwargs):
+            if not entered.is_set():
+                entered.set()
+                if not resume.wait(2.0):
+                    raise TimeoutError("test failed to release first initializer")
+            return actual_open(*args, **kwargs)
+
+        def first_initializer():
+            try:
+                results["owner"] = PersistentChannelPolicyStore.provision(
+                    first_root, **self.config)
+            except BaseException as error:
+                results["error"] = error
+
+        worker = threading.Thread(
+            target=first_initializer)
+        try:
+            with patch("steamboat_connector.channel_policy_store.os.open",
+                       side_effect=blocked_open):
+                worker.start()
+                self.assertTrue(entered.wait(1.0))
+                with self.assertRaises(StorageError):
+                    PersistentChannelPolicyStore.provision(
+                        second_root, **self.config)
+                resume.set()
+                worker.join(2.0)
+            self.assertFalse(worker.is_alive())
+            self.assertNotIn("error", results)
+            results["owner"].close()
+        finally:
+            resume.set()
+            if worker.is_alive():
+                worker.join(2.0)
+            with _QUARANTINE_LOCK:
+                current = list(_QUARANTINE)
+                _QUARANTINE[:] = [
+                    previous if previous is not None else
+                    (current[index] if current[index] is not _QUARANTINE_MARKER else None)
+                    for index, previous in enumerate(prior)
+                ]
 
 
 if __name__ == "__main__":

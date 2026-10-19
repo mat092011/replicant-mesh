@@ -43,14 +43,18 @@ _HEAD_FIELDS = frozenset({
 })
 _HEX64 = frozenset("0123456789abcdef")
 _QUARANTINE_LIMIT = 8
-_QUARANTINE = []
+_QUARANTINE_MARKER = object()
+_QUARANTINE = [None] * _QUARANTINE_LIMIT
 _QUARANTINE_LOCK = threading.Lock()
 
 
 def _retain_uncertain_initialization(owner):
-    with _QUARANTINE_LOCK:
-        if len(_QUARANTINE) < _QUARANTINE_LIMIT and owner not in _QUARANTINE:
-            _QUARANTINE.append(owner)
+    # The slot was exclusively reserved before FD allocation. Assignment does
+    # not allocate and needs no second lock acquisition during error handling.
+    slot = owner._quarantine_slot
+    if slot is None:
+        raise RuntimeError("channel policy quarantine reservation was lost")
+    _QUARANTINE[slot] = owner
 
 
 def _pairs(pairs):
@@ -172,7 +176,7 @@ class PersistentChannelPolicyStore:
         owner._initialize(root, expected_uid, verification_key_pem, clock,
                           minimum_revision, minimum_policy_digest, key_hash,
                           _fault_hook)
-        owner._check_quarantine_capacity()
+        owner._reserve_quarantine_capacity()
         try:
             owner._open_provisioned_root()
             owner._create_and_claim_lock()
@@ -180,12 +184,22 @@ class PersistentChannelPolicyStore:
             owner._head_identity = None
             owner._bootstrap_signed = None
             owner._store = owner._new_core_store()
+            owner._release_quarantine_capacity()
             return owner
-        except BaseException:
+        except BaseException as error:
             owner._faulted = True
-            owner._close_unpublished_initialization()
+            try:
+                owner._close_unpublished_initialization()
+            except BaseException:
+                owner._uncertain_cleanup = True
             if owner._uncertain_cleanup:
                 _retain_uncertain_initialization(owner)
+                try:
+                    setattr(error, "channel_policy_owner", owner)
+                except BaseException:
+                    pass
+            else:
+                owner._release_quarantine_capacity()
             raise
 
     @classmethod
@@ -198,7 +212,7 @@ class PersistentChannelPolicyStore:
         owner._initialize(root, expected_uid, verification_key_pem, clock,
                           minimum_revision, minimum_policy_digest, key_hash,
                           _fault_hook)
-        owner._check_quarantine_capacity()
+        owner._reserve_quarantine_capacity()
         try:
             owner._open_existing_root()
             owner._open_and_claim_lock()
@@ -221,12 +235,22 @@ class PersistentChannelPolicyStore:
                 raise StorageError("persisted channel policy disagrees with signed head")
             owner._bootstrap_signed = None
             owner._commit_ready = False
+            owner._release_quarantine_capacity()
             return owner
-        except BaseException:
+        except BaseException as error:
             owner._faulted = True
-            owner._close_unpublished_initialization()
+            try:
+                owner._close_unpublished_initialization()
+            except BaseException:
+                owner._uncertain_cleanup = True
             if owner._uncertain_cleanup:
                 _retain_uncertain_initialization(owner)
+                try:
+                    setattr(error, "channel_policy_owner", owner)
+                except BaseException:
+                    pass
+            else:
+                owner._release_quarantine_capacity()
             raise
 
     def _initialize(self, root, uid, verification_key_pem, clock,
@@ -247,6 +271,7 @@ class PersistentChannelPolicyStore:
         self._root_fd = -1
         self._walking_fds = []
         self._uncertain_cleanup = False
+        self._quarantine_slot = None
         self._lock_fd = -1
         self._lock_identity = None
         self._head_bytes = None
@@ -260,10 +285,23 @@ class PersistentChannelPolicyStore:
         self._lifetime = threading.Condition(threading.Lock())
         self._operation_lock = threading.RLock()
 
-    def _check_quarantine_capacity(self):
+    def _reserve_quarantine_capacity(self):
         with _QUARANTINE_LOCK:
-            if len(_QUARANTINE) >= _QUARANTINE_LIMIT:
-                raise StorageError("uncertain channel policy owners reached their fixed bound")
+            for index, value in enumerate(_QUARANTINE):
+                if value is None:
+                    _QUARANTINE[index] = _QUARANTINE_MARKER
+                    self._quarantine_slot = index
+                    return
+            raise StorageError("uncertain channel policy owners reached their fixed bound")
+
+    def _release_quarantine_capacity(self):
+        with _QUARANTINE_LOCK:
+            slot = self._quarantine_slot
+            if slot is None:
+                return
+            if _QUARANTINE[slot] is _QUARANTINE_MARKER:
+                _QUARANTINE[slot] = None
+            self._quarantine_slot = None
 
     def _new_core_store(self):
         return ChannelPolicyStore(
@@ -497,7 +535,9 @@ class PersistentChannelPolicyStore:
             return None
         except BaseException as error:
             self._faulted = True
-            if isinstance(error, (StorageError, SnapshotError)):
+            if isinstance(error, StorageError):
+                raise SnapshotError("durable channel policy storage commit failed") from error
+            if isinstance(error, SnapshotError):
                 raise
             raise StorageError("durable channel policy commit outcome is unknown") from error
 
@@ -656,14 +696,14 @@ class PersistentChannelPolicyStore:
                 setattr(self, name, -1)
                 try:
                     os.close(fd)
-                except OSError:
+                except BaseException:
                     self._faulted = True
                     self._uncertain_cleanup = True
         while self._walking_fds:
             fd = self._walking_fds.pop()
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 self._faulted = True
                 self._uncertain_cleanup = True
 
