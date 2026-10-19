@@ -235,6 +235,63 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(captured["auth"]._failed)
         self.assertTrue(captured["auth"]._closed)
 
+    async def test_real_guarded_pending_handoff_retains_auth_and_capture(self):
+        self.client = self._client()
+        context = self.fx.base.adapter.create_bootstrap_context()
+        request = Request(protocol_version=1, manifest_fingerprint=self.fx.model_id,
+                          worker_boot_id=self.fx.worker_boot_id, timeout_ms=5000)
+        release = asyncio.Event()
+        captured, children = {}, []
+
+        async def remote_owner():
+            await release.wait()
+
+        async def watcher(_authorization):
+            child = asyncio.create_task(remote_owner())
+            children.append(child)
+            await asyncio.sleep(0)
+            raise SecureTaskPending((child,))
+
+        self.client.authorization_watcher = watcher
+        original = self.client.authorizer.authorize_gateway_outbound
+        def capture_auth(**kwargs):
+            captured["auth"] = original(**kwargs)
+            return captured["auth"]
+
+        with mock.patch.object(self.client.authorizer, "authorize_gateway_outbound",
+                               side_effect=capture_auth):
+            call = asyncio.create_task(self.client.execute(
+                "Describe", request, trusted_request_context=context))
+            for _ in range(500):
+                self.fx.coordinator_server_stream.pump()
+                if self.fx.coordinator_server_stream.pop_message() is not None:
+                    break
+                await asyncio.sleep(0.001)
+            else:
+                self.fail("coordinator did not receive the authorized request")
+            with self.assertRaises(SecureTaskPending) as caught:
+                await asyncio.wait_for(call, timeout=2)
+
+        self.assertTrue(caught.exception.authorization_transferred)
+        self.assertEqual(len(children), 1)
+        self.assertEqual(self.client._data_bytes, _DATA_CAPTURE)
+        self.assertEqual(self.client._data_count, 1)
+        owner = next(iter(self.client._owners.values()))
+        self.assertIs(owner["auth"], captured["auth"])
+        self.assertIsNotNone(owner["request"])
+        self.assertIsNotNone(owner["raw_request"])
+        self.assertIsNotNone(owner["bundle"])
+        self.assertEqual(owner["state"], "pending")
+        self.assertFalse(captured["auth"]._closed)
+
+        cleanup = next(iter(self.client._retirement_tasks))
+        release.set()
+        await asyncio.wait_for(cleanup, timeout=2)
+        self.assertEqual(self.client._data_bytes, 0)
+        self.assertEqual(self.client._owners, {})
+        self.assertTrue(captured["auth"]._failed)
+        self.assertTrue(captured["auth"]._closed)
+
     async def test_cancellation_fails_dispatched_auth_before_close(self):
         self.client = self._client()
         context = self.fx.base.context

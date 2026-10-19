@@ -212,9 +212,9 @@ class CoordinatorChannelClient:
                     close_authorization_on_pending=False)
             except SecureTaskPending as error:
                 transferred = error.authorization_transferred
-            pending_entry = self._pending.get(message_id)
-            if dispatched and pending_entry is not None:
-                pending_entry["abandon_response"] = True
+                pending_entry = self._pending.get(message_id)
+                if dispatched and pending_entry is not None:
+                    pending_entry["abandon_response"] = True
                 if transferred and reservation_owned:
                     owner["state"] = "pending"
                     cleanup_task = asyncio.create_task(
