@@ -29,6 +29,7 @@ _REPLY = struct.Struct("!4s16s16sQB7xdddqq")
 _REQUEST_MAGIC = b"SBCR"
 _REPLY_MAGIC = b"SBCL"
 _CREDENTIALS = struct.Struct("3i")
+_MAX_RECEIVED_RIGHTS = 16
 _METADATA_FIELDS = frozenset({
     "fd", "server_nonce", "generation", "child_uid", "child_pid",
     "parent_uid", "parent_pid", "boot_domain",
@@ -72,15 +73,14 @@ def _intersect(left, right):
     return low, high
 
 
-def _decode_reply(packet, ancillary, flags, metadata, nonce, generation, sequence):
+def _decode_reply(packet, credential_data, flags, metadata, nonce, generation, sequence):
     """Validate one reply packet and its kernel-attested peer identity."""
     if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or len(packet) != _REPLY.size:
         raise ClockBridgeError("clock bridge reply length or flags are invalid")
-    credentials = [data for level, kind, data in ancillary
-                   if level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS]
-    if len(credentials) != 1 or len(credentials[0]) < _CREDENTIALS.size:
-        raise ClockBridgeError("clock bridge reply lacks peer credentials")
-    peer_pid, peer_uid, _gid = _CREDENTIALS.unpack(credentials[0][:_CREDENTIALS.size])
+    try:
+        peer_pid, peer_uid, _gid = _decode_peer_credentials(credential_data)
+    except ClockBridgeError as error:
+        raise ClockBridgeError("clock bridge reply lacks valid peer credentials") from error
     if peer_pid != metadata["parent_pid"] or peer_uid != metadata["parent_uid"]:
         raise ClockBridgeError("clock bridge reply came from a foreign process")
     magic, got_nonce, got_generation, got_sequence, status, wall, mono, uncertainty, low, high = _REPLY.unpack(packet)
@@ -94,6 +94,45 @@ def _decode_reply(packet, ancillary, flags, metadata, nonce, generation, sequenc
             or low > high):
         raise ClockBridgeError("parent clock sample is outside its accepted bounds")
     return wall, mono, uncertainty, (low, high)
+
+
+def _decode_peer_credentials(data):
+    if type(data) is not bytes or len(data) != _CREDENTIALS.size:
+        raise ClockBridgeError("clock bridge peer credentials are invalid")
+    return _CREDENTIALS.unpack(data)
+
+
+def _recvmsg_checked(sock, payload_bytes):
+    """Receive one frame, close all delivered rights, and accept credentials only."""
+    ancillary_bytes = (socket.CMSG_SPACE(_CREDENTIALS.size)
+                       + socket.CMSG_SPACE(_MAX_RECEIVED_RIGHTS * struct.calcsize("i")))
+    packet, ancillary, flags, address = sock.recvmsg(
+        payload_bytes, ancillary_bytes, getattr(socket, "MSG_CMSG_CLOEXEC", 0))
+    credentials = []
+    rights = set()
+    invalid_control = False
+    for level, kind, data in ancillary:
+        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            usable = len(data) - (len(data) % struct.calcsize("i"))
+            rights.update(item[0] for item in struct.iter_unpack("@i", data[:usable]))
+            invalid_control = invalid_control or usable != len(data)
+        elif level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS:
+            credentials.append(data)
+        else:
+            invalid_control = True
+    close_error = None
+    for fd in rights:
+        try:
+            os.close(fd)
+        except OSError as error:
+            close_error = close_error or error
+    if close_error is not None:
+        raise ClockBridgeError("received descriptor cleanup is uncertain") from close_error
+    if (flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or invalid_control or rights
+            or len(credentials) != 1):
+        raise ClockBridgeError("clock bridge ancillary data or frame is invalid")
+    _decode_peer_credentials(credentials[0])
+    return packet, credentials[0], flags, address
 
 
 def _exact_identity(value, *, positive):
@@ -172,6 +211,9 @@ class OwnedClockBridge:
             self._child_sock = self._parent_sock = None
             raise
         self._slot_reserved = False
+        self._endpoint_state = {"parent": "open", "child": "open"}
+        self._terminal = False
+        self._close_uncertain = False
         with _SLOT_LOCK:
             if len(_SLOTS) >= MAX_GENERATIONS:
                 self._close_socket_attribute("_child_sock")
@@ -192,6 +234,7 @@ class OwnedClockBridge:
             raise ClockBridgeError("child process identity is invalid")
         if uid != self._expected_child_uid:
             raise ClockBridgeError("clock bridge child UID differs from the configured UID")
+        start_error = None
         with self._lock:
             if self._child_pid is not None or self._stopping.is_set():
                 raise ClockBridgeError("clock bridge child was already bound or stopped")
@@ -200,10 +243,16 @@ class OwnedClockBridge:
             self._server_thread = thread
             try:
                 thread.start()
-            except BaseException:
-                self._server_thread = None
-                self._child_pid = self._child_uid = None
-                raise
+            except BaseException as error:
+                # Popen already created this child. Keep its identity and the
+                # generation slot until the caller proves that child reaped.
+                self._terminal = True
+                self._stopping.set()
+                start_error = error
+        if start_error is not None:
+            self._close_socket_attribute("_child_sock", nonblocking=True)
+            self._close_socket_attribute("_parent_sock", nonblocking=True)
+            raise ClockBridgeError("clock bridge server thread could not start") from start_error
         return self.child_metadata
 
     @property
@@ -225,31 +274,13 @@ class OwnedClockBridge:
         """Consume and close the parent's inherited-end copy exactly once."""
         # The child inherited a duplicate descriptor. shutdown() would fence
         # the shared socket endpoint in the child as well as in this process.
-        with self._lock:
-            sock = self._child_sock
-            self._child_sock = None
-        if sock is None:
-            return True
-        try:
-            sock.close()
-            return True
-        except OSError:
-            return False
+        return self._close_socket_attribute("_child_sock", shutdown=False)
 
     def close_inherited_parent_copy(self):
         """In a forked child, close its accidental copy of the parent endpoint."""
         # The descriptor is a duplicate of the parent's endpoint. shutdown()
         # would affect the shared socket object in both processes.
-        with self._lock:
-            sock = self._parent_sock
-            self._parent_sock = None
-        if sock is None:
-            return True
-        try:
-            sock.close()
-            return True
-        except OSError:
-            return False
+        return self._close_socket_attribute("_parent_sock", shutdown=False)
 
     def detach_inherited_child_copy(self):
         """Transfer the child FD out of an inherited owner after fork, without close."""
@@ -260,22 +291,36 @@ class OwnedClockBridge:
             raise ClockBridgeError("inherited child endpoint is unavailable")
         return sock.detach()
 
-    def _close_socket_attribute(self, name):
-        with self._lock:
+    def _close_socket_attribute(self, name, *, shutdown=True, nonblocking=False):
+        acquired = self._lock.acquire(blocking=not nonblocking)
+        if not acquired:
+            return None
+        endpoint = "parent" if name == "_parent_sock" else "child"
+        try:
             sock = getattr(self, name)
+            state = self._endpoint_state[endpoint]
             if sock is None:
-                return True
+                return state == "closed"
+            if state != "open":
+                return None if state == "closing" else False
             setattr(self, name, None)
-        error = None
-        try:
-            sock.shutdown(socket.SHUT_RDWR)
-        except OSError as caught:
-            error = caught
-        try:
-            sock.close()
-        except OSError as caught:
-            error = error or caught
-        return error is None
+            self._endpoint_state[endpoint] = "closing"
+            error = None
+            if shutdown:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError as caught:
+                    error = caught
+            try:
+                sock.close()
+            except OSError as caught:
+                error = error or caught
+            self._endpoint_state[endpoint] = "closed" if error is None else "uncertain"
+            if error is not None:
+                self._close_uncertain = True
+            return error is None
+        finally:
+            self._lock.release()
 
     def _serve(self):
         previous_offset = None
@@ -295,15 +340,8 @@ class OwnedClockBridge:
                     current = _offset_interval()
                     previous_offset = _intersect(previous_offset, current)
                     continue
-                packet, ancillary, flags, _address = sock.recvmsg(
-                    _REQUEST.size, socket.CMSG_SPACE(_CREDENTIALS.size))
-                if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC):
-                    return
-                credentials = [data for level, kind, data in ancillary
-                               if level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS]
-                if len(credentials) != 1 or len(credentials[0]) < _CREDENTIALS.size:
-                    return
-                peer_pid, peer_uid, _peer_gid = _CREDENTIALS.unpack(credentials[0][:_CREDENTIALS.size])
+                packet, credentials, _flags, _address = _recvmsg_checked(sock, _REQUEST.size)
+                peer_pid, peer_uid, _peer_gid = _decode_peer_credentials(credentials)
                 if (peer_pid != self._child_pid or peer_uid != self._child_uid
                         or len(packet) != _REQUEST.size):
                     return
@@ -340,42 +378,83 @@ class OwnedClockBridge:
         except (OSError, ClockBridgeError, ValueError, OverflowError):
             return
         finally:
+            self._stopping.set()
+            self._terminal = True
             self._close_socket_attribute("_parent_sock")
             self._maybe_release_slot()
 
     def stop(self):
-        """Fence the bridge without joining or waiting for the parent Clock."""
+        """Request stop without waiting for the owner lock or parent Clock."""
         self._stopping.set()
-        child_ok = self._close_socket_attribute("_child_sock")
-        parent_ok = self._close_socket_attribute("_parent_sock")
+        self._terminal = True
+        self._close_socket_attribute("_child_sock", nonblocking=True)
+        self._close_socket_attribute("_parent_sock", nonblocking=True)
         self._maybe_release_slot()
-        return child_ok and parent_ok
+        # True acknowledges the stop request only. Callers use close_complete
+        # and quiescent as the physical cleanup evidence.
+        return True
+
+    def finalize_stop(self):
+        """Retry deferred endpoint cleanup without retrying any closed FD."""
+        return self.stop()
 
     def confirm_child_reaped(self, pid):
-        if self._child_pid is None or pid != self._child_pid:
+        if not _exact_identity(pid, positive=True):
             return False
-        self._child_reaped = True
+        with self._lock:
+            if self._child_pid is None or pid != self._child_pid:
+                return False
+            self._child_reaped = True
         self._maybe_release_slot()
         return True
 
     @property
     def quiescent(self):
-        thread = self._server_thread
-        result = ((thread is None or not thread.is_alive())
-                  and (self._child_pid is None or self._child_reaped))
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            thread = self._server_thread
+            result = (self._terminal and not self._close_uncertain
+                      and all(state == "closed" for state in self._endpoint_state.values())
+                      and (thread is None or not thread.is_alive())
+                      and (self._child_pid is None or self._child_reaped))
+        finally:
+            self._lock.release()
         if result:
             self._maybe_release_slot()
         return result
 
+    @property
+    def close_complete(self):
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            return (not self._close_uncertain
+                    and all(state == "closed" for state in self._endpoint_state.values()))
+        finally:
+            self._lock.release()
+
+    @property
+    def close_uncertain(self):
+        return self._close_uncertain
+
     def _maybe_release_slot(self):
-        thread = self._server_thread
-        thread_done = thread is None or not thread.is_alive()
-        child_done = self._child_pid is None or self._child_reaped
-        if thread_done and child_done and self._slot_reserved:
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            thread = self._server_thread
+            ready = (self._terminal and not self._close_uncertain
+                     and all(state == "closed" for state in self._endpoint_state.values())
+                     and (thread is None or not thread.is_alive())
+                     and (self._child_pid is None or self._child_reaped))
+        finally:
+            self._lock.release()
+        if ready and self._slot_reserved:
             with _SLOT_LOCK:
                 if self._slot_reserved:
                     _SLOTS.discard(self)
                     self._slot_reserved = False
+        return ready
 
 
 @dataclass(frozen=True)
@@ -413,6 +492,8 @@ class ChildClockBridge:
         self._sequence = 1
         self._faulted = False
         self._closed = False
+        self._close_uncertain = False
+        self._state_lock = threading.Lock()
         self._generation_token = object()
         try:
             self._offset = _offset_interval()
@@ -426,13 +507,13 @@ class ChildClockBridge:
                             uncertainty_seconds=self._uncertainty,
                             resume_token=self._resume_token)
 
-    def _wait(self, event, deadline):
+    def _wait(self, sock, event, deadline):
         while True:
             remaining = deadline - time.clock_gettime(time.CLOCK_BOOTTIME)
             if remaining <= 0:
                 raise ClockBridgeError("clock bridge I/O deadline elapsed")
             poller = select.poll()
-            poller.register(self._sock, event | select.POLLHUP | select.POLLERR)
+            poller.register(sock, event | select.POLLHUP | select.POLLERR)
             result = poller.poll(max(1, min(50, int(remaining * 1000))))
             if result:
                 if result[0][1] & (select.POLLHUP | select.POLLERR):
@@ -441,8 +522,10 @@ class ChildClockBridge:
                     return
 
     def _exchange(self):
-        if self._faulted or self._closed:
-            raise ClockBridgeError("clock bridge failure is latched")
+        with self._state_lock:
+            if self._faulted or self._closed or self._sock is None:
+                raise ClockBridgeError("clock bridge failure is latched")
+            sock = self._sock
         before_offset = _offset_interval()
         self._offset = _intersect(self._offset, before_offset)
         send_mono_ns = time.monotonic_ns()
@@ -452,16 +535,15 @@ class ChildClockBridge:
         try:
             while True:
                 try:
-                    if self._sock.send(packet) != len(packet):
+                    if sock.send(packet) != len(packet):
                         raise ClockBridgeError("clock bridge request was incomplete")
                     break
                 except BlockingIOError:
-                    self._wait(select.POLLOUT, deadline)
+                    self._wait(sock, select.POLLOUT, deadline)
             while True:
-                self._wait(select.POLLIN, deadline)
+                self._wait(sock, select.POLLIN, deadline)
                 try:
-                    reply, ancillary, flags, _address = self._sock.recvmsg(
-                        _REPLY.size, socket.CMSG_SPACE(_CREDENTIALS.size))
+                    reply, credentials, flags, _address = _recvmsg_checked(sock, _REPLY.size)
                     break
                 except BlockingIOError:
                     continue
@@ -472,7 +554,8 @@ class ChildClockBridge:
             if receive_boot > deadline:
                 raise ClockBridgeError("clock bridge I/O deadline elapsed")
             wall, parent_mono, uncertainty, remote_offset = _decode_reply(
-                reply, ancillary, flags, self._metadata, self._nonce,
+                reply, credentials, flags,
+                self._metadata, self._nonce,
                 self._generation, self._sequence)
             send_mono, receive_mono = send_mono_ns / 1e9, receive_mono_ns / 1e9
             if not send_mono <= parent_mono <= receive_mono:
@@ -484,28 +567,45 @@ class ChildClockBridge:
             if (not math.isfinite(adjusted_wall) or not math.isfinite(adjusted_uncertainty)
                     or adjusted_uncertainty > 30):
                 raise ClockBridgeError("clock bridge uncertainty exceeds 30 seconds")
-            self._sequence += 1
-            return _ValidatedReply(adjusted_wall, receive_mono, adjusted_uncertainty,
-                                   self._offset)
+            with self._state_lock:
+                if self._closed:
+                    raise ClockBridgeError("clock bridge was stopped during sample")
+                self._sequence += 1
+                return _ValidatedReply(adjusted_wall, receive_mono, adjusted_uncertainty,
+                                       self._offset)
         except BaseException:
-            self._faulted = True
+            with self._state_lock:
+                self._faulted = True
             raise
 
     def _wall(self):
-        if self._snapshot is None:
-            self._snapshot = self._exchange()
-            self._snapshot_fields.clear()
-        return self._snapshot.wall
+        with self._state_lock:
+            if self._closed:
+                raise ClockBridgeError("clock bridge is stopped")
+            snapshot = self._snapshot
+        if snapshot is None:
+            snapshot = self._exchange()
+            with self._state_lock:
+                if self._closed:
+                    raise ClockBridgeError("clock bridge was stopped during sample")
+                if self._snapshot is None:
+                    self._snapshot = snapshot
+                    self._snapshot_fields.clear()
+                snapshot = self._snapshot
+        return snapshot.wall
 
     def _field(self, name):
-        if self._snapshot is None:
-            raise ClockBridgeError("clock callback order changed")
-        value = getattr(self._snapshot, name)
-        self._snapshot_fields.add(name)
-        if self._snapshot_fields == {"monotonic", "uncertainty", "resume_token"}:
-            self._snapshot = None
-            self._snapshot_fields.clear()
-        return value
+        with self._state_lock:
+            if self._closed:
+                raise ClockBridgeError("clock bridge is stopped")
+            if self._snapshot is None:
+                raise ClockBridgeError("clock callback order changed")
+            value = getattr(self._snapshot, name)
+            self._snapshot_fields.add(name)
+            if self._snapshot_fields == {"monotonic", "uncertainty", "resume_token"}:
+                self._snapshot = None
+                self._snapshot_fields.clear()
+            return value
 
     def _monotonic(self):
         return self._field("monotonic")
@@ -514,22 +614,29 @@ class ChildClockBridge:
         return self._field("uncertainty")
 
     def _resume_token(self):
-        if self._snapshot is None:
-            raise ClockBridgeError("clock callback order changed")
-        self._snapshot_fields.add("resume_token")
-        token = self._generation_token
-        if self._snapshot_fields == {"monotonic", "uncertainty", "resume_token"}:
-            self._snapshot = None
-            self._snapshot_fields.clear()
-        return token
+        with self._state_lock:
+            if self._closed:
+                raise ClockBridgeError("clock bridge is stopped")
+            if self._snapshot is None:
+                raise ClockBridgeError("clock callback order changed")
+            self._snapshot_fields.add("resume_token")
+            token = self._generation_token
+            if self._snapshot_fields == {"monotonic", "uncertainty", "resume_token"}:
+                self._snapshot = None
+                self._snapshot_fields.clear()
+            return token
 
     @property
     def clock(self):
         return self._clock
 
     def stop(self):
-        self._closed = True
-        sock, self._sock = self._sock, None
+        with self._state_lock:
+            if self._closed:
+                return not self._close_uncertain
+            self._closed = True
+            self._snapshot = None
+            sock, self._sock = self._sock, None
         if sock is None:
             return True
         error = None
@@ -541,4 +648,7 @@ class ChildClockBridge:
             sock.close()
         except OSError as caught:
             error = error or caught
+        if error is not None:
+            with self._state_lock:
+                self._close_uncertain = True
         return error is None

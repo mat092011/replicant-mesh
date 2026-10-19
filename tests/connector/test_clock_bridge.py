@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import json
+import array
 import os
 import select
 import socket
 import struct
 import sys
+import signal
+import threading
 import time
 import unittest
+from unittest import mock
 
 from steamboat_connector import clock_bridge as bridge_module
 from steamboat_connector.clock_bridge import (
@@ -22,7 +26,8 @@ _RESULT = struct.Struct("!cdd")
 _LINUX = sys.platform.startswith("linux") and hasattr(os, "fork")
 
 
-def _fork_clock_sample(owner, *, alter_metadata=None, stop_while_blocked=False):
+def _fork_clock_sample(owner, *, alter_metadata=None, stop_while_blocked=False,
+                       stop_after_cached_wall=False, send_rights_count=0):
     """Fork before the server thread starts; transfer closed handoff metadata."""
     metadata_read, metadata_write = os.pipe()
     result_read, result_write = os.pipe()
@@ -46,9 +51,37 @@ def _fork_clock_sample(owner, *, alter_metadata=None, stop_while_blocked=False):
             if alter_metadata is not None:
                 alter_metadata(metadata)
             try:
+                if send_rights_count:
+                    client = socket.socket(fileno=metadata["fd"])
+                    descriptors = [os.open(os.devnull, os.O_RDONLY)
+                                   for _ in range(send_rights_count)]
+                    try:
+                        request = bridge_module._REQUEST.pack(
+                            bridge_module._REQUEST_MAGIC,
+                            bytes.fromhex(metadata["server_nonce"]),
+                            bytes.fromhex(metadata["generation"]), 1)
+                        rights = array.array("i", descriptors).tobytes()
+                        client.sendmsg([request], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)])
+                    finally:
+                        for fd in descriptors:
+                            os.close(fd)
+                        client.close()
+                    result = _RESULT.pack(b"E", 0.0, 0.0)
+                    os.write(result_write, result)
+                    os._exit(0)
                 child = ChildClockBridge(metadata)
-                sample = child.clock.sample()
-                result = _RESULT.pack(b"O", sample.wall, sample.uncertainty)
+                if stop_after_cached_wall:
+                    child._wall()
+                    child.stop()
+                    try:
+                        child._monotonic()
+                    except ClockBridgeError:
+                        result = _RESULT.pack(b"E", 0.0, 0.0)
+                    else:
+                        result = _RESULT.pack(b"O", 0.0, 0.0)
+                else:
+                    sample = child.clock.sample()
+                    result = _RESULT.pack(b"O", sample.wall, sample.uncertainty)
             except BaseException as error:
                 result = _RESULT.pack(b"E", 0.0, 0.0)
             os.write(result_write, result)
@@ -79,6 +112,10 @@ def _fork_clock_sample(owner, *, alter_metadata=None, stop_while_blocked=False):
     _pid, status = os.waitpid(pid, 0)
     owner.confirm_child_reaped(pid)
     return payload, status
+
+
+def _open_fd_count():
+    return len(os.listdir("/proc/self/fd"))
 
 
 class ClockBridgeMetadataTests(unittest.TestCase):
@@ -147,6 +184,24 @@ class ClockBridgeTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(tag, b"E")
 
+    def test_cached_child_callbacks_fail_after_child_stop(self):
+        owner = self._owner()
+        payload, status = _fork_clock_sample(owner, stop_after_cached_wall=True)
+        tag, _, _ = _RESULT.unpack(payload)
+        self.assertEqual(status, 0)
+        self.assertEqual(tag, b"E")
+
+    def test_unexpected_rights_are_closed_before_server_rejects_request(self):
+        owner = self._owner()
+        before = _open_fd_count()
+        payload, status = _fork_clock_sample(owner, send_rights_count=40)
+        tag, _, _ = _RESULT.unpack(payload)
+        owner._server_thread.join(1.0)
+        owner.stop()
+        self.assertEqual(status, 0)
+        self.assertEqual(tag, b"E")
+        self.assertEqual(_open_fd_count(), before)
+
     def test_parent_without_known_uncertainty_fails_closed(self):
         owner = self._owner(Clock())
         payload, status = _fork_clock_sample(owner)
@@ -193,11 +248,102 @@ class ClockBridgeTests(unittest.TestCase):
     def test_global_generation_ceiling_includes_unbound_owners(self):
         self.assertEqual(active_clock_bridge_generations(), 0)
         owners = [self._owner() for _ in range(MAX_GENERATIONS)]
+        self.assertTrue(all(not owner.quiescent for owner in owners))
+        self.assertEqual(active_clock_bridge_generations(), MAX_GENERATIONS)
         with self.assertRaises(ClockBridgeError):
             OwnedClockBridge(Clock.system(uncertainty_seconds=lambda: 0.01))
         for owner in owners:
             self.assertTrue(owner.stop())
         self.assertEqual(active_clock_bridge_generations(), 0)
+
+    def test_unbound_quiescent_query_cannot_release_live_socket_owner(self):
+        owner = self._owner()
+        self.assertFalse(owner.quiescent)
+        self.assertFalse(owner.close_complete)
+        self.assertEqual(active_clock_bridge_generations(), 1)
+        owner.stop()
+        self.assertTrue(owner.close_complete)
+        self.assertTrue(owner.quiescent)
+        self.assertEqual(active_clock_bridge_generations(), 0)
+
+    def test_stop_ack_does_not_wait_for_owner_lock_and_defers_endpoint_close(self):
+        owner = self._owner()
+        owner._lock.acquire()
+        try:
+            started = time.monotonic()
+            self.assertTrue(owner.stop())
+            self.assertLess(time.monotonic() - started, 0.1)
+            self.assertFalse(owner.close_complete)
+            self.assertFalse(owner.quiescent)
+            self.assertEqual(active_clock_bridge_generations(), 1)
+        finally:
+            owner._lock.release()
+        owner.finalize_stop()
+        self.assertTrue(owner.close_complete)
+        self.assertTrue(owner.quiescent)
+        self.assertEqual(active_clock_bridge_generations(), 0)
+
+    def test_thread_start_failure_retains_actual_child_identity_until_reap(self):
+        owner = self._owner()
+        pid = os.fork()
+        if pid == 0:
+            owner.close_inherited_parent_copy()
+            signal.pause()
+            os._exit(0)
+        with mock.patch.object(threading.Thread, "start", side_effect=RuntimeError("blocked")):
+            with self.assertRaises(ClockBridgeError):
+                owner.bind_child(pid, os.getuid())
+        self.assertEqual(owner._child_pid, pid)
+        self.assertFalse(owner.quiescent)
+        owner.stop()
+        os.kill(pid, signal.SIGTERM)
+        os.waitpid(pid, 0)
+        self.assertTrue(owner.confirm_child_reaped(pid))
+        self.assertTrue(owner.quiescent)
+
+    def test_close_uncertainty_is_sticky_and_keeps_slot_reserved(self):
+        read_fd, write_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            os.close(read_fd)
+            owner = OwnedClockBridge(Clock.system(uncertainty_seconds=lambda: 0.01))
+            original_close = socket.socket.close
+            calls = []
+
+            def close_then_report_uncertain(sock):
+                calls.append(sock.fileno())
+                original_close(sock)
+                raise OSError("ambiguous close result")
+
+            with mock.patch.object(socket.socket, "close", close_then_report_uncertain):
+                owner.stop()
+                result = (owner.close_uncertain and not owner.close_complete
+                          and not owner.quiescent and active_clock_bridge_generations() == 1)
+                owner.stop()
+                result = result and len(calls) == 2
+            os.write(write_fd, b"1" if result else b"0")
+            os._exit(0)
+        os.close(write_fd)
+        result = os.read(read_fd, 1)
+        os.close(read_fd)
+        os.waitpid(pid, 0)
+        self.assertEqual(result, b"1")
+
+    def test_recvmsg_closes_delivered_rights_even_when_control_is_truncated(self):
+        left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        descriptors = [os.open(os.devnull, os.O_RDONLY) for _ in range(40)]
+        baseline = _open_fd_count()
+        try:
+            packed = array.array("i", descriptors).tobytes()
+            left.sendmsg([b"x"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, packed)])
+            with self.assertRaises(ClockBridgeError):
+                bridge_module._recvmsg_checked(right, 1)
+            self.assertEqual(_open_fd_count(), baseline)
+        finally:
+            left.close()
+            right.close()
+            for fd in descriptors:
+                os.close(fd)
 
     def test_offset_interval_rejects_suspend_discontinuity_and_boottime_exists(self):
         self.assertTrue(hasattr(time, "CLOCK_BOOTTIME"))
@@ -216,8 +362,7 @@ class ClockBridgeTests(unittest.TestCase):
         packet = bridge_module._REPLY.pack(bridge_module._REPLY_MAGIC,
             bytes.fromhex(metadata["server_nonce"]), bytes.fromhex(metadata["generation"]),
             1, 0, time.time(), time.monotonic(), 0.01, 1, 2)
-        credentials = [(socket.SOL_SOCKET, socket.SCM_CREDENTIALS,
-                        bridge_module._CREDENTIALS.pack(os.getpid(), os.getuid(), os.getgid()))]
+        credentials = bridge_module._CREDENTIALS.pack(os.getpid(), os.getuid(), os.getgid())
         self.assertEqual(bridge_module._decode_reply(packet, credentials, 0, metadata,
             bytes.fromhex(metadata["server_nonce"]), bytes.fromhex(metadata["generation"]), 1)[2], 0.01)
         with self.assertRaises(ClockBridgeError):

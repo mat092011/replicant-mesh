@@ -40,12 +40,16 @@ This is a same-kernel clock handoff. It does not measure network time accuracy,
 make the parent's Clock trusted, or prove that a separate remote device shares
 its clock domain.
 
-At most eight generations can be reserved process-wide. A slot is retained
-while its service thread remains alive or its child has not been confirmed
-reaped. `stop()` only sets the stop event and consumes/shuts down owned endpoint
-descriptors; it never joins the thread or waits on the Clock lock/provider.
-Callers must retain the owner until `quiescent` is true after actual child reap.
-An unresponsive parent Clock can leave a daemon service thread and its slot
+At most eight generations can be reserved process-wide. An unbound live owner
+is not quiescent and continues to consume its slot. A slot is released only
+after stop is terminal, both owned endpoints are confirmed closed, the service
+thread has actually ended, and any bound child has been confirmed reaped.
+`stop()` acknowledges the stop request and uses a nonblocking owner-lock
+acquisition; if cleanup is contended, `finalize_stop()` advances it later.
+Neither call joins the thread or waits on the Clock lock/provider. Ambiguous
+descriptor-close results are sticky and retain the owner and slot. Callers must
+retain the owner until `quiescent` is true after actual child reap. An
+unresponsive parent Clock can leave a daemon service thread and its slot
 retained until that provider returns; process restart is the recovery boundary.
 This bridge is a clock transport primitive, not a role process, readiness,
 policy, resource allocation or artifact authority.
