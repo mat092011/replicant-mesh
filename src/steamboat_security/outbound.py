@@ -594,7 +594,9 @@ class OutboundAuthorizer:
         return BootstrapContext(self._capability_owner,
                                 sample.monotonic + lifetime, max_describes)
 
-    def create_consumer_request_context(self, *, lifetime_seconds: float = 300.0) -> ConsumerRequestContext:
+    def create_consumer_request_context(
+        self, *, lifetime_seconds: float = 300.0, request_id: str | None = None
+    ) -> ConsumerRequestContext:
         if self.target.service != COORDINATOR_SERVICE:
             raise ScopeError("consumer request contexts are only for Coordinator calls")
         lifetime = _positive_seconds(lifetime_seconds, "consumer context lifetime",
@@ -605,7 +607,10 @@ class OutboundAuthorizer:
         view = self.snapshot_store.current(sample=sample)
         _verify_pinned_credential(self.snapshot_store, self.local_identity.certificate_pem,
                                   view, sample)
-        return ConsumerRequestContext(self._capability_owner, new_id("req"),
+        correlated_request_id = (
+            new_id("req") if request_id is None else validate_id(request_id, "req")
+        )
+        return ConsumerRequestContext(self._capability_owner, correlated_request_id,
                                       sample.monotonic + lifetime)
 
     def _worker_context_values(self, context) -> tuple[dict, object, float]:
