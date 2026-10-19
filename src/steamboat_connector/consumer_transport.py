@@ -371,6 +371,8 @@ class ConsumerRun:
                     failure = ConnectorError(
                         "CLEANUP_UNCERTAIN", "secure request context cleanup failed"
                     )
+            if context is not None and preserve_context:
+                self._transport._finish_context_driver(context)
             if failure is None:
                 if not self._result.done():
                     self._result.set_result(result)
@@ -603,8 +605,18 @@ class SecureConsumerTransport:
             if context is not None:
                 self._pending_contexts.add(context)
                 owner = self._pending_context_owners.setdefault(
-                    context, {"roots": set(), "generation": 0, "watcher": None}
+                    context,
+                    {
+                        "roots": set(),
+                        "generation": 0,
+                        "watcher": None,
+                        "driver_finished": False,
+                        "sticky_unknown": False,
+                        "driver_barrier": asyncio.Event(),
+                    },
                 )
+                if not tasks:
+                    owner["sticky_unknown"] = True
                 new_roots = set(tasks) - owner["roots"]
                 if new_roots:
                     owner["roots"].update(new_roots)
@@ -616,11 +628,26 @@ class SecureConsumerTransport:
                     )
                     owner["watcher"] = watcher
                     self._pending_watchers.add(watcher)
-                    watcher.add_done_callback(self._pending_watcher_done)
+                    watcher.add_done_callback(
+                        lambda done, owned_context=context: self._pending_watcher_done(
+                            owned_context, done
+                        )
+                    )
 
-    def _pending_watcher_done(self, task):
+    def _finish_context_driver(self, context):
+        with self._lock:
+            owner = self._pending_context_owners.get(context)
+            if owner is not None:
+                owner["driver_finished"] = True
+                owner["driver_barrier"].set()
+
+    def _pending_watcher_done(self, context, task):
         self._pending_watchers.discard(task)
         _observe_future(task)
+        with self._lock:
+            owner = self._pending_context_owners.get(context)
+            if owner is not None and owner["watcher"] is task:
+                owner["watcher"] = None
 
     async def _watch_context_tasks(self, context):
         while True:
@@ -637,6 +664,16 @@ class SecureConsumerTransport:
                     return
                 if owner["generation"] != generation:
                     continue
+                barrier = owner["driver_barrier"]
+            await barrier.wait()
+            with self._lock:
+                owner = self._pending_context_owners.get(context)
+                if owner is None:
+                    return
+                if owner["generation"] != generation:
+                    continue
+                if owner["sticky_unknown"] or not owner["driver_finished"]:
+                    return
                 context.close()
                 self._pending_contexts.discard(context)
                 del self._pending_context_owners[context]

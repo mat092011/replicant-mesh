@@ -306,6 +306,7 @@ class SecureConsumerTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(child_tasks), 1)
         self.assertIn(pending.exception.tasks[0], transport._pending_tasks)
         owner = transport._pending_context_owners[context]
+        transport._finish_context_driver(context)
         gate.set()
         await asyncio.wait_for(child_tasks[0], timeout=1)
         await asyncio.wait_for(owner["watcher"], timeout=1)
@@ -338,6 +339,7 @@ class SecureConsumerTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(child_tasks[0], transport._pending_tasks)
         self.assertFalse(context.closed)
         owner = transport._pending_context_owners[context]
+        transport._finish_context_driver(context)
         gate.set()
         await asyncio.wait_for(child_tasks[0], timeout=1)
         await asyncio.wait_for(owner["watcher"], timeout=1)
@@ -363,6 +365,7 @@ class SecureConsumerTransportTests(unittest.IsolatedAsyncioTestCase):
         transport = self.transport
         transport._mark_uncertain(SecureTaskPending((first,)), context)
         transport._mark_uncertain(SecureTaskPending((second,)), context)
+        transport._finish_context_driver(context)
         await asyncio.sleep(0)
         first_gate.set()
         await first
@@ -371,6 +374,67 @@ class SecureConsumerTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(transport.status()["pending_secure_tasks"], 1)
         nested_gate.set()
         await asyncio.wait_for(transport._pending_context_owners[context]["watcher"], 1)
+        self.assertTrue(context.closed)
+
+    async def test_unknown_cleanup_fault_is_sticky_after_known_tasks_finish(self):
+        gate = asyncio.Event()
+        context = FakeContext("req_" + "d" * 32, time.monotonic() + 30)
+
+        async def known_group():
+            await gate.wait()
+
+        known = asyncio.create_task(known_group())
+        self.transport._mark_uncertain(None, context)
+        self.transport._mark_uncertain(SecureTaskPending((known,)), context)
+        self.transport._finish_context_driver(context)
+        owner = self.transport._pending_context_owners[context]
+        gate.set()
+        await known
+        if owner["watcher"] is not None:
+            await asyncio.wait_for(owner["watcher"], 1)
+        self.assertTrue(owner["sticky_unknown"])
+        self.assertFalse(context.closed)
+
+    async def test_pending_generation_waits_for_driver_cleanup_before_context_close(
+        self,
+    ):
+        pending_gate = asyncio.Event()
+        cleanup_gate = asyncio.Event()
+        cleanup_started = asyncio.Event()
+
+        async def pending_rpc():
+            await pending_gate.wait()
+
+        pending = asyncio.create_task(pending_rpc())
+
+        class PendingThenCloseStream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise SecureTaskPending((pending,), "generation RPC remains pending")
+
+            async def aclose(self):
+                cleanup_started.set()
+                await cleanup_gate.wait()
+
+        client = FakeClient(generation=lambda *_args: PendingThenCloseStream())
+        authorizer = FakeAuthorizer()
+        transport = SecureConsumerTransport._for_tests(client, authorizer)
+        run = await transport.submit(self.submission())
+        await cleanup_started.wait()
+        pending_gate.set()
+        await pending
+        await asyncio.sleep(0.01)
+        context = authorizer.contexts[0]
+        self.assertFalse(context.closed)
+        self.assertIn(context, transport._pending_contexts)
+        cleanup_gate.set()
+        await asyncio.wait_for(run.closed, 1)
+        for _ in range(20):
+            if context.closed:
+                break
+            await asyncio.sleep(0)
         self.assertTrue(context.closed)
 
     async def test_immediate_cancel_before_driver_start_still_closes_run(self):
