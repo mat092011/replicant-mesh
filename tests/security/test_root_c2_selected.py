@@ -77,7 +77,7 @@ class C2SelectedCohortTests(unittest.TestCase):
 
     def _inputs(self, *, grant_fault=None, reuse_old_child=False,
                 payload_hash_fault=False, c1_domain=False, coordinator_only=False,
-                launch_fault=None, omit_new_group=False):
+                launch_fault=None, omit_new_group=False, expired_baseline=False):
         base = json.loads(self.candidate.activation_manifest)
         base["domain"] = ("steamboat.root-transition.activation-manifest.v1"
                            if c1_domain else C2_ACTIVATION_MANIFEST_DOMAIN)
@@ -118,10 +118,18 @@ class C2SelectedCohortTests(unittest.TestCase):
             checked = tuple(parse_role_launch_spec(x) for x in base["old_launch_specs"])
             base["old_launch_digest"] = canonical_role_launch_digest(checked)
 
+        baseline_payload = json.loads(self.candidate.policy_payload)
+        baseline_policy = self.candidate.signed_snapshot
+        if expired_baseline:
+            baseline_payload["expires_at"] = int(self.fx.clock_source.wall) + 100
+            baseline_policy = sign_snapshot(baseline_payload, self.fx.new_snapshot_key)
+            base["policy_revision"] = baseline_payload["revision"]
+            base["policy_digest"] = canonical_policy_digest(baseline_payload)
+            base["policy_payload_sha256"] = _sha(canonical_json(baseline_payload))
         manifest = canonical_json(base)
         artifacts = {
             "activation_manifest.json": manifest,
-            "policy_snapshot.json": self.candidate.signed_snapshot,
+            "policy_snapshot.json": baseline_policy,
             "ca_certificate.pem": self.fx.new_ca,
             "snapshot_signer_public.pem": self.fx.new_snapshot_public,
             "old_launch_specs.json": canonical_json(base["old_launch_specs"]),
@@ -152,7 +160,17 @@ class C2SelectedCohortTests(unittest.TestCase):
                     grant["not_before"] += 30
                 policy_payload["grants"].append(grant)
         active_policy = self.candidate.signed_snapshot
-        if coordinator_only or grant_fault:
+        if expired_baseline:
+            self.fx.clock_source.advance(120)
+            policy_payload["revision"] += 1
+            policy_payload["issued_at"] = int(self.fx.clock_source.wall)
+            expiry = min(int(self.fx.clock_source.wall) + 100,
+                         min(x["not_after"] for x in policy_payload["credentials"]))
+            policy_payload["expires_at"] = expiry
+            for grant in policy_payload["grants"]:
+                grant["not_after"] = expiry
+            active_policy = sign_snapshot(policy_payload, self.fx.new_snapshot_key)
+        elif coordinator_only or grant_fault:
             policy_payload["revision"] += 1
             active_policy = sign_snapshot(policy_payload, self.fx.new_snapshot_key)
         if payload_hash_fault:
@@ -231,13 +249,31 @@ class C2SelectedCohortTests(unittest.TestCase):
                                         clock=self.fx.clock_source.clock)
 
     def test_resigned_same_payload_must_match_exact_selector_snapshot_hash(self):
-        selector, bundle, _active, _ = self._inputs(grant_fault="none")
-        same_payload_resigned = sign_snapshot(
-            json.loads(self.candidate.policy_payload), self.fx.new_snapshot_key)
-        self.assertNotEqual(same_payload_resigned, self.candidate.signed_snapshot)
+        selector, bundle, active, _ = self._inputs(grant_fault="none")
+        same_payload = json.loads(active)["payload"]
+        same_payload_resigned = sign_snapshot(same_payload, self.fx.new_snapshot_key)
+        self.assertEqual(json.loads(same_payload_resigned)["payload"], same_payload)
+        self.assertNotEqual(same_payload_resigned, active)
+        corrected_selector = RootGenerationSelector(selector.generation_sha256,
+            selector.activation_manifest_sha256, selector.policy_revision,
+            selector.policy_digest, _sha(same_payload_resigned), selector.artifact_sha256)
+        validate_c2_selected_cohort(corrected_selector, bundle, same_payload_resigned,
+                                    clock=self.fx.clock_source.clock)
         with self.assertRaisesRegex(CredentialError, "active policy bytes"):
             validate_c2_selected_cohort(selector, bundle, same_payload_resigned,
                                         clock=self.fx.clock_source.clock)
+
+    def test_expired_immutable_baseline_allows_fresh_selected_policy(self):
+        selector, bundle, active, _ = self._inputs(
+            grant_fault="none", expired_baseline=True)
+        baseline = json.loads(bundle["policy_snapshot.json"])["payload"]
+        current = json.loads(active)["payload"]
+        sample = self.fx.clock_source.clock.sample()
+        self.assertLessEqual(baseline["expires_at"], sample.latest_wall)
+        self.assertGreater(current["expires_at"], sample.latest_wall)
+        cohort = validate_c2_selected_cohort(selector, bundle, active,
+                                            clock=self.fx.clock_source.clock)
+        self.assertEqual(cohort.policy_revision, current["revision"])
 
     def test_c1_domain_and_changed_selected_artifact_bytes_reject(self):
         selector, bundle, active, _ = self._inputs(c1_domain=True)
