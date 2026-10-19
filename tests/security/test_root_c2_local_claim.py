@@ -113,10 +113,10 @@ class C2LocalClaimTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix" and hasattr(os, "geteuid"), "native POSIX store")
     def test_remote_store_principal_reject(self):
-        with self.assertRaises(BindingError):
-            C2LocalClaimStore(self.root(), expected_uid=os.geteuid(),
-                account_id=self.account, device_id="dev_" + "9" * 32).claim(
-                    self.plan(), fresh_selected_validator=lambda _r: None)
+        with C2LocalClaimStore(self.root(), expected_uid=os.geteuid(),
+                account_id=self.account, device_id="dev_" + "9" * 32) as store:
+            with self.assertRaises(BindingError):
+                store.claim(self.plan(), fresh_selected_validator=lambda _r: None)
 
     @unittest.skipUnless(os.name == "posix" and hasattr(os, "geteuid"), "native POSIX store")
     def test_invalid_pinned_identity_is_rejected_before_filesystem_access(self):
@@ -244,14 +244,16 @@ class C2LocalClaimTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix" and hasattr(os, "O_NOFOLLOW"), "native POSIX store")
     def test_close_waits_for_root_fsync_and_prevents_fd_reuse_during_claim(self):
         root = self.root("lifetime")
+        original_close = os.close
+        replacement_fd = os.open(os.devnull, os.O_RDONLY)
         store = C2LocalClaimStore(root, expected_uid=os.geteuid(),
             account_id=self.account, device_id=self.device)
         root_fd = store._fd
+        self.assertNotEqual(root_fd, replacement_fd)
         fsync_entered, fsync_release = threading.Event(), threading.Event()
         close_started, close_done = threading.Event(), threading.Event()
         result, failure, reused_fd = [], [], []
         original_fsync = os.fsync
-        original_close = os.close
 
         def blocked_fsync(fd):
             if fd == root_fd and not fsync_entered.is_set():
@@ -266,7 +268,7 @@ class C2LocalClaimTests(unittest.TestCase):
         def do_close_and_reuse():
             close_started.set()
             store.close()
-            reused_fd.append(os.open(os.devnull, os.O_RDONLY))
+            reused_fd.append(os.dup2(replacement_fd, root_fd))
             close_done.set()
 
         claimant = threading.Thread(target=do_claim)
@@ -295,6 +297,7 @@ class C2LocalClaimTests(unittest.TestCase):
             if closer.is_alive(): closer.join(5)
             store.close()
             if reused_fd: original_close(reused_fd[0])
+            original_close(replacement_fd)
 
     @unittest.skipUnless(os.name == "posix", "native POSIX store")
     def test_callback_cannot_reenter_close_or_claim(self):
