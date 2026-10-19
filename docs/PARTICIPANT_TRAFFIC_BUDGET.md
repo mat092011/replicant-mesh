@@ -20,6 +20,12 @@ physical host allocation. Artifact transfers must use the owning runtime role's
 same ledger and reservations; this module does not provide a separate artifact
 budget.
 
+Normal construction opens an existing ledger and fails closed if it is missing;
+it never recreates quota during startup or restart. A trusted provisioning path
+must call the explicit `TrafficBudget.create_fresh(...)` API once. That API
+refuses an existing path, so a restart must use normal construction and retain
+the already charged counters.
+
 The closed policy schema is validated with the connector policy validator.
 Traffic reservations for all configured roles must sum to no more than the
 global send rate, receive rate, cumulative data bytes, cleanup send rate,
@@ -58,6 +64,12 @@ only known unused bytes can be refunded. An allowance whose reserve raised is
 never returned to the caller, and no restarted owner can reconstruct an
 allowance object from a ledger row. This is conservative accounting, not an
 exact commit-certainty or automatic-retry protocol.
+
+The persisted ledger is validated before use: aggregate and per-role charges
+must fit their configured cumulative caps, role counters must reconcile with
+global counters, and outstanding maxima by role, kind and direction must be
+covered by the already charged totals. This prevents a corrupted reservation
+from authorizing a refund larger than its backing charge.
 
 Data exhaustion rejects more data while cleanup tokens and cleanup quota remain
 independently usable. Storage or identity uncertainty rejects all admissions.

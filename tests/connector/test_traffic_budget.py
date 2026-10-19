@@ -1,6 +1,7 @@
 """Focused tests for the future C2 socket owner's aggregate meter primitive."""
 
 import multiprocessing
+import json
 import os
 import subprocess
 import sys
@@ -129,12 +130,31 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
             clock=Clock.system(uncertainty_seconds=lambda: 0.0),
             clock_domain=clock_identity(), policy=policy or _policy())
 
+    def _create_budget(self, state_path, policy=None):
+        from steamboat_runtime.protocol.clock import clock_identity
+        return TrafficBudget.create_fresh(
+            state_path, allocation_id=ALLOC, uid=os.getuid(),
+            clock=Clock.system(uncertainty_seconds=lambda: 0.0),
+            clock_domain=clock_identity(), policy=policy or _policy())
+
+    def test_normal_open_fails_closed_for_missing_ledger_and_fresh_creation_refuses_existing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            os.chmod(temporary, 0o700)
+            path = str(Path(temporary) / "traffic.json")
+            with self.assertRaises(TrafficBudgetError):
+                self._open_budget(path)
+            created = self._create_budget(path)
+            self.assertEqual(created.status()["global"]["charged"]["data"], 0)
+            with self.assertRaises(TrafficBudgetError):
+                self._create_budget(path)
+            self.assertEqual(self._open_budget(path).status()["global"]["charged"]["data"], 0)
+
     def test_independent_processes_share_one_role_ledger(self):
         with tempfile.TemporaryDirectory() as temporary:
             os.chmod(temporary, 0o700)
             state_path = str(Path(temporary) / "traffic.json")
             from steamboat_runtime.protocol.clock import clock_identity
-            budget = TrafficBudget(
+            budget = TrafficBudget.create_fresh(
                 state_path, allocation_id=ALLOC, uid=os.getuid(),
                 clock=Clock.system(uncertainty_seconds=lambda: 0.0),
                 clock_domain=clock_identity(), policy=_policy(global_total=900,
@@ -169,7 +189,7 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             os.chmod(temporary, 0o700)
             path = str(Path(temporary) / "traffic.json")
-            budget = self._open_budget(path)
+            budget = self._create_budget(path)
             budget.bind_role("host", BOOT_A)
             write = module.atomic_write_private
 
@@ -185,6 +205,20 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
             self.assertEqual(restarted.status()["global"]["charged"]["data"], 20)
             self.assertEqual(restarted.status()["outstanding"], 1)
 
+    def test_persistent_outstanding_maximum_cannot_exceed_backing_charge(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            os.chmod(temporary, 0o700)
+            path = str(Path(temporary) / "traffic.json")
+            budget = self._create_budget(path)
+            budget.bind_role("host", BOOT_A)
+            budget.reserve("host", BOOT_A, "send", "data", 20)
+            state = json.loads(Path(path).read_text(encoding="utf-8"))
+            state["reservations"][0]["max_bytes"] = 200
+            Path(path).write_text(json.dumps(state, sort_keys=True, separators=(",", ":")),
+                                  encoding="utf-8")
+            with self.assertRaises(TrafficBudgetError):
+                self._open_budget(path)
+
     def test_settlement_commit_failures_restart_conservatively_without_replay(self):
         import steamboat_connector.traffic_budget as module
 
@@ -192,7 +226,7 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
             with self.subTest(after_replace=after_replace), tempfile.TemporaryDirectory() as temporary:
                 os.chmod(temporary, 0o700)
                 path = str(Path(temporary) / "traffic.json")
-                budget = self._open_budget(path)
+                budget = self._create_budget(path)
                 budget.bind_role("host", BOOT_A)
                 allowance = budget.reserve("host", BOOT_A, "send", "data", 20)
                 write = module.atomic_write_private
@@ -206,6 +240,8 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
                     with self.assertRaises(TrafficBudgetError):
                         allowance.settle(5, outcome_known=True)
                 self.assertTrue(budget.status()["faulted"])
+                with self.assertRaises(TrafficBudgetError):
+                    allowance.settle(5, outcome_known=True)
                 restarted = self._open_budget(path)
                 status = restarted.status()
                 self.assertGreaterEqual(status["global"]["charged"]["data"], 5)
@@ -223,7 +259,7 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             os.chmod(temporary, 0o700)
-            budget = self._open_budget(str(Path(temporary) / "traffic.json"))
+            budget = self._create_budget(str(Path(temporary) / "traffic.json"))
             release = FileLock.release
             calls = []
 
@@ -449,6 +485,29 @@ class TrafficBudgetTests(unittest.TestCase):
         self.assertTrue(budget.status()["faulted"])
         with self.assertRaises(TrafficBudgetError):
             budget.bind_role("host", BOOT_A)
+
+    def test_failed_settlement_commit_never_caches_success(self):
+        class FailingCommitStore(MemoryTrafficStore):
+            def __init__(self):
+                super().__init__()
+                self.fail = False
+
+            def commit(self, state):
+                if self.fail:
+                    self.state = state
+                    raise OSError("simulated uncertain settlement commit")
+                super().commit(state)
+
+        store = FailingCommitStore()
+        budget, _, _ = _memory_budget(store=store)
+        budget.bind_role("host", BOOT_A)
+        allowance = budget.reserve("host", BOOT_A, "send", "data", 20)
+        store.fail = True
+        with self.assertRaises(TrafficBudgetError):
+            allowance.settle(5, outcome_known=True)
+        with self.assertRaises(TrafficBudgetError):
+            allowance.settle(5, outcome_known=True)
+        self.assertTrue(budget._faulted)
 
     def test_policy_reservations_must_fit_global_network_caps(self):
         policy = _policy(global_total=100, role_total=50)

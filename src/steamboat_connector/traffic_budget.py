@@ -199,6 +199,15 @@ def _validate_state(state, *, allocation_id, uid, clock_domain):
         if (item["status"] == "open") != (item["actual_bytes"] is None):
             raise TrafficBudgetError("allowance settlement state is inconsistent")
         identifiers.add(item["reservation_id"])
+    outstanding_global = {kind: 0 for kind in _COUNTERS}
+    outstanding_roles = {role: {kind: 0 for kind in _COUNTERS} for role in ROLE_NAMES}
+    outstanding_directions = {
+        role: {kind: {direction: 0 for direction in ("send", "receive")}
+               for kind in _COUNTERS} for role in ROLE_NAMES}
+    for item in state["reservations"]:
+        outstanding_global[item["kind"]] += item["max_bytes"]
+        outstanding_roles[item["role"]][item["kind"]] += item["max_bytes"]
+        outstanding_directions[item["role"]][item["kind"]][item["direction"]] += item["max_bytes"]
     for kind in _COUNTERS:
         if (state["global"]["observed"][kind] > state["global"]["charged"][kind]
                 or state["global"]["uncertain_bytes"][kind]
@@ -210,6 +219,20 @@ def _validate_state(state, *, allocation_id, uid, clock_domain):
             raise TrafficBudgetError("global and role observed byte counts disagree")
         if sum(role["uncertain_bytes"][kind] for role in state["roles"].values()) != state["global"]["uncertain_bytes"][kind]:
             raise TrafficBudgetError("global and role traffic uncertainty disagrees")
+        global_total = policy["limits"]["total_network_bytes" if kind == "data"
+                                       else "cleanup_total_network_bytes"]
+        if (outstanding_global[kind] > state["global"]["charged"][kind]
+                or state["global"]["charged"][kind] > global_total):
+            raise TrafficBudgetError("global outstanding traffic exceeds its backing charge")
+        for role in ROLE_NAMES:
+            counters = state["roles"][role]
+            role_total = policy["reservations"].get(role, {}).get(
+                "total_network_bytes" if kind == "data" else "cleanup_total_network_bytes", 0)
+            if (outstanding_roles[role][kind] > counters["charged"][kind]
+                    or counters["charged"][kind] > role_total
+                    or any(value > counters["charged"][kind]
+                           for value in outstanding_directions[role][kind].values())):
+                raise TrafficBudgetError("role outstanding traffic exceeds its backing charge")
     return state
 
 
@@ -222,7 +245,7 @@ class TrafficBudget:
     """
 
     def __init__(self, state_path, *, allocation_id, uid, clock, clock_domain,
-                 policy):
+                 policy, _create_new=False):
         self._configure_common(allocation_id, uid, clock, clock_domain, policy)
         if not isinstance(state_path, (str, os.PathLike)):
             raise TrafficBudgetError("persistent traffic state path is required")
@@ -236,7 +259,14 @@ class TrafficBudget:
             raise TrafficBudgetError("traffic ledger UID must be the current owner UID")
         descriptor = open_private_directory(self.path.parent, uid=uid)
         os.close(descriptor)
-        self._initialize_persistent()
+        self._initialize_persistent(create_new=_create_new)
+
+    @classmethod
+    def create_fresh(cls, state_path, *, allocation_id, uid, clock, clock_domain,
+                     policy):
+        """Explicitly create a new ledger; fails if the path already exists."""
+        return cls(state_path, allocation_id=allocation_id, uid=uid, clock=clock,
+                   clock_domain=clock_domain, policy=policy, _create_new=True)
 
     @classmethod
     def for_tests(cls, *, store, allocation_id, uid, clock, clock_domain, policy):
@@ -338,7 +368,7 @@ class TrafficBudget:
             raise TrafficBudgetError("traffic ledger lock acquisition failed",
                                      retained_owner=self) from error
 
-    def _initialize_persistent(self):
+    def _initialize_persistent(self, *, create_new=False):
         lock = FileLock(self.lock_path, uid=self.uid, timeout=0)
         try:
             self._acquire_transaction_lock(lock)
@@ -348,7 +378,11 @@ class TrafficBudget:
         try:
             try:
                 state = read_private_json(self.path, maximum_size=MAX_STATE_BYTES, uid=self.uid)
+                if create_new:
+                    raise TrafficBudgetError("fresh traffic ledger path already exists")
             except FileNotFoundError:
+                if not create_new:
+                    raise TrafficBudgetError("persistent traffic ledger does not exist")
                 state = _new_state(self.allocation_id, self.uid, self.clock_domain,
                                    self._requested_policy, self._sample_mono_ns())
                 self._write_state(state)
@@ -626,10 +660,14 @@ class TrafficBudget:
             raise TrafficBudgetError("allowance token is forged, foreign, or retired")
         self._record_token_owner(allowance)
         requested = (actual_bytes, outcome_known)
-        if allowance._settlement is not None:
-            if allowance._settlement[0] != requested:
-                raise TrafficBudgetError("allowance settlement cannot be changed")
-            return dict(allowance._settlement[1])
+        with self._owner_guard():
+            if self._faulted:
+                raise TrafficBudgetError(self._fault_reason or "traffic ledger owner is faulted",
+                                         retained_owner=self)
+            if allowance._settlement is not None:
+                if allowance._settlement[0] != requested:
+                    raise TrafficBudgetError("allowance settlement cannot be changed")
+                return dict(allowance._settlement[1])
         if self._live_allowances.get(allowance._reservation_id) is not allowance:
             raise TrafficBudgetError("allowance token is forged, foreign, or retired")
         result = None
@@ -668,10 +706,10 @@ class TrafficBudget:
             result = {"actual_bytes": actual_bytes, "charged_bytes": reserved - refund,
                       "refunded_bytes": refund, "outcome_known": outcome_known,
                       "uncertain": not certain}
-            object.__setattr__(allowance, "_settlement", (requested, result))
-            if not result["uncertain"]:
-                self._live_allowances.pop(allowance._reservation_id, None)
-                object.__setattr__(allowance, "_retired", True)
+        object.__setattr__(allowance, "_settlement", (requested, result))
+        if not result["uncertain"]:
+            self._live_allowances.pop(allowance._reservation_id, None)
+            object.__setattr__(allowance, "_retired", True)
         if result["uncertain"]:
             # Retain the token: it documents the unresolved I/O outcome. It is
             # not admitted again and is purged only during generation reclaim.
