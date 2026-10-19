@@ -414,6 +414,17 @@ class OwnerConsentStore:
             with self._file_lock():
                 return self._read_owned()
 
+    @contextmanager
+    def serialized_snapshot(self):
+        """Hold owner serialization while reading without advancing its epoch.
+
+        Intended for a final read-only cross-store comparison. Do not perform
+        durable policy work, process startup, or readiness waits in this scope.
+        """
+        with self._operation():
+            with self._file_lock():
+                yield self._read_owned()
+
     def _bump(self, old, roles):
         if old.epoch >= MAX_EPOCH:
             raise StorageError("owner consent epoch is exhausted")

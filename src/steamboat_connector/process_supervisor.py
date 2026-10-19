@@ -660,7 +660,8 @@ class ProcessRoleBackend:
             watchdog.wake.set()
 
     def spawn_owned_start(self, role, policy, *, cancel_event=None,
-                          before_popen_check=None, expected_role_config_sha256=None):
+                          before_popen_check=None, expected_role_config_sha256=None,
+                          expected_artifact_pin=None):
         if (cancel_event is not None
                 and not callable(getattr(cancel_event, "is_set", None))):
             return None
@@ -723,6 +724,10 @@ class ProcessRoleBackend:
                 return None
             with self._lock:
                 configured_pin = self._pinned_roles.get(role)
+                if (expected_artifact_pin is not None
+                        and (configured_pin is None
+                             or configured_pin[0] is not expected_artifact_pin)):
+                    return None
             role_config = self._configured_role(role)
             if role_config is None or self._cancelled(intent, cancel_event):
                 return None
@@ -738,9 +743,11 @@ class ProcessRoleBackend:
                                              maximum_size=ROLE_CONFIG_MAX_BYTES)
             except (OSError, StorageError):
                 return None
-            if (expected_role_config_sha256 is not None
-                    and hashlib.sha256(json_bytes(document.get("config"))).hexdigest()
-                    != expected_role_config_sha256):
+            if (type(document) is not dict or type(document.get("config")) is not dict
+                    or (expected_role_config_sha256 is not None
+                        and hashlib.sha256(json_bytes(role_config)).hexdigest()
+                        != expected_role_config_sha256)
+                    or document.get("config") != role_config):
                 return None
             if (type(document) is not dict
                     or ("artifact_pin" in document) != (pin_metadata is not None)

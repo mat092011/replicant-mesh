@@ -656,6 +656,40 @@ class ProcessSupervisorTests(unittest.TestCase):
             spawn.assert_not_called()
         self.assertEqual(self.cgroup.groups, [])
 
+    def test_owned_start_rejects_two_read_role_config_replacement_before_popen(self):
+        import steamboat_connector.process_supervisor as supervisor
+        original = supervisor.read_private_json
+        calls = 0
+
+        def replaced(path, **kwargs):
+            nonlocal calls
+            calls += 1
+            document = original(path, **kwargs)
+            if calls == 2:
+                document = dict(document)
+                document["config"] = {"test_mode": False}
+            return document
+
+        with mock.patch.object(supervisor, "read_private_json", side_effect=replaced), \
+                mock.patch.object(supervisor.subprocess, "Popen") as spawn:
+            self.assertIsNone(self.backend.spawn_owned_start(
+                "host", sample_policy(), expected_role_config_sha256="0" * 64))
+            spawn.assert_not_called()
+        self.assertEqual(calls, 2)
+        self.assertEqual(self.cgroup.groups, [])
+
+    def test_owned_start_rejects_replaced_artifact_pin_before_popen(self):
+        expected = object()
+        with mock.patch.object(self.backend, "_pinned_roles", {
+                "host": (object(), object(), None)}):
+            # Pin identity is checked after start intent acquisition under the
+            # backend lock and before configuration/cgroup/Popen work.
+            with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as spawn:
+                self.assertIsNone(self.backend.spawn_owned_start(
+                    "host", sample_policy(), expected_artifact_pin=expected))
+                spawn.assert_not_called()
+        self.assertEqual(self.cgroup.groups, [])
+
     def test_stop_cancels_queued_start_before_any_spawn(self):
         entered = threading.Event()
         release = threading.Event()

@@ -150,11 +150,12 @@ class C2LocalStartup:
                         configuration_root=reference.configuration_root,
                         expected_uid=self._uid)
                 binding.assert_live()
+                pin = self._assert_pin_matches(role, binding, spec)
                 expected = closed_role_config(reference, selected_root=selected_root, role=role)
                 if (self._backend._configured_role(role) != expected
                         or role not in self._backend._pinned_roles):
                     raise CredentialError("backend config and artifact pin do not match closed C2 profile")
-                bindings[role] = binding
+                bindings[role] = (binding, pin)
 
             connector_roles = tuple(sorted("coordinator" if r == "coordinator" else "host"
                                            for r in roles))
@@ -162,19 +163,25 @@ class C2LocalStartup:
             with self._owner.begin_start(connector_roles, cancel_event=cancel_event) as owner:
                 self._check_owner(owner)
                 def validate_selected(selector, bundle, active_policy):
+                    owner_selected_roles = self._selected_owner_roles(owner)
                     plan = derive_c2_local_plan(selector, dict(bundle), active_policy,
                         clock=self._clock, account_id=self._account, device_id=self._device,
-                        enable_epoch=owner.epoch, enabled_roles=owner.enabled_roles)
+                        enable_epoch=owner.epoch, enabled_roles=owner_selected_roles)
                     if tuple(sorted(plan.enabled_roles)) != requested:
                         raise CredentialError("fresh selected plan differs from explicit roles")
                     for role in roles:
                         matches = [s for s in plan.enabled_specs if s.role == _SELECTED_ROLE[role]]
                         if len(matches) != 1 or matches[0] != self._references[role].launch_spec:
                             raise CredentialError("fresh selected spec differs from trusted reference")
+                    for binding, _pin in bindings.values():
+                        if hasattr(binding, "_check_protected_files"):
+                            binding._check_protected_files()
+                        else:
+                            binding._files_unchanged()
                     def fresh_claim_validator(_record):
                         fresh = derive_c2_local_plan(selector, dict(bundle), active_policy,
                             clock=self._clock, account_id=self._account, device_id=self._device,
-                            enable_epoch=owner.epoch, enabled_roles=owner.enabled_roles)
+                            enable_epoch=owner.epoch, enabled_roles=owner_selected_roles)
                         if c2_local_plan_document(fresh) != c2_local_plan_document(plan):
                             raise CredentialError("fresh local claim plan changed")
                         return None
@@ -190,7 +197,8 @@ class C2LocalStartup:
                             before_popen_check=before_popen_check,
                             expected_role_config_sha256=hashlib.sha256(
                                 json_bytes(closed_role_config(self._references[role],
-                                    selected_root=selected_root, role=role))).hexdigest())
+                                    selected_root=selected_root, role=role))).hexdigest(),
+                            expected_artifact_pin=bindings[role][1])
                         if handle is None:
                             raise C2LocalStartupError("backend refused owned process publication")
                         handles.append(handle)
@@ -206,23 +214,31 @@ class C2LocalStartup:
                     raise C2LocalStartupError("owned role did not become ready")
                 ready.append(handle._role)
 
-            final = self._owner.snapshot()
-            self._check_owner(final)
-            fresh = {}
-            def validate_final(selector, bundle, active_policy):
-                fresh["plan"] = derive_c2_local_plan(selector, dict(bundle), active_policy,
-                    clock=self._clock, account_id=self._account, device_id=self._device,
-                    enable_epoch=final.epoch, enabled_roles=final.enabled_roles)
-                return None
-            self._root.read_selected(validate=validate_final)
-            if (final.epoch != captured["plan"].enable_epoch
-                    or c2_local_plan_document(fresh.get("plan"))
-                       != c2_local_plan_document(captured["plan"])):
-                raise C2LocalStartupError("owner consent or selected head changed during startup")
-            for binding in bindings.values():
-                binding.assert_live()
-            return C2LocalStartupResult(captured["plan"].localplan_sha256,
-                captured["receipt"].record.claim_sha256, tuple(ready))
+            with self._owner.serialized_snapshot() as final:
+                self._check_owner(final)
+                fresh = {}
+                def validate_final(selector, bundle, active_policy):
+                    fresh["plan"] = derive_c2_local_plan(selector, dict(bundle), active_policy,
+                        clock=self._clock, account_id=self._account, device_id=self._device,
+                        enable_epoch=final.epoch,
+                        enabled_roles=self._selected_owner_roles(final))
+                    for binding, _pin in bindings.values():
+                        if hasattr(binding, "_check_protected_files"):
+                            binding._check_protected_files()
+                        else:
+                            binding._files_unchanged()
+                    return None
+                self._root.read_selected(validate=validate_final)
+                if (final.epoch != captured["plan"].enable_epoch
+                        or c2_local_plan_document(fresh.get("plan"))
+                           != c2_local_plan_document(captured["plan"])):
+                    raise C2LocalStartupError("owner consent or selected head changed during startup")
+                if cancel_event.is_set():
+                    raise C2LocalStartupError("startup cancelled before returning its inert result")
+                for binding, _pin in bindings.values():
+                    binding.assert_live()
+                return C2LocalStartupResult(captured["plan"].localplan_sha256,
+                    captured["receipt"].record.claim_sha256, tuple(ready))
         except BaseException:
             if handles:
                 owned_roles = tuple(sorted({handle._role for handle in handles}))
@@ -236,6 +252,71 @@ class C2LocalStartup:
         if (type(snapshot) is not OwnerConsentSnapshot
                 or (snapshot.account_id, snapshot.device_id) != (self._account, self._device)):
             raise CredentialError("trusted owner snapshot differs from pinned principal")
+
+    @staticmethod
+    def _selected_owner_roles(snapshot):
+        if "consumer" in snapshot.enabled_roles:
+            raise C2LocalStartupError("consumer consent has no process-owned C2 adapter")
+        return tuple(sorted(_SELECTED_ROLE[role] for role in snapshot.enabled_roles))
+
+    def _assert_pin_matches(self, role, binding, spec):
+        from steamboat_connector.aggregate_artifact_pin import RuntimeArtifactGroupPin
+        from steamboat_connector.artifact_pin import RuntimeArtifactPin
+        with self._backend._lock:
+            entry = self._backend._pinned_roles.get(role)
+        if type(entry) is not tuple or len(entry) != 3:
+            raise CredentialError("role has no exact pinned runtime authority")
+        pin, verifier, _metadata = entry
+        if ((role == "host" and type(pin) is not RuntimeArtifactGroupPin)
+                or (role == "coordinator" and type(pin) is not RuntimeArtifactPin)):
+            raise CredentialError("role is not backed by its exact native artifact pin type")
+        if getattr(pin, "clock", None) is not self._clock:
+            raise CredentialError("artifact pin does not use the startup Clock")
+        if getattr(verifier, "clock", None) is not self._clock:
+            raise CredentialError("artifact pin verifier does not use the startup Clock")
+        record = getattr(pin, "record", None)
+        if (type(record) is not dict and not hasattr(record, "get")):
+            raise CredentialError("artifact pin has no closed local record")
+        if (record.get("account_id"), record.get("device_id"), record.get("role")) != (
+                self._account, self._device, role):
+            raise CredentialError("artifact pin principal/role differs from local launch")
+        pin.assert_open_descriptors()
+        catalog = verifier.verify_catalog(pin.signed_catalog)
+        if role == "host":
+            scope = binding.scope
+            if record.get("runtime_boot_id") != spec.boot_id:
+                raise CredentialError("host artifact pin runtime boot differs from selected parent boot")
+            pinned = []
+            for assignment_id, authority in pin._authorities.items():
+                assignment = verifier.verify_assignment(authority.assignment_bytes, catalog,
+                    account_id=self._account, device_id=self._device, role="host")
+                payload = assignment.payload
+                if (payload.get("manifest_fingerprint") != scope.model_id
+                        or payload.get("assignment_id") != assignment_id
+                        or payload.get("component") != authority.component
+                        or payload.get("account_id") != self._account
+                        or payload.get("device_id") != self._device
+                        or payload.get("role") != "host"):
+                    raise CredentialError("host pin signed manifest fingerprint differs from selected model")
+                pinned.append((authority.component, assignment_id, authority.worker_boot_id))
+            expected = [(item.component, item.assignment_id, item.worker_boot_id)
+                        for item in scope.components]
+            if sorted(pinned) != sorted(expected):
+                raise CredentialError("host artifact pin child tuple differs from selected host scope")
+        else:
+            if record.get("boot_id") != spec.boot_id:
+                raise CredentialError("coordinator artifact pin boot differs from selected role boot")
+            assignment = verifier.verify_assignment(pin.signed_assignment, catalog,
+                account_id=self._account, device_id=self._device, role="coordinator")
+            payload = assignment.payload
+            if (payload.get("manifest_fingerprint") != binding._model_id
+                    or payload.get("assignment_id") != record.get("assignment_id")
+                    or payload.get("component") != "coordinator"
+                    or payload.get("account_id") != self._account
+                    or payload.get("device_id") != self._device
+                    or payload.get("role") != "coordinator"):
+                raise CredentialError("coordinator signed manifest fingerprint differs from selected model")
+        return pin
 
     def _selected_root(self):
         import os

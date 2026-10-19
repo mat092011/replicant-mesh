@@ -121,6 +121,39 @@ class OwnerConsentTests(unittest.TestCase):
         return OwnerConsentStore(self.root, expected_uid=os.geteuid(),
                                  account_id=ACCOUNT, device_id=DEVICE, **kwargs)
 
+    def test_serialized_snapshot_holds_read_only_owner_lock_without_epoch_bump(self):
+        import fcntl
+        store = self.store()
+        self.addCleanup(store.close)
+        store.set_role_enabled("host", True)
+        blocked = threading.Event()
+        changed = threading.Event()
+        original_flock = fcntl.flock
+
+        def observed_flock(fd, operation):
+            if operation == fcntl.LOCK_EX:
+                try:
+                    original_flock(fd, operation | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    blocked.set()
+                else:
+                    return None
+            return original_flock(fd, operation)
+
+        with store.serialized_snapshot() as snapshot:
+            self.assertEqual(snapshot.epoch, 1)
+            with mock.patch.object(fcntl, "flock", side_effect=observed_flock):
+                thread = threading.Thread(target=lambda: (
+                    store.set_role_enabled("host", False), changed.set()))
+                thread.start()
+                self.assertTrue(blocked.wait(2))
+                self.assertFalse(changed.is_set())
+                self.assertEqual(snapshot.enabled_roles, ("host",))
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(changed.is_set())
+        self.assertEqual(store.snapshot().epoch, 2)
+
     def test_explicit_provisioning_starts_disabled_and_principal_is_pinned(self):
         with self.store() as store:
             snapshot = store.snapshot()
