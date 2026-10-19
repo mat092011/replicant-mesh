@@ -158,16 +158,24 @@ class ChannelStream:
     @property
     def transport_bootstrap_complete(self):
         """True after HELLO/ACK is committed and any server ACK is fully sent."""
+        if self._bootstrap_complete and not self._closed:
+            with self._lock:
+                self._require_ready()
         return self._bootstrap_complete and not self._closed
 
     @property
     def registration(self):
         if not self._server or not self.transport_bootstrap_complete:
             return None
-        registration = self._hello.registration
-        if registration is not None:
-            registration.assert_live()
-        return registration
+        with self._lock:
+            self._require_ready()
+            try:
+                registration = self._hello.registration
+                if registration is not None:
+                    registration.assert_live()
+                return registration
+            except Exception as error:
+                self._retire("worker registration is no longer live", error)
 
     @property
     def writer(self):
@@ -364,6 +372,7 @@ class ChannelStream:
             if self._incoming_cleanup_mode:
                 return
             try:
+                self._decoder.enter_control_only()
                 self._driver.set_incoming_cleanup_mode(True)
             except Exception as error:
                 self._retire("could not enter incoming cleanup-only mode", error)
@@ -399,13 +408,17 @@ class ChannelStream:
         self._require_live()
         self._check_owner_binding()
         self._assert_owner_live()
-        if not self.transport_bootstrap_complete:
+        if not self._bootstrap_complete:
             raise ChannelStreamError("HELLO/ACK transport bootstrap is incomplete")
 
     def _assert_owner_live(self):
         if (type(self._hello) is WorkerHelloClient
                 and self._hello.ingress.poll_unavailable()):
             self._retire("worker ingress policy or heartbeat expired")
+        try:
+            self._tls.assert_transport_live()
+        except Exception as error:
+            self._retire("TLS owner policy, clock, or credential is no longer live", error)
 
     def _retire(self, reason, cause=None):
         if self._closed:
@@ -446,11 +459,12 @@ def is_registered_worker_channel_stream(value):
     with _STREAM_LOCK:
         if value not in _REGISTERED_WORKER_STREAMS:
             return False
-    if (not value.transport_bootstrap_complete or value.closed
-            or type(value._hello) is not WorkerHelloServer
-            or value._writer is None or type(value._writer) is not ChannelFragmentWriter):
-        return False
     try:
+        if (not value.transport_bootstrap_complete or value.closed
+                or type(value._hello) is not WorkerHelloServer
+                or value._writer is None
+                or type(value._writer) is not ChannelFragmentWriter):
+            return False
         registration = value.registration
         if registration is None:
             return False

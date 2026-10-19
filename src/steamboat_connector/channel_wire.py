@@ -241,6 +241,7 @@ class FragmentDecoder:
         self._lanes = {"data": None, "control": None}
         self._fault = False
         self._feed_active = False
+        self._control_only = False
 
     @property
     def reservation_bound_bytes(self):
@@ -283,6 +284,17 @@ class FragmentDecoder:
     def _fail(self, message):
         self._poison()
         raise ChannelWireError(message)
+
+    def enter_control_only(self):
+        """Irreversibly reject data headers before accepting their payload."""
+        if self._fault:
+            raise ChannelWireError("decoder is permanently faulted")
+        if self._feed_active:
+            self._fail("cannot change decoder mode while a feed iterator is active")
+        if (self._frame_used or self._header is not None
+                or any(self._lanes.values())):
+            self._fail("cannot enter control-only mode with a partial frame or message")
+        self._control_only = True
 
     def feed(self, data):
         """Yield complete messages as they become available.
@@ -356,6 +368,8 @@ class FragmentDecoder:
     def _validate_header(self, header):
         magic, kind, flags, reserved, generation, sequence, message_id, index, length = header
         lane = self._lane(kind)
+        if self._control_only and kind in DATA_KINDS:
+            raise ChannelWireError("data fragment header rejected in control-only mode")
         if (magic != FRAGMENT_MAGIC or reserved != 0 or flags & ~(START | END)
                 or generation != self.expected_generation or message_id == bytes(16)
                 or sequence != self._next_sequence or sequence > MAX_SEQUENCE

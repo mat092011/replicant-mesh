@@ -379,6 +379,40 @@ class ChannelWireTests(unittest.TestCase):
                         wire.decode_bundle(raw + b"x" * size,
                                            fragment_kind=wire.RESPONSE)
 
+    def test_control_only_rejects_data_header_before_fragment_payload(self):
+        payload = b"x" * (40 * 1024)
+        first = next(iter(wire.iter_fragments(
+            payload, kind=wire.DATA, generation=GENERATION, message_id=DATA_ID,
+            first_sequence=1)))
+        header_bytes = wire.FRAGMENT_HEADER_BYTES
+        header = first[:header_bytes]
+        self.assertEqual(len(first), header_bytes + wire.MAX_FRAGMENT_BYTES)
+        decoder = wire.FragmentDecoder(GENERATION, reassembly_capacity=64 * 1024)
+        decoder.enter_control_only()
+        split = header_bytes // 2
+        self.assertEqual(list(decoder.feed(header[:split])), [])
+        with self.assertRaises(wire.ChannelWireError):
+            list(decoder.feed(header[split:]))
+        self.assertTrue(decoder._fault)
+        self.assertIsNone(decoder._lanes["data"])
+        self.assertEqual(decoder._buffers["data"], bytes(len(decoder._buffers["data"])))
+
+    def test_control_only_entry_retires_partial_data_message_or_header(self):
+        payload = b"x" * (40 * 1024)
+        first = next(iter(wire.iter_fragments(
+            payload, kind=wire.DATA, generation=GENERATION, message_id=DATA_ID,
+            first_sequence=1)))
+        for partial in (first, first[:wire.FRAGMENT_HEADER_BYTES // 2]):
+            with self.subTest(partial_bytes=len(partial)):
+                decoder = wire.FragmentDecoder(GENERATION,
+                                               reassembly_capacity=64 * 1024)
+                list(decoder.feed(partial))
+                with self.assertRaises(wire.ChannelWireError):
+                    decoder.enter_control_only()
+                self.assertTrue(decoder._fault)
+                self.assertIsNone(decoder._lanes["data"])
+                self.assertEqual(decoder._frame_used, 0)
+
     def test_pending_lanes_reject_count_and_byte_pressure_and_prioritize_control(self):
         lanes = wire.PendingMessageLanes(byte_capacity=6, data_capacity=1, control_capacity=1)
         data = wire.DecodedMessage(wire.DATA, GENERATION, DATA_ID, 1, 1, b"1234")

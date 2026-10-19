@@ -5,10 +5,12 @@ from __future__ import annotations
 import secrets
 import select
 import socket
+import struct
 import time
 import unittest
 
 from steamboat_connector.channel_hello import WorkerHelloClient, WorkerHelloServer
+from steamboat_connector import channel_wire as wire
 from steamboat_connector.channel_socket import ChannelSocket, ChannelSocketError
 from steamboat_connector.channel_stream import (
     ChannelStream, ChannelStreamError, is_registered_worker_channel_stream,
@@ -42,6 +44,7 @@ class LimitedSocket:
         self.max_send = max_send
         self.block_first_send = block_first_send
         self.send_calls = 0
+        self.recv_calls = 0
         self.sent = bytearray()
         self.received = bytearray()
 
@@ -61,6 +64,7 @@ class LimitedSocket:
         return count
 
     def recv(self, size):
+        self.recv_calls += 1
         result = self.sock.recv(size)
         self.received.extend(result)
         return result
@@ -269,6 +273,77 @@ class ChannelStreamTests(unittest.TestCase):
         self.assertTrue(server.closed)
         self.assertGreater(self.store.state["global"]["observed"]["cleanup"], 0)
         self.assertFalse(is_registered_worker_channel_stream(server))
+
+    def test_cleanup_header_rejection_retires_before_another_socket_read(self):
+        client, server, client_sock, server_sock, _client_tls, _server_tls = self._bootstrap_pair(
+            capture_wire=True)
+        self.addCleanup(client.close)
+        self.addCleanup(server.close)
+        self.addCleanup(client_sock.close)
+        self.addCleanup(server_sock.close)
+        self._progress(client, server,
+                       lambda: client.transport_bootstrap_complete
+                       and server.transport_bootstrap_complete)
+        server.enter_incoming_cleanup_mode()
+        client.enqueue(kind=DATA, message_id=secrets.token_bytes(16),
+                       payload=encode_bundle("Describe", REQUEST, fragment_kind=DATA,
+                                             binding=b"b", protobuf=b"x" * 40_000))
+        with self.assertRaises(ChannelStreamError):
+            self._progress(client, server, lambda: server.closed, timeout=5)
+        recv_calls = server._driver._socket.recv_calls
+        with self.assertRaises(ChannelStreamError):
+            server.pump()
+        self.assertEqual(server._driver._socket.recv_calls, recv_calls)
+        self.assertTrue(server.closed)
+        self.assertFalse(is_registered_worker_channel_stream(server))
+
+    def test_cleanup_mode_switch_with_partial_non_end_data_retires(self):
+        client, server, client_sock, server_sock, _client_tls, _server_tls = self._bootstrap_pair()
+        self.addCleanup(client.close)
+        self.addCleanup(server.close)
+        self.addCleanup(client_sock.close)
+        self.addCleanup(server_sock.close)
+        self._progress(client, server,
+                       lambda: client.transport_bootstrap_complete
+                       and server.transport_bootstrap_complete)
+        frames = iter_fragments(
+            b"x" * 40_000, kind=DATA, generation=client._hello.generation,
+            message_id=secrets.token_bytes(16), first_sequence=2)
+        first = next(frames)
+        self.assertEqual(struct.unpack_from(wire.FRAGMENT_FORMAT, first)[2], wire.START)
+        self.assertEqual(list(server._decoder.feed(first)), [])
+        with self.assertRaises(ChannelStreamError):
+            server.enter_incoming_cleanup_mode()
+        self.assertTrue(server.closed)
+        self.assertFalse(is_registered_worker_channel_stream(server))
+
+    def test_policy_replacement_before_queue_pop_or_enqueue_retires_stream(self):
+        client, server, client_sock, server_sock, _client_tls, _server_tls = self._bootstrap_pair()
+        self.addCleanup(client.close)
+        self.addCleanup(server.close)
+        self.addCleanup(client_sock.close)
+        self.addCleanup(server_sock.close)
+        self._progress(client, server,
+                       lambda: client.transport_bootstrap_complete
+                       and server.transport_bootstrap_complete)
+        client.enqueue(kind=DATA, message_id=secrets.token_bytes(16),
+                       payload=encode_bundle("Describe", REQUEST, fragment_kind=DATA,
+                                             binding=b"b", protobuf=b"queued"))
+        self._progress(client, server, lambda: server._incoming.pending_bytes > 0)
+        payload = dict(self.gateway_fixture.payload)
+        payload["revision"] = self.gateway_fixture.policy_store.current().revision + 1
+        self.gateway_fixture.policy_store.install(
+            gateway_tls_tests.ingress_tests.sign_channel_policy(
+                payload, gateway_tls_tests.ingress_tests.delegation_tests.private_pem(
+                    self.gateway_fixture.operator_key)))
+        counts = server.socket_byte_counts
+        with self.assertRaises(ChannelStreamError):
+            server.pop_message()
+        self.assertTrue(server.closed)
+        self.assertEqual(server.socket_byte_counts, counts)
+        with self.assertRaises(ChannelStreamError):
+            server.enqueue(kind=DATA, message_id=secrets.token_bytes(16), payload=b"x")
+        self.assertEqual(server.socket_byte_counts, counts)
 
     def test_exact_owner_and_post_ack_gating_are_enforced(self):
         client_tls, server_tls = self._new_unhandshaken_tls()

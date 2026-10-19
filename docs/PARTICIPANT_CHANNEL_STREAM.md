@@ -43,10 +43,22 @@ host-level accounting when the runtime adopts this stream.
 Outgoing `CONTROL`, `CONTROL_RESPONSE`, `CLOSE`, and `HEARTBEAT` fragments are
 offered to the socket driver with cleanup traffic classification; data and
 response fragments use data classification. Incoming cleanup mode is explicit
-and irreversible. Once enabled, the socket driver meters receives as cleanup
-and the stream retires on any subsequent data/response frame. The fixed framed
+and irreversible. It first latches the decoder into control-only mode, then
+meters socket receives as cleanup. The decoder rejects DATA/RESPONSE as soon as
+the complete fragment header identifies that lane, before copying or
+reassembling its payload. A TLS read can already have delivered one bounded
+record (at most 16 KiB) before its decrypted header is available for
+classification; those bytes may therefore already be charged as cleanup. Once
+the header is rejected, the whole stream retires and performs no further socket
+reads. Entering cleanup mode with a partial header, frame, or message also
+retires the stream, because its classification is incomplete. The fixed framed
 caller must validate operation-specific cleanup semantics; this component does
 not claim that a caller-provided kind proves cleanup intent.
+
+The stream rechecks the genuine TLS owner's current clock, handshake deadline,
+and policy or credential state at public readiness, registration, enqueue, and
+pop boundaries. A failure permanently retires the socket, writer, decoder and
+registration capability, including when a decoded bundle was already queued.
 
 The stream reports actual TCP payload byte counts from `ChannelSocket`, including
 handshake and TLS overhead. Those counts exclude IP headers, retransmitted
