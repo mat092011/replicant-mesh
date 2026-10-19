@@ -126,6 +126,8 @@ class C2HostService:
         self._loop = None
         self._stop_event = None
         self._stop_requested = threading.Event()
+        self._signal_stop = False
+        self._signal_wake_scheduled = False
         self._lifecycle_lock = threading.Lock()
         self._wake_lock = threading.Lock()
         self._wake_scheduled = False
@@ -161,7 +163,7 @@ class C2HostService:
 
     @property
     def ready(self):
-        return self._ready and not self._stop_requested.is_set()
+        return self._ready and not self._stop_requested.is_set() and not self._signal_stop
 
     def assert_ready_for_publication(self):
         """Synchronous final gate called immediately before supervisor READY."""
@@ -329,7 +331,7 @@ class C2HostService:
             self._channel_policy_owner.current()
             self._check_startup_stop()
             with self._lifecycle_lock:
-                if self._stop_requested.is_set():
+                if self._stop_requested.is_set() or self._signal_stop:
                     raise C2HostServiceError("stop requested before readiness publication")
                 self._ready = True
         except BaseException:
@@ -429,7 +431,7 @@ class C2HostService:
         done, _pending = await asyncio.wait(
             {task, stop_task}, timeout=remaining,
             return_when=asyncio.FIRST_COMPLETED)
-        if stop_task in done or self._stop_requested.is_set():
+        if stop_task in done or self._stop_requested.is_set() or self._signal_stop:
             if task.done():
                 try:
                     task.result()
@@ -459,7 +461,7 @@ class C2HostService:
         done, _pending = await asyncio.wait(
             {task, stop_task}, timeout=STARTUP_STAGE_SECONDS,
             return_when=asyncio.FIRST_COMPLETED)
-        if stop_task in done or self._stop_requested.is_set():
+        if stop_task in done or self._stop_requested.is_set() or self._signal_stop:
             if task.done():
                 try:
                     result = task.result()
@@ -488,7 +490,7 @@ class C2HostService:
 
     def _check_startup_stop(self):
         with self._lifecycle_lock:
-            if self._stop_requested.is_set():
+            if self._stop_requested.is_set() or self._signal_stop:
                 self._ready = False
                 raise C2HostServiceError("stop requested during host startup; readiness denied")
 
@@ -521,7 +523,7 @@ class C2HostService:
                 stop_task = asyncio.create_task(self._stop_event.wait())
                 done, _ = await asyncio.wait({task, stop_task}, timeout=remaining,
                     return_when=asyncio.FIRST_COMPLETED)
-                if stop_task in done or self._stop_requested.is_set():
+                if stop_task in done or self._stop_requested.is_set() or self._signal_stop:
                     if not task.done():
                         self._uncertain_startup_tasks.append(task)
                     stop_task.cancel()
@@ -536,7 +538,7 @@ class C2HostService:
             except asyncio.CancelledError:
                 raise
             except OSError as error:
-                if self._stop_requested.is_set():
+                if self._stop_requested.is_set() or self._signal_stop:
                     raise C2HostServiceError(
                         "stop requested during gateway connect; socket retained") from error
                 try:
@@ -585,7 +587,7 @@ class C2HostService:
         if threading.current_thread() is threading.main_thread():
             try:
                 self._previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
-                signal.signal(signal.SIGTERM, self.request_stop)
+                signal.signal(signal.SIGTERM, self._fixed_signal_stop)
             except (ValueError, OSError):
                 self._previous_sigterm_handler = None
         for signum in (signal.SIGINT,):
@@ -623,8 +625,24 @@ class C2HostService:
             finally:
                 self._wake_lock.release()
 
+    def _fixed_signal_stop(self, *_signal_args):
+        """Signal-safe fence; defer locks and asyncio.Event mutation to the loop."""
+        self._signal_stop = True
+        loop = self._loop
+        if loop is not None and not self._signal_wake_scheduled:
+            self._signal_wake_scheduled = True
+            try:
+                loop.call_soon_threadsafe(self._wake_from_signal)
+            except RuntimeError:
+                self._signal_wake_scheduled = False
+
+    def _wake_from_signal(self):
+        self._signal_wake_scheduled = False
+        if self._stop_event is not None:
+            self._stop_event.set()
+
     def run(self):
-        if not self._ready and not self._stop_requested.is_set():
+        if not self._ready and not self._stop_requested.is_set() and not self._signal_stop:
             raise C2HostServiceError("fixed host service cannot run before complete readiness")
         try:
             self._runner.run(self._async_run())
@@ -655,7 +673,7 @@ class C2HostService:
             await self._shutdown(tasks)
 
     async def _health_loop(self):
-        while not self._stop_event.is_set():
+        while not self._stop_event.is_set() and not self._signal_stop:
             self._runtime.assert_live()
             self._channel_policy_owner.current()
             for channel in self._channels:
