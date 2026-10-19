@@ -12,11 +12,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FROZEN_MODULES = (
-    "connector.test_consumer_transport",
-    "connector.test_validation_client",
-    "security.test_channel_certificates",
-    "security.test_channel_policy",
+    "tests.connector.test_consumer_transport",
+    "tests.connector.test_validation_client",
+    "tests.security.test_channel_certificates",
+    "tests.security.test_channel_policy",
 )
+EXPECTED_TEST_COUNT = 55
 FORBIDDEN_DISTRIBUTIONS = frozenset({
     "torch", "transformers", "safetensors", "huggingface-hub",
 })
@@ -81,6 +82,16 @@ def main():
                 raise RuntimeError("a frozen consumer test module is missing")
 
         suite = unittest.defaultTestLoader.loadTestsFromNames(FROZEN_MODULES)
+        def test_ids(group):
+            for item in group:
+                if isinstance(item, unittest.TestSuite):
+                    yield from test_ids(item)
+                else:
+                    yield item.id()
+        inventory = tuple(test_ids(suite))
+        if (len(inventory) != EXPECTED_TEST_COUNT
+                or len(set(inventory)) != EXPECTED_TEST_COUNT):
+            raise RuntimeError("consumer test inventory differs from its frozen count")
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         elapsed = time.monotonic() - started
         signal.alarm(0)
@@ -89,7 +100,7 @@ def main():
         print(f"Consumer image gate: modules={','.join(FROZEN_MODULES)}; "
               f"tests={result.testsRun}; skipped={len(result.skipped)}; "
               f"elapsed_seconds={elapsed:.3f}.")
-        return int(not result.wasSuccessful() or result.testsRun == 0
+        return int(not result.wasSuccessful() or result.testsRun != EXPECTED_TEST_COUNT
                    or bool(result.skipped) or elapsed > MAX_SECONDS)
     except TimeoutError:
         print("Consumer image gate failed: validation exceeded 120 seconds.",
