@@ -1275,3 +1275,35 @@ previously recorded. This does not establish a complete process, deployed
 route, RPC numerical equivalence or physical quota enforcement. Production
 source was main-reviewed; the focused result is component evidence only and
 does not close a C2 gate. C2.1–C2.6 remain open; C3 is unchanged.
+
+## Component 36: expanded bounded C2 inventory
+
+Component 36 passed 1,043 unique tests with zero skips, failures or errors in
+68.369 seconds (2026-10-19 21:58:47.958–21:59:58.600 UTC). Frozen head was
+`0228579c88d83b82f7d8c7b4870edf594cf01893`, with 496 source files and digest
+`fdfc14f60b09f86e535873635e6752bd3f67324b4dbc22eb7aa3ee798c97567f`. The
+pinned image was
+`sha256:094da49d455082d5c2fbe53b213b768e9acc6432b8158c56b09b6d2813ef8833`.
+All 496 frozen files matched the source proof, with zero mismatches (proof log
+SHA-256 `6799787c9826b287535cf4fefcd68edbd824fc4eb6f856743c9dd8fcfe0b8642`).
+The test log SHA-256 is
+`12bb4644d2d35d4f935128ed9eb1f7f9579047b87a679a1fb84617fcbbde77cf`; gate
+record SHA-256 is
+`78eda889547740ab41cc0788e21840448eae2414177f9e49276710344f2fc293a`.
+The terminal record shows exit 0, no OOM, and container removal. The existing
+caps remained: 2 CPUs, 6 GiB, 256 PIDs, no network, read-only root, all
+capabilities dropped, no-new-privileges, init, 15-second stop, 256 MiB `/tmp`,
+16 MiB `/app/.lab`, and read-only offline artifacts.
+
+The scope is all connector tests, the prior 27 selected security modules plus
+`coordinator_runtime_guard`, and the same two runtime modules. New covered
+components include actual process Clock handoff, coordinator guard cases
+(20-case focused check; the 92-test compatibility check is separate), the
+20 host-service and 24 channel-socket tests, 13 coordinator-head cases, ten
+host-runtime-close cases, and settings/route extensions. This is not the full
+repository, full C1 regression or C2 phase acceptance. The actual host-process
+fixture remains under review and has not passed its native run; coordinator
+outbound-owner implementation is active. Component 36 does not establish a
+complete fixed-role process, end-to-end route or HELLO/READY, nor shared
+physical-resource enforcement or CT-11/CT-13. Every C2 checkbox remains open;
+C3 and research statuses are unchanged.

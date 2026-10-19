@@ -332,6 +332,20 @@ previously failing cancellation control and model-backed checks. These results
 do not establish fixed-role readiness or the real C2 route. The component
 record retains failures and controls. All C2 gates remain open.
 
+**Component 36, 2026-10-19:** the expanded bounded inventory passed 1,043
+unique tests with zero skips/failures/errors on a 496-file frozen snapshot
+(head `0228579c88d83b82f7d8c7b4870edf594cf01893`, digest
+`fdfc14f60b09f86e535873635e6752bd3f67324b4dbc22eb7aa3ee798c97567f`). It
+covers all connector tests, 28 selected security modules and two runtime
+modules, not the full repository or full C1 regression. Although it includes
+focused process handoff, host-service and runtime-close checks, the actual
+host-process fixture remains under review and has not passed its native run;
+coordinator outbound-owner implementation is active. No fixed-role readiness,
+end-to-end route or shared physical-resource result is established. All C2
+checkboxes and the phase exit gate remain open; C3 has not advanced. See the
+[component record](experiments/2026-10-19-participant-c2-components.md) for
+scope and retained evidence.
+
 ## C3 — Validate one GPU execution path
 
 **Outcome:** one explicitly supported GPU/backend/precision combination preserves

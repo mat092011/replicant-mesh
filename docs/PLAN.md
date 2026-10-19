@@ -1108,3 +1108,18 @@ process cleanup or physical resource enforcement. These focused runs do not
 close a C2 gate. C2.1–C2.6 remain open; C3 is unchanged. See the
 [component record](experiments/2026-10-19-participant-c2-components.md) for
 exact run identities, the retained setup failure and scope limitations.
+
+**C2 component 36, 2026-10-19:** the expanded bounded inventory passed 1,043
+unique tests with zero skips/failures/errors in 68.369 seconds on 496 verified
+source files at head `0228579c88d83b82f7d8c7b4870edf594cf01893` (digest
+`fdfc14f60b09f86e535873635e6752bd3f67324b4dbc22eb7aa3ee798c97567f`). It
+covers all connector tests, 28 selected security modules and the same two
+runtime modules, not the full repository or full C1 regression. Added coverage
+includes process Clock handoff, coordinator guard, host service, coordinator
+head and host runtime-close checks. The actual host-process fixture remains
+under review and has not passed its native run; coordinator outbound-owner
+implementation remains active. No complete fixed-role startup, C2 route or
+physical quota acceptance is established. All C2 checkboxes remain open; C3
+and research statuses are unchanged. See the
+[component record](experiments/2026-10-19-participant-c2-components.md) for
+image, source-proof, test-log and gate identities.
