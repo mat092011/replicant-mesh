@@ -9,6 +9,7 @@ import base64
 import hashlib
 import secrets
 import threading
+import weakref
 from dataclasses import dataclass, field
 
 from cryptography import x509
@@ -17,7 +18,9 @@ from steamboat_connector import channel_wire as wire
 from steamboat_connector.channel_hello import (
     RegisteredCoordinator, RegisteredWorker,
 )
-from steamboat_connector.channel_writer import ChannelFragmentWriter
+from steamboat_connector.channel_writer import (
+    ChannelFragmentWriter, writer_reservation_overhead_bytes,
+)
 from steamboat_connector.channel_heartbeat import (
     PING, PONG, decode_heartbeat, encode_heartbeat,
 )
@@ -73,8 +76,9 @@ class GatewayRouter:
         self._reservation = communication_reservation_bytes
         self._lock = threading.RLock()
         self._workers = {}
+        self._writer_owners = weakref.WeakSet()
 
-    def register_worker(self, registration, writer=None):
+    def register_worker(self, registration, writer):
         """Install a slot for a genuine committed HELLO capability, identity only."""
         if type(registration) is not RegisteredWorker:
             raise GatewayRouterError("worker registration must be owner-minted HELLO capability")
@@ -84,18 +88,19 @@ class GatewayRouter:
         except Exception as error:
             raise GatewayRouterError("worker HELLO generation is not live") from error
         generation = bytes.fromhex(identity[3])
-        if writer is None:
-            writer = ChannelFragmentWriter(
-                generation, communication_reservation_bytes=self._reservation,
-                initial_sequence=2)
         if (type(writer) is not ChannelFragmentWriter
                 or writer.expected_generation != generation
                 or writer.accounting.next_fragment_sequence != 2
-                or writer.accounting.retired):
+                or writer.accounting.pending_data_messages != 0
+                or writer.accounting.pending_control_messages != 0
+                or writer.accounting.retired
+                or writer.communication_reservation_bytes > self._reservation):
             raise GatewayRouterError("worker writer must be fresh for this HELLO generation at sequence two")
         key = identity[1:3]
         slot = _WorkerSlot(registration, writer, identity)
         with self._lock:
+            if writer in self._writer_owners:
+                raise GatewayRouterError("writer is already owned by a worker slot")
             current = self._workers.get(key)
             if current is not None and current.live:
                 if current.identity == identity:
@@ -106,6 +111,7 @@ class GatewayRouter:
             elif len(self._workers) >= MAX_WORKERS and key not in self._workers:
                 raise GatewayRouterError("worker registry is full")
             self._workers[key] = slot
+            self._writer_owners.add(writer)
         return identity
 
     def remove_worker(self, registration):
@@ -182,11 +188,23 @@ class GatewayRouter:
             binding = parse_metadata(WORKER_SERVICE, method, metadata)
         except Exception as error:
             raise GatewayRouterError("request binding is malformed") from error
-        slot = self._slot(binding.fields.get("target_device_id", ""),
-                          binding.fields.get("worker_boot_id", ""))
+        fields = binding.fields
+        # Describe deliberately permits the legacy C1 bootstrap binding without
+        # worker_boot_id/assignment_id. In that form, only an owner-minted route
+        # guard can select a worker; never guess from registry contents.
+        if method == "Describe":
+            if (not is_coordinator_route_guard(route_guard)
+                    or route_guard.method != method
+                    or route_guard.target_device_id != fields.get("target_device_id")):
+                raise GatewayRouterError("Describe requires an exact guarded worker target")
+            selected_device, selected_boot = (route_guard.target_device_id,
+                                              route_guard.worker_boot_id)
+        else:
+            selected_device, selected_boot = (fields.get("target_device_id", ""),
+                                              fields.get("worker_boot_id", ""))
+        slot = self._slot(selected_device, selected_boot)
         with slot.lock:
             actor, target = self._live(coordinator, worker, route_guard, slot, method)
-            fields = binding.fields
             expected = {
                 "account_id": actor.actor_account_id,
                 "device_id": actor.actor_device_id,
@@ -198,21 +216,33 @@ class GatewayRouter:
                 "worker_boot_id": target.worker_boot_id,
                 "assignment_id": target.assignment_id,
             }
-            if any(fields.get(key) != value for key, value in expected.items()):
+            optional_describe = ({"worker_boot_id", "assignment_id",
+                                  "coordinator_boot_id", "tenant_account_id"}
+                                 if method == "Describe" else set())
+            if any(key not in optional_describe and fields.get(key) != value
+                   for key, value in expected.items()):
                 raise GatewayRouterError("binding identity differs from authenticated channels")
+            if method == "Describe" and any(
+                    key in fields and fields[key] != value for key, value in (
+                        ("worker_boot_id", target.worker_boot_id),
+                        ("assignment_id", target.assignment_id),
+                        ("coordinator_boot_id", actor.coordinator_boot_id),
+                        ("tenant_account_id", actor.tenant_account_id))):
+                raise GatewayRouterError("Describe target differs from guarded assignment")
             if actor.tenant_account_id != actor.actor_account_id:
                 raise GatewayRouterError("tenant differs from authenticated coordinator account")
-            if type(request_bytes) is not bytes or not request_bytes:
+            if (type(request_bytes) is not bytes or not request_bytes
+                    or len(request_bytes) > wire.MAX_PROTOBUF_BYTES):
                 raise GatewayRouterError("request protobuf must be nonempty immutable bytes")
             request_id = fields.get("request_id")
+            operation_id = fields["operation_id"]
             pending = slot.pending_control if lane == "control" else slot.pending_data
             limit = MAX_PENDING_CONTROL if lane == "control" else MAX_PENDING_DATA + 1
             if len(pending) >= limit:
                 return False
-            if request_id is not None and any(
-                    request_id in lane_pending for lane_pending in
-                    (slot.pending_data, slot.pending_control)):
-                raise GatewayRouterError("request identifier is already pending")
+            if any(operation_id in lane_pending for lane_pending in
+                   (slot.pending_data, slot.pending_control)):
+                raise GatewayRouterError("operation identifier is already pending")
             self._live(coordinator, worker, route_guard, slot, method)
             sequence = slot.control_sequence if lane == "control" else slot.data_sequence
             if sequence > 2**63 - 1:
@@ -233,7 +263,9 @@ class GatewayRouter:
                 "tenant_account_id": actor.tenant_account_id,
                 "target_device_id": target.device_id, "worker_boot_id": target.worker_boot_id,
                 "assignment_id": target.assignment_id, "model_id": target.model_id,
-                "stream_generation": target.stream_generation,
+                # The wire generation comes from completed HELLO, not the distinct
+                # authenticated TLS owner nonce carried by the channel record.
+                "stream_generation": slot.identity[3],
                 "lane": lane, "frame_sequence": sequence,
                 "service": WORKER_SERVICE, "method": method,
                 "binding_sha256": hashlib.sha256(binding.encoded).hexdigest(),
@@ -252,8 +284,8 @@ class GatewayRouter:
             self._live(coordinator, worker, route_guard, slot, method)
             if not slot.writer.enqueue(kind=kind, message_id=message_id, payload=bundle):
                 return False
-            pending[request_id or message_id] = (method, message_id, lane,
-                                                 coordinator, worker, route_guard)
+            pending[operation_id] = (method, message_id, lane,
+                                     coordinator, worker, route_guard, request_id)
             if lane == "control":
                 slot.control_sequence += 1
             else:
@@ -351,7 +383,7 @@ class GatewayRouter:
                 raise GatewayRouterError("exact guarded request is no longer pending")
             return True
 
-    def complete(self, *, worker, message_id, method, payload, request_id=None):
+    def complete(self, *, worker, operation_id, request_id, message_id, method, payload):
         """Release pending admission on a validated response or cleanup reply kind 7."""
         try:
             identity = worker.identity
@@ -365,9 +397,10 @@ class GatewayRouter:
             raise GatewayRouterError("response method or kind differs from pending request")
         with slot.lock:
             pending = slot.pending_control if method in CONTROL_METHODS else slot.pending_data
-            key = request_id if request_id is not None else message_id
+            key = operation_id
             entry = pending.get(key)
-            if entry is None or entry[1] != message_id or entry[0] != method:
+            if (entry is None or entry[1] != message_id or entry[0] != method
+                    or entry[6] != request_id):
                 key = None
             if key is None:
                 return False
