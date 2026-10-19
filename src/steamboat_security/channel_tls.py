@@ -339,12 +339,25 @@ class OwnedWorkerTLS:
             if type(maximum) is not int or not 1 <= maximum <= MAX_CHUNK_BYTES:
                 raise ValueError("TLS plaintext read exceeds the bound")
             try:
-                return self.__ssl.read(maximum)
-            except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                plaintext = self.__ssl.read(maximum)
+            except ssl.SSLWantReadError:
+                plaintext = None
+            except ssl.SSLWantWriteError:
+                plaintext = None
+            except ssl.SSLZeroReturnError:
+                self._fail_locked()
                 return b""
             except BaseException:
                 self._fail_locked()
                 raise
+            if self.__outgoing.pending > MAX_PENDING_BIO_BYTES:
+                self._fail_locked()
+                raise OwnedWorkerTLSError("TLS output BIO exceeds its bound")
+            if plaintext == b"":
+                # Empty application data is not emitted by SSLObject.read; an
+                # empty result means the peer sent close_notify.
+                self._fail_locked()
+            return plaintext
 
     def _drive_handshake_locked(self):
         self._require_live_locked()

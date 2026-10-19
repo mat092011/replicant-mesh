@@ -288,6 +288,22 @@ class GatewayIngressTests(unittest.TestCase):
         self.assertEqual(owner.read_plaintext(), b"response")
         self.assertGreaterEqual(sum(owner.byte_counts), len(encrypted) + len(response))
 
+    def test_tls_close_notify_is_terminal_and_retires_ingress(self):
+        owner = self.tls_owner
+        server = owner._test_server
+        outgoing = owner._test_server_outgoing
+        try:
+            server.unwrap()
+        except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+            pass
+        close_notify = outgoing.read() if outgoing.pending else b""
+        self.assertTrue(close_notify)
+        owner.feed_encrypted(close_notify)
+        self.assertEqual(owner.read_plaintext(), b"")
+        self.assertFalse(owner.is_live)
+        self.assertTrue(self.ingress.poll_unavailable())
+        self.assertTrue(self.ingress._state.closed)
+
     def test_clock_provider_failure_sticks_after_clock_revalidation(self):
         owner = self.tls_owner
         self.fixture.clock._uncertainty = lambda: (_ for _ in ()).throw(
