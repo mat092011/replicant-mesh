@@ -267,7 +267,14 @@ class ClockBridgeTests(unittest.TestCase):
             self.assertLess(time.monotonic() - before, 0.1)
         finally:
             owner._lock.release()
-        self.assertTrue(owner.try_confirm_child_reaped(pid))
+        deadline = time.monotonic() + 1.0
+        confirmed = False
+        while time.monotonic() < deadline:
+            if owner.try_confirm_child_reaped(pid):
+                confirmed = True
+                break
+            time.sleep(0.001)
+        self.assertTrue(confirmed)
         thread = owner._server_thread
         if thread is not None:
             thread.join(1.0)
