@@ -605,6 +605,8 @@ class ProcessSupervisorTests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux process groups")
     def test_linux_ignored_term_child_is_reaped_after_pipe_readiness_cancel(self):
+        import subprocess
+        real_popen = subprocess.Popen
         self.readiness_patch.stop()
         readiness_entered = threading.Event()
         original_read_ready = ProcessRoleBackend._read_ready
