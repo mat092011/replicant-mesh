@@ -401,6 +401,7 @@ class OutboundAuthorization:
         self._context = context
         self._context_deadline = context_deadline
         self._bootstrap = bootstrap
+        self._gateway_guard = None
         self._lock = threading.RLock()
         self._completed = False
         self._failed = False
@@ -456,13 +457,31 @@ class OutboundAuthorization:
     def _check_locked(self):
         if self._closed or self._failed or self._invalid:
             raise SessionError("outbound authorization is no longer usable")
+        gateway_deadline = None
+        if self._gateway_guard is not None:
+            try:
+                gateway_deadline = self._gateway_guard.assert_live()
+            except Exception:
+                self._invalid = True
+                raise
         if self._completed:
-            return self._deadline_cap, self._adapter.clock.sample().monotonic
+            now = self._adapter.clock.sample().monotonic
+            deadline = min(self._deadline_cap,
+                           gateway_deadline if gateway_deadline is not None else math.inf)
+            if now >= deadline:
+                self._invalid = True
+                raise SessionError("outbound authorization deadline expired")
+            return deadline, now
         try:
             context_deadline = self._adapter._assert_context_for_auth(
                 self._context, self.service, self.method,
                 expected_deadline=self._context_deadline)
-            return self._scope_live(context_deadline)
+            deadline, now = self._scope_live(context_deadline)
+            if gateway_deadline is not None:
+                deadline = min(deadline, gateway_deadline)
+                if now >= deadline:
+                    raise SessionError("gateway route authorization expired")
+            return deadline, now
         except Exception:
             self._invalid = True
             raise
@@ -766,6 +785,39 @@ class OutboundAuthorizer:
             return self._authorize_coordinator(method, payload, trusted_request_context,
                                                peer_certificate_pem)
         raise BindingError("outbound service name is not an exact v1 wire service")
+
+    def authorize_gateway_outbound(self, service: str, method: str, payload: Any,
+                                   trusted_request_context: object, *,
+                                   gateway_route) -> OutboundAuthorization:
+        """Authorize Worker work over one authenticated, policy-pinned gateway route.
+
+        The logical host certificate is used only by the private C1 scope path;
+        the transport peer is independently authenticated by the route owner.
+        """
+        from .gateway_egress import is_gateway_route_guard
+        if service != WORKER_SERVICE or self.target.service != WORKER_SERVICE:
+            raise ScopeError("gateway outbound is limited to the fixed Worker target")
+        if not is_gateway_route_guard(gateway_route):
+            raise ScopeError("gateway outbound requires a genuine route guard")
+        owner = gateway_route._owner
+        if owner.authorizer is not self:
+            raise ScopeError("gateway route belongs to another outbound adapter")
+        if method not in WORKER_METHODS:
+            raise BindingError("Worker method name is not an exact v1 wire method")
+        gateway_route._claim(owner, method, trusted_request_context)
+        authorization = self._authorize_worker(
+            method, payload, trusted_request_context,
+            owner.logical_host_certificate_pem)
+        authorization._gateway_guard = gateway_route
+        authorization._deadline_cap = min(
+            authorization._deadline_cap, gateway_route.deadline_monotonic)
+        try:
+            authorization.assert_live()
+        except BaseException:
+            authorization.fail(cache_may_exist=False)
+            authorization.close()
+            raise
+        return authorization
 
     def _current_local(self, peer_pem, service, method, *, actor_boot_id,
                        assignment_id, tenant):
