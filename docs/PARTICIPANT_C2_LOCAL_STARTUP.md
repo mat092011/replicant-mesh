@@ -28,8 +28,10 @@ selected raw-head validation, local single-use claim, and publication of every
 immediate owned-process handle. Cancellation is checked at every backend
 Popen gate. That callback is synchronous and only reads the independent event;
 it performs no filesystem access or store locking. Any partial publication
-failure requests bounded cleanup while ownership remains in
-`ProcessRoleBackend`. Both durable-store contexts exit before READY observation.
+failure requests bounded cleanup through the sealed handles for the captured
+process generations. Cleanup shares one deadline across those handles and leaves
+any later same-role generation untouched. Both durable-store contexts exit
+before READY observation.
 On READY failure, cleanup is requested and the claimed boot tuple remains
 consumed. A read-only owner snapshot lock is paired with the final Root SH
 check; neither readiness nor durable policy work occurs in that scope. Root SH

@@ -142,9 +142,11 @@ class OwnerConsentTests(unittest.TestCase):
 
         with store.serialized_snapshot() as snapshot:
             self.assertEqual(snapshot.epoch, 1)
+            second = self.store()
+            self.addCleanup(second.close)
             with mock.patch.object(fcntl, "flock", side_effect=observed_flock):
                 thread = threading.Thread(target=lambda: (
-                    store.set_role_enabled("host", False), changed.set()))
+                    second.set_role_enabled("host", False), changed.set()))
                 thread.start()
                 self.assertTrue(blocked.wait(2))
                 self.assertFalse(changed.is_set())

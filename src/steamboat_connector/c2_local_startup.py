@@ -241,9 +241,7 @@ class C2LocalStartup:
                     captured["receipt"].record.claim_sha256, tuple(ready))
         except BaseException:
             if handles:
-                owned_roles = tuple(sorted({handle._role for handle in handles}))
-                self._backend.request_stop(owned_roles)
-                self._backend.stop(owned_roles, 15.0)
+                self._backend.cleanup_owned_starts(handles, 15.0)
             raise
         finally:
             self._active.release()

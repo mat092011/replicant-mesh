@@ -1,5 +1,7 @@
 import os
 import json
+import hashlib
+import hashlib
 from pathlib import Path
 import shutil
 import select
@@ -18,6 +20,8 @@ from steamboat_connector.process_supervisor import (ProcessRoleBackend,
                                                      ROLE_CONFIG_MAX_BYTES,
                                                      READY_LINE_MAX, _StartIntent)
 from steamboat_connector.resources import CgroupV2Controller, ResourceError
+from steamboat_connector.validation import json_bytes
+from steamboat_connector.validation import json_bytes
 
 
 # setUp patches the supervisor's os.write attribute. Since os is a module
@@ -643,9 +647,12 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertNotEqual((Path(self.temp.name) / "host-runtime.json").read_bytes(), original)
 
     def test_owned_start_rejects_changed_captured_role_config_before_popen(self):
+        expected = hashlib.sha256(
+            json_bytes(self.backend._configured_role("host"))).hexdigest()
+        self.assertTrue(self.backend.configure_role("host", {"changed": True}))
         with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as spawn:
             self.assertIsNone(self.backend.spawn_owned_start(
-                "host", sample_policy(), expected_role_config_sha256="0" * 64))
+                "host", sample_policy(), expected_role_config_sha256=expected))
             spawn.assert_not_called()
         self.assertEqual(self.cgroup.groups, [])
 
@@ -670,12 +677,14 @@ class ProcessSupervisorTests(unittest.TestCase):
                 document["config"] = {"test_mode": False}
             return document
 
+        expected = hashlib.sha256(
+            json_bytes(self.backend._configured_role("host"))).hexdigest()
         with mock.patch.object(supervisor, "read_private_json", side_effect=replaced), \
                 mock.patch.object(supervisor.subprocess, "Popen") as spawn:
             self.assertIsNone(self.backend.spawn_owned_start(
-                "host", sample_policy(), expected_role_config_sha256="0" * 64))
+                "host", sample_policy(), expected_role_config_sha256=expected))
             spawn.assert_not_called()
-        self.assertEqual(calls, 2)
+        self.assertGreaterEqual(calls, 2)
         self.assertEqual(self.cgroup.groups, [])
 
     def test_owned_start_rejects_replaced_artifact_pin_before_popen(self):

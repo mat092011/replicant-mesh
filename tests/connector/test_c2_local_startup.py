@@ -244,6 +244,80 @@ class C2LocalStartupNativeTests(unittest.TestCase):
                 self.assertEqual(len(list(Path(os.readlink(
                     f"/proc/self/fd/{claims._fd}")).glob("claim-*.json"))), 1)
 
+    def test_stale_ready_failure_cleans_only_captured_generation(self):
+        from tests.connector.test_process_supervisor import FakeProcess, sample_policy
+        import steamboat_connector.process_supervisor as supervisor
+
+        ready_entered, release_ready = threading.Event(), threading.Event()
+        processes = {}
+        result = {}
+        with tempfile.TemporaryDirectory(prefix="c2-local-stale-cleanup-") as scratch:
+            os.chmod(scratch, 0o700)
+            with self.resources(scratch) as resources:
+                fx, owner, claims, backend, cgroup, startup = resources
+                real_write = os.write
+
+                def popen(args, **kwargs):
+                    process = FakeProcess(args, kwargs, cgroup)
+                    processes[args[4]] = process
+                    return process
+
+                def ready(_process, _timeout, cancelled=None):
+                    ready_entered.set()
+                    if not release_ready.wait(10):
+                        raise TimeoutError("test did not release stale READY observer")
+                    return True
+
+                def killpg(pid, sig):
+                    process = next(p for p in processes.values() if p.pid == pid)
+                    process.on_signal(sig)
+
+                write = lambda fd, data: len(data) if data == b"R" else real_write(fd, data)
+                with mock.patch.object(supervisor.sys, "platform", "linux"), \
+                        mock.patch.object(supervisor.subprocess, "Popen", side_effect=popen), \
+                        mock.patch.object(supervisor.ProcessRoleBackend, "_read_ready", side_effect=ready), \
+                        mock.patch.object(supervisor.os, "write", side_effect=write), \
+                        mock.patch.object(supervisor.os, "killpg", side_effect=killpg, create=True):
+                    def old_start():
+                        try:
+                            startup.start(("host",), cancel_event=threading.Event())
+                        except BaseException as error:
+                            result["error"] = error
+
+                    old_observer = threading.Thread(target=old_start)
+                    old_observer.start()
+                    self.assertTrue(ready_entered.wait(10))
+                    old_handle = backend._pending_starts["host"]
+                    old_owned = old_handle._owned
+                    self.assertEqual(backend.stop(["host"], 2.0), {"host": True})
+
+                    replacement_config = {"profile": "replacement-generation"}
+                    self.assertTrue(backend.configure_role("host", replacement_config))
+                    new_handle = backend.spawn_owned_start("host", sample_policy())
+                    self.assertIsNotNone(new_handle)
+                    new_owned = new_handle._owned
+                    new_intent = new_handle._intent
+                    new_watchdog = backend._stop_watchdogs["host"]
+                    replacement_pins = dict(backend._pinned_roles)
+                    config_before = backend._config_path("host").read_bytes()
+                    self.assertIs(backend._owned["host"], new_owned)
+                    self.assertIs(backend._start_intents["host"], new_intent)
+
+                    release_ready.set()
+                    old_observer.join(10)
+                    self.assertFalse(old_observer.is_alive())
+                    self.assertIsInstance(result.get("error"), C2LocalStartupError)
+                    self.assertTrue(old_owned.reclaimed)
+                    self.assertIs(backend._owned.get("host"), new_owned)
+                    self.assertIs(backend._start_intents.get("host"), new_intent)
+                    self.assertIs(backend._stop_watchdogs.get("host"), new_watchdog)
+                    self.assertEqual(backend._pinned_roles, replacement_pins)
+                    self.assertFalse(new_intent.cancelled.is_set())
+                    self.assertFalse(new_owned.stopping)
+                    self.assertIsNone(new_owned.process.poll())
+                    self.assertEqual(backend._config_path("host").read_bytes(), config_before)
+                    self.assertEqual(backend.stop(["host"], 2.0), {"host": True})
+
 
 if __name__ == "__main__":
     unittest.main()

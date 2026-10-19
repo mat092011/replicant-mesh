@@ -57,6 +57,7 @@ class _OwnedProcess:
     deadline_lock: object = field(default_factory=threading.Lock)
     force_cleanup: object = field(default_factory=threading.Event)
     artifact_pin: object = None
+    pin_cleanup: object = None
     group_removed: bool = False
 
 
@@ -654,10 +655,17 @@ class ProcessRoleBackend:
             watchdog.wake.clear()
 
     def _retire_stop_watchdog(self, role, generation):
-        watchdog = self._stop_watchdogs.get(role)
-        if watchdog is not None:
-            watchdog.armed.set()
-            watchdog.wake.set()
+        # A stale generation must never wake or retire the replacement's
+        # role watchdog. The caller holds no lifecycle locks here.
+        with self._watchdog_lock:
+            with self._lock:
+                if (self._owned.get(role) is not None
+                        or self._start_intents.get(role) is not None):
+                    return
+                watchdog = self._stop_watchdogs.get(role)
+                if watchdog is not None:
+                    watchdog.armed.set()
+                    watchdog.wake.set()
 
     def spawn_owned_start(self, role, policy, *, cancel_event=None,
                           before_popen_check=None, expected_role_config_sha256=None,
@@ -791,7 +799,8 @@ class ProcessRoleBackend:
                         or self._start_intents.get(role) is not intent):
                     return None
                 owned = _OwnedProcess(role, None, Path(group), self.clock(),
-                                      start_intent=intent, artifact_pin=pin)
+                                      start_intent=intent, artifact_pin=pin,
+                                      pin_cleanup=self._pin_cleanups.get(role))
                 self._owned[role] = owned
                 if (self._cancelled(intent, cancel_event)
                         or self._start_intents.get(role) is not intent
@@ -1066,7 +1075,7 @@ class ProcessRoleBackend:
             active = []
             if not self._acquire_until(self._lock, deadline):
                 for role, owned in acquired:
-                    intent = self._start_intents.get(role)
+                    intent = owned.start_intent
                     if intent is not None:
                         self._cancel_intent(intent, deadline, term_deadline)
                     current = self._owned.get(role)
@@ -1150,7 +1159,7 @@ class ProcessRoleBackend:
                     # Pin release can fsync the artifact-store directory. The
                     # configured monitor owns it strongly and performs that
                     # work after both lifecycle and escalation locks are free.
-                    cleanup = self._pin_cleanups.get(role)
+                    cleanup = owned.pin_cleanup
                     if cleanup is None:
                         reclaimed = False
                     else:
@@ -1170,9 +1179,13 @@ class ProcessRoleBackend:
                                              and owned.leader_reaped
                                              and owned.group_removed)
                                 if reclaimed:
-                                    self._pinned_roles.pop(role, None)
-                                    self._pin_cleanups.pop(role, None)
-                                    self._pin_release_blocked.discard(role)
+                                    pin_entry = self._pinned_roles.get(role)
+                                    if pin_entry is not None and pin_entry[0] is owned.artifact_pin:
+                                        self._pinned_roles.pop(role, None)
+                                    if self._pin_cleanups.get(role) is cleanup:
+                                        self._pin_cleanups.pop(role, None)
+                                    if self._owned.get(role) is owned:
+                                        self._pin_release_blocked.discard(role)
                                     del self._owned[role]
                                     owned.reclaimed = True
                                     self._pending_starts.pop(role, None)
@@ -1205,6 +1218,45 @@ class ProcessRoleBackend:
         self._mark_stopping(owned, deadline, term_deadline)
         return self._stop_many([(owned.role, owned)], deadline,
                                term_deadline).get(owned.role, False)
+
+    def cleanup_owned_starts(self, handles, grace_seconds=STOP_GRACE_MAX_SECONDS):
+        """Stop only processes captured by sealed pending-start handles.
+
+        This is safe after a same-role replacement: every cancellation and
+        process transition is tied to the handle's original intent/owner.
+        """
+        grace = self._bounded_grace(grace_seconds)
+        if grace is None or type(handles) not in (tuple, list):
+            return False
+        unique = []
+        seen = set()
+        for handle in handles:
+            if (type(handle) is not PendingRoleStart
+                    or handle._backend is not self
+                    or handle._seal is not self._pending_start_seal):
+                return False
+            marker = id(handle._owned)
+            if marker not in seen:
+                seen.add(marker)
+                unique.append(handle)
+        started = time.monotonic()
+        deadline = started + grace
+        term_deadline = started + grace * 0.5
+        entries = []
+        # Fence every captured generation before signaling any one process.
+        for handle in unique:
+            self._cancel_intent(handle._intent, deadline, term_deadline)
+            owned = handle._owned
+            current_deadline, current_term = self._effective_deadlines(owned)
+            self._mark_stopping(owned,
+                deadline if current_deadline is None else min(deadline, current_deadline),
+                term_deadline if current_term is None else min(term_deadline, current_term))
+            if not owned.reclaimed:
+                entries.append((handle._role, owned))
+        if not entries:
+            return True
+        results = self._stop_many(entries, deadline, term_deadline)
+        return all(results.get(role) is True for role, _owned in entries)
 
     def stop(self, roles, grace_seconds):
         grace = self._bounded_grace(grace_seconds)
