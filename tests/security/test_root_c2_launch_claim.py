@@ -1,0 +1,202 @@
+"""C2 append-only whole-cohort claim parser and native store tests."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import multiprocessing
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+import sys
+sys.path.insert(0, str(ROOT / "src"))
+
+import tests.security.test_root_c2_selected as selected_fixture
+from steamboat_security.codec import canonical_json
+from steamboat_security.errors import BindingError, StorageError
+from steamboat_security.root_c2_launch_claim import (
+    C2LaunchClaimRecord, C2LaunchClaimStore,
+    c2_launch_claim_document, parse_c2_launch_claim,
+)
+from steamboat_security.root_transition_launch import role_launch_document
+
+
+def _sha(data): return hashlib.sha256(data).hexdigest()
+
+
+def _claim_process(root, uid, record_args, expected_doc, gate, output):
+    try:
+        if not gate.wait(10):
+            output.put("timeout"); return
+        with C2LaunchClaimStore(root, expected_uid=uid) as store:
+            def trusted(record):
+                return None if c2_launch_claim_document(record) == expected_doc else False
+            store.claim(**record_args, fresh_selected_validator=trusted)
+        output.put("claimed")
+    except BindingError:
+        output.put("rejected")
+    except BaseException as error:
+        output.put("error:" + type(error).__name__)
+
+
+class C2ClaimFixture(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        selected_fixture.C2SelectedCohortTests.setUpClass()
+
+    def setUp(self):
+        self.fx_case = object.__new__(selected_fixture.C2SelectedCohortTests)
+        self.fx_case.setUp()
+        selector, bundle, active, _ = self.fx_case._inputs(grant_fault="none")
+        from steamboat_security.root_c2_selected import validate_c2_selected_cohort
+        self.cohort = validate_c2_selected_cohort(selector, bundle, active,
+            clock=self.fx_case.fx.clock_source.clock)
+        self.selector, self.bundle, self.active = selector, bundle, active
+
+    def tearDown(self): self.fx_case.tearDown()
+
+    def _trusted_validator(self, record):
+        # Test owner compares the whole canonical cohort and every selected pin.
+        self.assertEqual(record.selector_sha256, self.cohort.selector_sha256)
+        self.assertEqual(record.activation_manifest_sha256, self.cohort.activation_manifest_sha256)
+        self.assertEqual(record.generation_sha256, self.cohort.generation_sha256)
+        self.assertEqual(tuple(map(role_launch_document, record.new_role_launch_specs)),
+                         tuple(map(role_launch_document, self.cohort.new_specs)))
+        self.assertEqual(tuple(x.to_document() for x in record.new_host_group_scopes),
+                         tuple(x.to_document() for x in self.cohort.new_groups))
+        return None
+
+    def test_parser_round_trips_real_selected_parent_and_child_cohort(self):
+        body = {"generation_sha256": self.cohort.generation_sha256,
+            "new_role_launch_specs": [role_launch_document(x) for x in self.cohort.new_specs],
+            "new_host_group_scopes": [x.to_document() for x in self.cohort.new_groups]}
+        record = C2LaunchClaimRecord(self.cohort.selector_sha256,
+            self.cohort.activation_manifest_sha256, self.cohort.generation_sha256,
+            _sha(canonical_json(body)), self.cohort.new_specs, self.cohort.new_groups)
+        encoded = canonical_json(c2_launch_claim_document(record))
+        self.assertEqual(parse_c2_launch_claim(encoded), record)
+        raw = json.loads(encoded)
+        raw["new_host_group_scopes"] = []
+        with self.assertRaises(StorageError): parse_c2_launch_claim(canonical_json(raw))
+        with self.assertRaises(StorageError): parse_c2_launch_claim(encoded + b" ")
+
+    @unittest.skipUnless(os.name == "posix" and hasattr(os, "O_NOFOLLOW"), "native POSIX store")
+    def test_native_store_consumes_all_parent_and_child_boots_once(self):
+        root = Path(self.fx_case.temp.name) / "claims"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as store:
+            receipt = store.claim(selector_sha256=self.cohort.selector_sha256,
+                activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+                generation_sha256=self.cohort.generation_sha256,
+                new_role_launch_specs=self.cohort.new_specs,
+                new_host_group_scopes=self.cohort.new_groups,
+                fresh_selected_validator=self._trusted_validator)
+            self.assertEqual(parse_c2_launch_claim((root / receipt.filename).read_bytes()), receipt.record)
+            with self.assertRaises(BindingError):
+                store.claim(selector_sha256=self.cohort.selector_sha256,
+                    activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+                    generation_sha256=self.cohort.generation_sha256,
+                    new_role_launch_specs=self.cohort.new_specs,
+                    new_host_group_scopes=self.cohort.new_groups,
+                    fresh_selected_validator=self._trusted_validator)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as reopened:
+            with self.assertRaises(BindingError):
+                reopened.claim(selector_sha256="a" * 64,
+                    activation_manifest_sha256="b" * 64,
+                    generation_sha256=self.cohort.generation_sha256,
+                    new_role_launch_specs=self.cohort.new_specs,
+                    new_host_group_scopes=self.cohort.new_groups,
+                    fresh_selected_validator=self._trusted_validator)
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX store")
+    def test_callback_failure_and_partial_created_file_are_sticky(self):
+        root = Path(self.fx_case.temp.name) / "claims-fault"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        args = dict(selector_sha256=self.cohort.selector_sha256,
+            activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+            generation_sha256=self.cohort.generation_sha256,
+            new_role_launch_specs=self.cohort.new_specs,
+            new_host_group_scopes=self.cohort.new_groups)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as store:
+            with self.assertRaises(RuntimeError):
+                store.claim(**args, fresh_selected_validator=lambda _r: (_ for _ in ()).throw(RuntimeError()))
+            self.assertEqual(set(os.listdir(root)), {"claim.lock"})
+        def fail(label):
+            if label == "claim.write": raise OSError("injected partial write")
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid(), _fault_hook=fail) as store:
+            with self.assertRaises(StorageError): store.claim(**args, fresh_selected_validator=self._trusted_validator)
+            with self.assertRaises(StorageError): store.claim(**args, fresh_selected_validator=self._trusted_validator)
+        with self.assertRaises(StorageError): C2LaunchClaimStore(root, expected_uid=os.geteuid())
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX store")
+    def test_unknown_entries_and_symlinks_fail_closed(self):
+        root = Path(self.fx_case.temp.name) / "claims-unsafe"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()): pass
+        (root / "unknown").write_text("x", encoding="ascii"); os.chmod(root / "unknown", 0o600)
+        with self.assertRaises(StorageError): C2LaunchClaimStore(root, expected_uid=os.geteuid())
+
+    @unittest.skipUnless(os.name == "posix" and "fork" in multiprocessing.get_all_start_methods(),
+                         "requires POSIX fork and no-follow store")
+    def test_cross_process_same_cohort_has_one_winner(self):
+        root = Path(self.fx_case.temp.name) / "claims-race"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        args = dict(selector_sha256=self.cohort.selector_sha256,
+            activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+            generation_sha256=self.cohort.generation_sha256,
+            new_role_launch_specs=self.cohort.new_specs,
+            new_host_group_scopes=self.cohort.new_groups)
+        cohort_body = {"generation_sha256": self.cohort.generation_sha256,
+            "new_role_launch_specs": [role_launch_document(x) for x in self.cohort.new_specs],
+            "new_host_group_scopes": [x.to_document() for x in self.cohort.new_groups]}
+        expected_doc = c2_launch_claim_document(C2LaunchClaimRecord(
+            self.cohort.selector_sha256, self.cohort.activation_manifest_sha256,
+            self.cohort.generation_sha256, _sha(canonical_json(cohort_body)),
+            self.cohort.new_specs, self.cohort.new_groups))
+        context = multiprocessing.get_context("fork")
+        gate, output = context.Event(), context.Queue()
+        children = [context.Process(target=_claim_process,
+            args=(str(root), os.geteuid(), args, expected_doc, gate, output)) for _ in range(2)]
+        try:
+            for child in children: child.start()
+            gate.set()
+            results = [output.get(timeout=20) for _ in children]
+            for child in children: child.join(timeout=10)
+        finally:
+            gate.set()
+            for child in children:
+                if child.is_alive(): child.terminate()
+                child.join(timeout=3)
+            output.close()
+        self.assertCountEqual(results, ["claimed", "rejected"])
+        self.assertTrue(all(child.exitcode == 0 for child in children))
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX store")
+    def test_root_mode_symlink_and_hardlink_reject(self):
+        root = Path(self.fx_case.temp.name) / "claims-inodes"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        os.chmod(root, 0o755)
+        with self.assertRaises(StorageError): C2LaunchClaimStore(root, expected_uid=os.geteuid())
+        os.chmod(root, 0o700)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as store:
+            receipt = store.claim(selector_sha256=self.cohort.selector_sha256,
+                activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+                generation_sha256=self.cohort.generation_sha256,
+                new_role_launch_specs=self.cohort.new_specs,
+                new_host_group_scopes=self.cohort.new_groups,
+                fresh_selected_validator=self._trusted_validator)
+        claim = root / receipt.filename
+        outside = Path(self.fx_case.temp.name) / "claim-link"
+        os.link(claim, outside)
+        with self.assertRaises(StorageError): C2LaunchClaimStore(root, expected_uid=os.geteuid())
+        outside.unlink()
+        claim.unlink()
+        outside_target = Path(self.fx_case.temp.name) / "target"
+        outside_target.write_bytes(b"{}"); os.chmod(outside_target, 0o600)
+        (root / receipt.filename).symlink_to(outside_target)
+        with self.assertRaises(StorageError): C2LaunchClaimStore(root, expected_uid=os.geteuid())
+
+
+if __name__ == "__main__": unittest.main()
