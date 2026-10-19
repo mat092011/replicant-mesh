@@ -236,82 +236,83 @@ class AggregateHostWorkerNumericalFixture(unittest.TestCase):
             reference = PipelineModel(source)
             sessions.update({"session-A": reference.open_session(16),
                              "session-B": reference.open_session(16)})
-            try:
-                for view in views:
-                    entry = next(item for item in group.record["assignments"]
-                                 if item["assignment_id"] == view.assignment_id)
-                    guard = group.make_guard(view.assignment_id, clock, verifier)
-                    handlers.append(build_assigned_worker_handler(
-                        view, boot_id=entry["worker_boot_id"], clock=clock, guard=guard))
-                leases = {}
-                sequences = {(handler.worker_name, session): 0 for handler in handlers
-                             for session in sessions}
-                positions = {session: 0 for session in sessions}
+            with asyncio.Runner() as runner:
+                try:
+                    for view in views:
+                        entry = next(item for item in group.record["assignments"]
+                                     if item["assignment_id"] == view.assignment_id)
+                        guard = group.make_guard(view.assignment_id, clock, verifier)
+                        handlers.append(build_assigned_worker_handler(
+                            view, boot_id=entry["worker_boot_id"], clock=clock, guard=guard))
+                    leases = {}
+                    sequences = {(handler.worker_name, session): 0 for handler in handlers
+                                 for session in sessions}
+                    positions = {session: 0 for session in sessions}
 
-                async def call(method, handler, session_id, **fields):
-                    values = {"protocol_version": 1,
-                              "manifest_fingerprint": handler.manifest["fingerprint"],
-                              "worker_boot_id": handler.boot_id,
-                              "session_id": session_id,
-                              "lease_token": leases.get((handler.worker_name, session_id), ""),
-                              "timeout_ms": handler.limits["rpc_timeout_seconds"] * 1000}
-                    values.update(fields)
-                    return await handler.handle(method, Request(**values))
+                    async def call(method, handler, session_id, **fields):
+                        values = {"protocol_version": 1,
+                                  "manifest_fingerprint": handler.manifest["fingerprint"],
+                                  "worker_boot_id": handler.boot_id,
+                                  "session_id": session_id,
+                                  "lease_token": leases.get((handler.worker_name, session_id), ""),
+                                  "timeout_ms": handler.limits["rpc_timeout_seconds"] * 1000}
+                        values.update(fields)
+                        return await handler.handle(method, Request(**values))
 
-                async def exercise():
-                    for handler in handlers:
-                        for session_id in sessions:
-                            opened = await call("OpenSession", handler, session_id,
-                                lease_token="", max_positions=16, lifetime_ms=300000,
-                                idle_lease_ms=120000)
-                            self.assertEqual(opened.code, "OK", opened.message)
-                            leases[(handler.worker_name, session_id)] = opened.lease_token
-                    events = (("session-A", (1, 17, 19)), ("session-B", (5, 7)),
-                              ("session-A", (23,)), ("session-B", (29,)),
-                              ("session-A", (31,)), ("session-B", (37,)))
-                    for session_id, token_values in events:
-                        ids = torch.tensor([token_values], dtype=torch.long)
-                        expected = sessions[session_id].step(ids)
-                        with torch.inference_mode():
-                            hidden = reference.input_output.embed_tokens(ids)
+                    async def exercise():
                         for handler in handlers:
-                            count = len(token_values)
-                            encoded = encode_tensor(hidden, hidden_size=64,
-                                max_tokens=handler.limits["max_positions"],
-                                max_bytes=handler.limits["max_message_bytes"])
-                            response = await call("Step", handler, session_id,
-                                sequence=sequences[(handler.worker_name, session_id)],
-                                start_position=positions[session_id], token_count=count,
-                                tensor=encoded)
-                            self.assertEqual(response.code, "OK", response.message)
-                            hidden = decode_tensor(response.tensor, count, hidden_size=64,
-                                max_tokens=handler.limits["max_positions"],
-                                max_bytes=handler.limits["max_message_bytes"])
-                            sequences[(handler.worker_name, session_id)] += 1
-                        with torch.inference_mode():
-                            actual = reference.input_output.lm_head(
-                                reference.input_output.norm(hidden[:, -1:, :]))
-                        torch.testing.assert_close(actual, expected, atol=1e-3, rtol=0)
-                        positions[session_id] += len(token_values)
-                    for handler in handlers:
-                        for session_id in sessions:
-                            result = await call("CloseSession", handler, session_id)
-                            self.assertEqual(result.code, "OK", result.message)
-                            self.assertTrue(result.reclaimed)
-                asyncio.run(exercise())
-            finally:
-                if handlers:
-                    async def stop_handlers():
-                        return await asyncio.gather(*(handler.shutdown() for handler in handlers))
-                    handlers_stopped = all(value is True for value in asyncio.run(stop_handlers()))
-                for session in sessions.values():
-                    session.close()
-                if reference is not None:
-                    reference.close()
-                if handlers_stopped and group is not None:
-                    group.release()
-                elif group is not None:
-                    self.fail("worker cleanup was not proven; aggregate pin remains held")
+                            for session_id in sessions:
+                                opened = await call("OpenSession", handler, session_id,
+                                    lease_token="", max_positions=16, lifetime_ms=300000,
+                                    idle_lease_ms=120000)
+                                self.assertEqual(opened.code, "OK", opened.message)
+                                leases[(handler.worker_name, session_id)] = opened.lease_token
+                        events = (("session-A", (1, 17, 19)), ("session-B", (5, 7)),
+                                  ("session-A", (23,)), ("session-B", (29,)),
+                                  ("session-A", (31,)), ("session-B", (37,)))
+                        for session_id, token_values in events:
+                            ids = torch.tensor([token_values], dtype=torch.long)
+                            expected = sessions[session_id].step(ids)
+                            with torch.inference_mode():
+                                hidden = reference.input_output.embed_tokens(ids)
+                            for handler in handlers:
+                                count = len(token_values)
+                                encoded = encode_tensor(hidden, hidden_size=64,
+                                    max_tokens=handler.limits["max_positions"],
+                                    max_bytes=handler.limits["max_message_bytes"])
+                                response = await call("Step", handler, session_id,
+                                    sequence=sequences[(handler.worker_name, session_id)],
+                                    start_position=positions[session_id], token_count=count,
+                                    tensor=encoded)
+                                self.assertEqual(response.code, "OK", response.message)
+                                hidden = decode_tensor(response.tensor, count, hidden_size=64,
+                                    max_tokens=handler.limits["max_positions"],
+                                    max_bytes=handler.limits["max_message_bytes"])
+                                sequences[(handler.worker_name, session_id)] += 1
+                            with torch.inference_mode():
+                                actual = reference.input_output.lm_head(
+                                    reference.input_output.norm(hidden[:, -1:, :]))
+                            torch.testing.assert_close(actual, expected, atol=1e-3, rtol=0)
+                            positions[session_id] += len(token_values)
+                        for handler in handlers:
+                            for session_id in sessions:
+                                result = await call("CloseSession", handler, session_id)
+                                self.assertEqual(result.code, "OK", result.message)
+                                self.assertTrue(result.reclaimed)
+                    runner.run(exercise())
+                finally:
+                    if handlers:
+                        async def stop_handlers():
+                            return await asyncio.gather(*(handler.shutdown() for handler in handlers))
+                        handlers_stopped = all(value is True for value in runner.run(stop_handlers()))
+                    for session in sessions.values():
+                        session.close()
+                    if reference is not None:
+                        reference.close()
+                    if handlers_stopped and group is not None:
+                        group.release()
+                    elif group is not None:
+                        self.fail("worker cleanup was not proven; aggregate pin remains held")
 
 
 if __name__ == "__main__":
