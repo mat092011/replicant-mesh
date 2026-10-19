@@ -158,9 +158,73 @@ class RuntimePinHandoffTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ProcessRoleBackend._encode_config("host", {}, pin_metadata=too_large)
 
+    def test_ambiguous_popen_failure_keeps_pin_fenced_and_blocks_restart(self):
+        pin, verifier, metadata, catalog, assignment = self._configured_group_pin()
+        popen = mock.Mock(side_effect=OSError("injected ambiguous Popen failure"))
+        with (mock.patch.object(RuntimeArtifactGroupPin, "assert_open_descriptors",
+                                return_value=True),
+              mock.patch.object(RuntimeArtifactGroupPin, "child_launch_metadata",
+                                return_value=metadata),
+              mock.patch.object(CatalogVerifier, "verify_catalog", return_value=catalog),
+              mock.patch.object(CatalogVerifier, "verify_assignment",
+                                return_value=assignment),
+              mock.patch("steamboat_connector.process_supervisor.atomic_write_private",
+                         side_effect=lambda path, data: Path(path).write_bytes(data)),
+              mock.patch("steamboat_connector.process_supervisor.read_private_json",
+                         side_effect=lambda path, **kwargs: __import__("json").loads(
+                             Path(path).read_text(encoding="utf-8"))),
+              mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
+                         popen)):
+            self.assertTrue(self.backend.configure_pinned_role(
+                "host", {"test_mode": True}, pin, catalog_verifier=verifier))
+            self.assertFalse(self.backend.start("host", sample_policy()))
+            self.assertFalse(self.backend.stop(["host"], 0.2)["host"])
+            self.assertFalse(self.backend.start("host", sample_policy()))
+            self.assertEqual(popen.call_count, 1)
+            pin.release.assert_not_called()
+            self.assertIn("host", self.backend._pinned_roles)
+
     def test_child_helper_requires_exact_trusted_clock_and_verifier(self):
         with self.assertRaises(RuntimePinHandoffError):
             validate_child_pin({}, clock=object(), verifier=object())
+
+    def test_single_handoff_retains_guard_pin_owner(self):
+        clock = Clock(uncertainty_seconds=lambda: 0.0)
+        public_key = _public_key()
+        verifier = CatalogVerifier(public_key, clock=clock)
+        original = (os.open(os.devnull, os.O_RDONLY),
+                    os.open(os.devnull, os.O_RDONLY))
+        record = {"version": 1, "pin_id": "a" * 64,
+                  "account_id": "acct_" + "1" * 32,
+                  "device_id": "dev_" + "2" * 32,
+                  "role": "coordinator", "assignment_id": "asg_" + "3" * 32,
+                  "catalog_sha256": "b" * 64, "assignment_sha256": "c" * 64,
+                  "boot_id": "d" * 32}
+        metadata = {"version": 1, "kind": "single", "role": "coordinator",
+                    "root": self.temp.name, "uid": os.getuid() if hasattr(os, "getuid") else 1,
+                    "record_path": str(Path(self.temp.name) / ".runtime-pin-coordinator.json"),
+                    "record": record, "global_fd": original[0], "role_fd": original[1],
+                    "clock_domain": "linux:test", "captured_mono": 1.0,
+                    "catalog_deadline": 1000.0, "assignment_deadline": 900.0,
+                    "signed_catalog": base64.b64encode(b"catalog").decode("ascii"),
+                    "signed_assignment": base64.b64encode(b"assignment").decode("ascii"),
+                    "public_key": base64.b64encode(public_key).decode("ascii")}
+
+        class Owner:
+            def __init__(self):
+                self.close = mock.Mock()
+
+        owner = Owner()
+        guard = SimpleNamespace(pin=owner)
+        with mock.patch("steamboat_connector.artifact_pin.validate_inherited_pin",
+                        return_value=guard):
+            pins = validate_child_pin(metadata, clock=clock, verifier=verifier)
+        self.assertEqual(pins.owners, (owner,))
+        self.assertEqual(pins.guards, (guard,))
+        pins.close()
+        owner.close.assert_called_once_with()
+        for fd in original:
+            os.close(fd)
 
     def test_group_handoff_duplicates_one_pair_per_assignment(self):
         clock = Clock(uncertainty_seconds=lambda: 0.0)
@@ -373,6 +437,7 @@ class RuntimePinNativeHandoffTests(unittest.TestCase):
     def test_supervised_exec_validates_inherited_pin_and_keeps_store_locked(self):
         from steamboat_connector.aggregate_artifact_pin import (
             AggregateArtifactPinError, RuntimeArtifactGroupPin)
+        from steamboat_connector.artifact_pin import RuntimeArtifactPin
         from steamboat_connector.artifacts import (ArtifactInstallBusy,
                                                     ArtifactInstaller)
         from steamboat_connector.catalog import (ARTIFACT_FILENAMES,
@@ -514,11 +579,45 @@ class RuntimePinNativeHandoffTests(unittest.TestCase):
                     [view], clock=clock, runtime_boot_id="f" * 32,
                     worker_boot_ids={"worker-1": "e" * 32})
                 reacquired.release()
+
+                # Exercise the coordinator's distinct single-pin validator
+                # through the same actual exec/pass_fds/startup-gate path.
+                coordinator_id = "asg_" + "4" * 32
+                coordinator_bytes, _ = _assignment_bundle(
+                    verifier, signed_catalog, role="coordinator",
+                    component="coordinator", now=now,
+                    assignment_id=coordinator_id, device_id=device_id)
+                installer.install(catalog_bytes, coordinator_bytes, SourceRetriever(),
+                                  account_id=_ACCOUNT, device_id=device_id,
+                                  role="coordinator")
+                coordinator_view = installer.open_view(
+                    coordinator_id, account_id=_ACCOUNT, device_id=device_id,
+                    role="coordinator", now=now)
+                coordinator_pin = RuntimeArtifactPin.acquire(
+                    coordinator_view, clock=clock, boot_id="7" * 32)
+                self.assertTrue(backend.configure_pinned_role(
+                    "coordinator", {"test_mode": True}, coordinator_pin,
+                    catalog_verifier=verifier))
+                metadata = backend._pinned_roles["coordinator"][2]
+                with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
+                                side_effect=spawn):
+                    self.assertTrue(backend.start("coordinator", sample_policy()))
+                coordinator_pin.release()
+                with self.assertRaises(ArtifactInstallBusy):
+                    installer.deactivate("coordinator", compute_stopped=True)
+                self.assertTrue(backend.stop(["coordinator"], 3.0)["coordinator"])
+                single_reacquired = RuntimeArtifactPin.acquire(
+                    coordinator_view, clock=clock, boot_id="8" * 32)
+                single_reacquired.release()
             finally:
                 if "host" in backend._owned:
                     backend.stop(["host"], 3.0)
                 if getattr(pin, "_state", None) == "open":
                     pin.release()
+                if "coordinator" in backend._owned:
+                    backend.stop(["coordinator"], 3.0)
+                if "coordinator_pin" in locals() and not coordinator_pin._released:
+                    coordinator_pin.release()
 
 
 if __name__ == "__main__":

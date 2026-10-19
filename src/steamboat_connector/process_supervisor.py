@@ -605,7 +605,8 @@ class ProcessRoleBackend:
         with self._watchdog_lock:
             with self._lock:
                 if ((cancel_event is not None and cancel_event.is_set())
-                        or role in self._owned or role in self._start_intents):
+                        or role in self._owned or role in self._start_intents
+                        or role in self._pin_release_blocked):
                     return False
                 intent = _StartIntent()
                 self._start_intents[role] = intent
@@ -1001,7 +1002,11 @@ class ProcessRoleBackend:
                 if owned is None:
                     # A launch intent may still be in cgroup creation or Popen.
                     if intent is None:
-                        results[role] = True
+                        # A failed/ambiguous Popen after descriptor handoff is
+                        # not proof that no child inherited the pin. Without a
+                        # trusted reconciliation path, keep this generation
+                        # fenced and report its ownership as unknown.
+                        results[role] = role not in self._pin_release_blocked
                     elif intent.finished and intent.group is not None:
                         cleanup_intents.append((role, intent))
                         results[role] = False

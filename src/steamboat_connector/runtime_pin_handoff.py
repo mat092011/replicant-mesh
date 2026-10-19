@@ -177,8 +177,9 @@ def validate_child_pin(metadata, *, clock, verifier):
 
     owners, guards = [], []
     if kind == "single":
+        guard = None
         try:
-            owner, guard = validate_inherited_pin(
+            guard = validate_inherited_pin(
                 metadata["global_fd"], metadata["role_fd"], root=metadata["root"],
                 uid=metadata["uid"], role="coordinator",
                 record_path=metadata["record_path"], expected_record=metadata["record"],
@@ -187,9 +188,11 @@ def validate_child_pin(metadata, *, clock, verifier):
                 assignment_deadline=metadata["assignment_deadline"], clock=clock,
                 signed_catalog=signed_catalog, signed_assignment=signed_assignment,
                 verifier=verifier)
-            return ChildArtifactPinSet((owner,), (guard,))
+            # The coordinator validator returns its guard directly; the guard
+            # retains the genuine RuntimeArtifactPin as ``pin``.
+            return ChildArtifactPinSet((guard.pin,), (guard,))
         except BaseException as error:
-            _attach_owner(error, owners)
+            _attach_owner(error, owners, getattr(guard, "pin", None))
             raise
 
     originals = (metadata["global_fd"], metadata["role_fd"])
