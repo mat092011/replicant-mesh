@@ -307,9 +307,9 @@ class ProcessSupervisorTests(unittest.TestCase):
         signals = []
 
         def killpg(pid, sig):
-            signals.append(sig)
             if sig == 9:
                 holder["process"].on_signal(sig)
+            signals.append(sig)
 
         with popen, mock.patch(
                 "steamboat_connector.process_supervisor.os.killpg",
