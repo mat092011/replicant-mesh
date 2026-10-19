@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import unittest
 from dataclasses import replace
 from unittest.mock import patch
@@ -117,6 +118,13 @@ class C2ChildConfigContractTests(unittest.TestCase):
             self.make_host(operator_verification_key_pem=b"not a public key")
         with self.assertRaisesRegex(CredentialError, "ASCII"):
             self.make_host(operator_verification_key_pem=b"\xff")
+        # The accepted bytes must be exactly a canonical public SPKI PEM; the
+        # PEM loader alone can ignore material appended after a valid key.
+        with self.assertRaisesRegex(CredentialError, "exactly one canonical public key"):
+            self.make_host(operator_verification_key_pem=(
+                self.key + generate_private_key_pem()))
+        with self.assertRaisesRegex(CredentialError, "exactly one canonical public key"):
+            self.make_host(operator_verification_key_pem=b"\n" + self.key)
 
     def test_config_is_inert_and_import_does_not_load_torch(self):
         code = ("import sys; sys.path.insert(0, " + repr(str(ROOT / "src")) + "); "
@@ -138,7 +146,7 @@ class C2ChildBindingIntegrationTests(unittest.TestCase):
         self.fx_case = host_fixture.C2RuntimeStoreIntegrationTests(
             "test_real_binding_guards_three_components_and_durably_advances_policy")
         self.fx_case.setUp()
-        self.fx = self.fx_case.fx
+        self.fx = self.fx_case
 
     def tearDown(self):
         self.fx_case.tearDown()
@@ -146,9 +154,10 @@ class C2ChildBindingIntegrationTests(unittest.TestCase):
     def test_real_host_root_loads_signed_group_and_retains_store_until_close(self):
         child = open_c2_child_binding(parse_c2_child_config(_host_config(self.fx)),
             clock=self.fx.clock, expected_uid=os.geteuid())
-        self.assertEqual(child.binding.host_identity.boot_id, self.fx.host_spec.boot_id)
-        self.assertEqual(tuple(item.component for item in child.binding.components),
-                         ("worker-1", "worker-2", "worker-3"))
+        with child.borrow() as binding:
+            self.assertEqual(binding.host_identity.boot_id, self.fx.host_spec.boot_id)
+            self.assertEqual(tuple(item.component for item in binding.components),
+                             ("worker-1", "worker-2", "worker-3"))
         descriptors = (child._root_store._root_fd, child._root_store._generations_fd,
                       child._root_store._policies_fd)
         self.assertTrue(all(os.fstat(fd) for fd in descriptors))
@@ -156,7 +165,8 @@ class C2ChildBindingIntegrationTests(unittest.TestCase):
         child.close()
         self.assertEqual(child._root_store._root_fd, -1)
         with self.assertRaises(CredentialError):
-            _ = child.binding
+            with child.borrow():
+                pass
         child.close()  # Idempotent close does not reopen or replace authority.
 
     def test_wrong_operator_key_and_changed_selected_spec_fail_with_store_closed(self):
@@ -191,10 +201,60 @@ class C2ChildBindingIntegrationTests(unittest.TestCase):
         finally:
             self.fx._private(self.fx.header_path, original)
         wrong_root = parse_c2_child_config(_host_config(self.fx,
-            protected_root=str(self.fx.protected / "different")))
+            protected_root=str(self.fx.protected.parent)))
         with self.assertRaises((CredentialError, SnapshotError, OSError)):
             open_c2_child_binding(wrong_root, clock=self.fx.clock,
                                   expected_uid=os.geteuid())
+
+    def test_teardown_callback_can_close_owner_without_deadlock(self):
+        child = open_c2_child_binding(parse_c2_child_config(_host_config(self.fx)),
+            clock=self.fx.clock, expected_uid=os.geteuid())
+        with child.borrow() as binding:
+            binding.subscribe_teardown(lambda _reason: child.close())
+        child.close()
+        self.assertEqual(child._root_store._root_fd, -1)
+        child.close()
+
+    def test_close_during_borrowed_guard_keeps_root_fds_until_lease_exits(self):
+        child = open_c2_child_binding(parse_c2_child_config(_host_config(self.fx)),
+            clock=self.fx.clock, expected_uid=os.geteuid())
+        entered, proceed = threading.Event(), threading.Event()
+        outcome = []
+        with child.borrow() as binding:
+            binding_type = type(binding)
+            original_guard = binding_type.assert_live
+
+        def blocked_guard(instance):
+            entered.set()
+            if not proceed.wait(5):
+                raise AssertionError("guard barrier timed out")
+            return original_guard(instance)
+
+        def guarded_use():
+            try:
+                with child.borrow() as borrowed:
+                    borrowed.assert_live()
+            except BaseException as error:
+                outcome.append(error)
+
+        with patch.object(binding_type, "assert_live", blocked_guard):
+            worker = threading.Thread(target=guarded_use)
+            worker.start()
+            self.assertTrue(entered.wait(5), "borrowed guard did not reach barrier")
+            root_fd = child._root_store._root_fd
+            child.close()  # Must return while the guarded borrow remains active.
+            os.fstat(root_fd)
+            other_fd = os.open(os.devnull, os.O_RDONLY)
+            try:
+                self.assertNotEqual(other_fd, root_fd)
+            finally:
+                os.close(other_fd)
+            proceed.set()
+            worker.join(5)
+            self.assertFalse(worker.is_alive(), "borrowed guard did not finish")
+        self.assertEqual(len(outcome), 1)
+        self.assertIsInstance(outcome[0], CredentialError)
+        self.assertEqual(child._root_store._root_fd, -1)
 
     def test_real_coordinator_root_loads_with_no_operator_key(self):
         coordinator_case = coordinator_fixture.C2CoordinatorStoreIntegrationTests(

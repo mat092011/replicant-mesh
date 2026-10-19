@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from cryptography.hazmat.primitives import serialization
 
 from steamboat_security.channel_policy import _verification_key
 from steamboat_security.clock import Clock
@@ -83,9 +85,15 @@ def _validate_document(value: object) -> tuple[RoleLaunchSpec, bytes | None]:
         if not 1 <= len(key_pem) <= MAX_OPERATOR_PUBLIC_KEY_BYTES:
             raise CredentialError("operator public PEM exceeds its 4 KiB bound")
         try:
-            _verification_key(key_pem)  # Existing policy requires ECDSA P-256.
+            public_key = _verification_key(key_pem)  # Existing policy requires ECDSA P-256.
         except SnapshotError as error:
             raise CredentialError("operator public PEM is not an accepted P-256 key") from error
+        canonical_public_pem = public_key.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        if key_pem != canonical_public_pem:
+            raise CredentialError("operator PEM must be exactly one canonical public key")
     try:
         if len(canonical_json(value)) > MAX_C2_CHILD_CONFIG_BYTES:
             raise CredentialError("C2 child config exceeds its 16 KiB bound")
@@ -193,38 +201,73 @@ class C2ChildBinding:
         self._binding = binding
         self._lock = threading.Lock()
         self._state = "open"
+        self._active_leases = 0
+        self._invalidation_done = False
+        self._cleanup_claimed = False
+        self._cleanup_error = None
 
-    @property
-    def binding(self):
+    @contextmanager
+    def borrow(self):
+        """Lease the binding while using it; close never waits for a lease."""
         with self._lock:
             if self._state != "open":
                 raise CredentialError("C2 child binding owner is not open")
-            self._binding.assert_live()
-            return self._binding
+            self._active_leases += 1
+        try:
+            yield self._binding
+        finally:
+            cleanup = None
+            with self._lock:
+                self._active_leases -= 1
+                cleanup = self._claim_cleanup_locked()
+            self._run_cleanup(cleanup)
 
     def assert_live(self):
-        return self.binding.assert_live()
+        with self.borrow() as binding:
+            return binding.assert_live()
+
+    def _claim_cleanup_locked(self):
+        if (self._state == "closing" and self._invalidation_done
+                and self._active_leases == 0 and not self._cleanup_claimed):
+            self._cleanup_claimed = True
+            return True
+        return False
+
+    def _run_cleanup(self, claimed):
+        if not claimed:
+            return
+        error = None
+        try:
+            self._root_store.close()
+        except BaseException as caught:
+            error = caught
+        with self._lock:
+            self._cleanup_error = error
+            self._state = "faulted" if error else "closed"
+        if error:
+            raise StorageError("C2 child root descriptors did not close cleanly") from error
 
     def close(self):
         with self._lock:
-            if self._state == "closed":
+            if self._state in ("closed", "closing", "faulted"):
                 return
-            if self._state != "open":
-                raise StorageError("C2 child binding close is already faulted")
             self._state = "closing"
-        errors = []
+        error = None
         try:
             self._binding.invalidate("C2 child binding owner closed")
-        except BaseException as error:
-            errors.append(error)
-        try:
-            self._root_store.close()
-        except BaseException as error:
-            errors.append(error)
+        except BaseException as caught:
+            error = caught
+        cleanup = None
         with self._lock:
-            self._state = "faulted" if errors else "closed"
-        if errors:
-            raise StorageError("C2 child binding resources did not close cleanly") from errors[0]
+            self._invalidation_done = True
+            cleanup = self._claim_cleanup_locked()
+        try:
+            self._run_cleanup(cleanup)
+        except StorageError:
+            if error is None:
+                raise
+        if error:
+            raise StorageError("C2 child binding invalidation notification failed") from error
 
     def __enter__(self):
         return self
