@@ -22,5 +22,9 @@ RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/participant-se
     && python -c "import cryptography,cffi,pycparser; assert (cryptography.__version__,cffi.__version__,pycparser.__version__)==('50.0.2','2.1.1','3.11')"
 
 FROM dependencies AS validation
+RUN mkdir -p /opt/steamboat-test/identity-root \
+    && chmod 0700 /opt/steamboat-test/identity-root
+COPY --chown=65534:65534 --chmod=0600 docker/participant-security/foreign-owner-fixture.txt /opt/steamboat-test/identity-root/foreign.pem
+ENV STEAMBOAT_IDENTITY_FOREIGN_FIXTURE=/opt/steamboat-test/identity-root/foreign.pem
 COPY . /app
 CMD ["python", "-B", "scripts/check_participant_artifacts.py"]
