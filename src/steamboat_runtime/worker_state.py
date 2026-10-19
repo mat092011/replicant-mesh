@@ -27,6 +27,23 @@ METHODS = {"Describe", "OpenSession", "RenewSession", "Step", "CloseSession",
            "CancelSession", "SessionStatus"}
 TERMINAL = {"CLOSED_SESSION": "CLOSED", "CANCELLED": "CANCELLED",
             "EXPIRED_SESSION": "EXPIRED", "TIMEOUT": "TIMED_OUT", "EXECUTION_FAILED": "FAILED"}
+OWNER_LIMIT_KEYS = frozenset({"max_sessions", "worker_cache_positions",
+                              "worker_cache_bytes", "request_timeout_seconds"})
+
+
+def narrowed_owner_limits(manifest, owner_limits=None):
+    """Return a private limits mapping, optionally narrowed by a component allocation."""
+    base = manifest["limits"]
+    limits = dict(base)
+    if owner_limits is None:
+        return limits
+    if type(owner_limits) is not dict or set(owner_limits) - OWNER_LIMIT_KEYS:
+        raise ValueError("owner limits must be a dictionary of supported component limits")
+    for name, value in owner_limits.items():
+        if type(value) is not int or value <= 0 or value > base[name]:
+            raise ValueError(f"owner limit {name} must be a positive integer within the manifest")
+        limits[name] = value
+    return limits
 
 
 class StageExecutor:
@@ -96,14 +113,14 @@ class Operation:
 class WorkerHandler:
     def __init__(self, manifest, worker_name, executor, *, clock=time.monotonic,
                  boot_id=None, max_tombstones=4096, enable_queue=False, queue_capacity=None,
-                 on_supervision=None):
+                 on_supervision=None, owner_limits=None):
         validate_manifest(manifest)
         if worker_name not in ("worker-1", "worker-2", "worker-3"):
             raise ValueError("Unknown worker assignment")
         if type(max_tombstones) is not int or max_tombstones < 1:
             raise ValueError("Tombstone capacity must be positive")
         self.manifest, self.worker_name, self.executor = manifest, worker_name, executor
-        self.limits = manifest["limits"]
+        self.limits = narrowed_owner_limits(manifest, owner_limits)
         if type(enable_queue) is not bool:
             raise ValueError("Queue selection must be boolean")
         if queue_capacity is None:

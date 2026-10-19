@@ -12,6 +12,19 @@ from .assigned_artifacts import AssignedArtifactError, AssignedArtifactView
 
 
 _WORKERS = frozenset({"worker-1", "worker-2", "worker-3"})
+_OWNER_LIMIT_KEYS = frozenset({"max_sessions", "worker_cache_positions",
+                               "worker_cache_bytes", "request_timeout_seconds"})
+
+
+def _validate_owner_limits(manifest, owner_limits):
+    if owner_limits is None:
+        return
+    base = manifest["limits"]
+    if type(owner_limits) is not dict or set(owner_limits) - _OWNER_LIMIT_KEYS:
+        raise AssignedArtifactError("invalid component owner limits")
+    for name, value in owner_limits.items():
+        if type(value) is not int or value <= 0 or value > base[name]:
+            raise AssignedArtifactError("invalid component owner limits")
 
 
 def _validated_assignment(view):
@@ -128,6 +141,7 @@ class AssignedStageExecutor:
 def build_assigned_worker_handler(view, *, boot_id=None, clock=None,
                                   max_tombstones=4096, enable_queue=False,
                                   queue_capacity=None, on_supervision=None,
+                                  owner_limits=None,
                                   pin=None, guard=None,
                                   allow_unpinned_test_only=False):
     """Build a WorkerHandler from one current host assignment.
@@ -135,6 +149,11 @@ def build_assigned_worker_handler(view, *, boot_id=None, clock=None,
     The function does not admit the worker to a gateway or claim readiness;
     those require the surrounding supervisor and its independent checks.
     """
+    # Reject an invalid narrowing before AssignedStageExecutor can load resident
+    # weights. This remains a per-handler ceiling; callers own aggregate allocation.
+    if owner_limits is not None:
+        manifest, _, _ = _validated_assignment(view)
+        _validate_owner_limits(manifest, owner_limits)
     from steamboat_connector.artifact_pin import (RuntimeArtifactPin,
                                                    RuntimeAssignmentGuard)
     if pin is not None and type(pin) is not RuntimeArtifactPin:
@@ -170,6 +189,7 @@ def build_assigned_worker_handler(view, *, boot_id=None, clock=None,
         "enable_queue": enable_queue,
         "queue_capacity": queue_capacity,
         "on_supervision": on_supervision,
+        "owner_limits": owner_limits,
     }
     if guard is not None:
         security_clock = guard.child_clock
