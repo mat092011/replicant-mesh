@@ -16,16 +16,16 @@ from steamboat_security.channel_policy import sign_channel_policy
 from steamboat_security.gateway_ingress import (GatewayIngressError,
     GatewayWorkerIngress)
 from steamboat_security.sessions import SessionBindings
-import test_gateway_delegation as delegation_tests
-from test_gateway_delegation import GatewayDelegationTests, private_pem
+from tests.security import test_gateway_delegation as delegation_tests
 
 
 class GatewayIngressTests(unittest.TestCase):
     def setUp(self):
+        self._prior_delegation_now = delegation_tests.NOW
         delegation_tests.NOW = int(datetime.now(timezone.utc).timestamp()) - 30
         now = delegation_tests.NOW
         self._temp_paths = []
-        self.fixture = GatewayDelegationTests()
+        self.fixture = delegation_tests.GatewayDelegationTests()
         self.fixture.setUp()
         self.worker_channel_key = generate_private_key_pem()
         worker_identity = {
@@ -44,13 +44,17 @@ class GatewayIngressTests(unittest.TestCase):
         worker_cert = x509.load_pem_x509_certificate(self.worker_channel)
         payload = dict(self.fixture.payload)
         payload["revision"] = 2
+        route = dict(payload["routes"][0])
+        route["methods"] = sorted(("Describe", "OpenSession", "RenewSession", "Step",
+                                   "CloseSession", "CancelSession", "SessionStatus"))
+        payload["routes"] = [route]
         worker = dict(payload["workers"][0])
         worker.update(channel_serial=serial_hex(worker_cert.serial_number),
                       channel_certificate_sha256=certificate_sha256(worker_cert),
                       channel_public_key_sha256=public_key_sha256(worker_cert.public_key()))
         payload["workers"] = [worker]
         self.fixture.view = self.fixture.policy_store.install(
-            sign_channel_policy(payload, private_pem(self.fixture.operator_key)))
+            sign_channel_policy(payload, delegation_tests.private_pem(self.fixture.operator_key)))
         self.gateway_cert_file = None
         self.worker_cert_file = None
         self.worker_key_file = None
@@ -62,6 +66,7 @@ class GatewayIngressTests(unittest.TestCase):
             gateway_id="gw-east", local_worker_channel_certificate_pem=self.worker_channel)
 
     def tearDown(self):
+        delegation_tests.NOW = self._prior_delegation_now
         self.fixture.tearDown() if hasattr(self.fixture, "tearDown") else None
         for path in self._temp_paths:
             try:
@@ -206,7 +211,7 @@ class GatewayIngressTests(unittest.TestCase):
         replacement = dict(self.fixture.payload)
         replacement["revision"] = 3
         self.fixture.policy_store.install(sign_channel_policy(
-            replacement, private_pem(self.fixture.operator_key)))
+            replacement, delegation_tests.private_pem(self.fixture.operator_key)))
         self.assertTrue(self.ingress.poll_unavailable())
         self.assertTrue(self.ingress._state.closed)
 

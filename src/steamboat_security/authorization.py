@@ -8,6 +8,7 @@ then checks the signed current grants before a runtime handler is called.
 from __future__ import annotations
 
 import re
+import ssl
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -259,8 +260,9 @@ class Authorization:
                  grant: Grant, model_id: str, payload: Any,
                  session_claim: SessionClaim | None = None,
                  session_key: tuple[str, str, str] | None = None,
-                 lease_token: str = ""):
+                 lease_token: str = "", gateway_guard=None):
         self._authorizer = authorizer
+        self._local_identity = authorizer.local_identity
         self.binding = binding
         self.binding_bytes = binding.encoded
         self.actor = actor
@@ -271,6 +273,7 @@ class Authorization:
         self._session_claim = session_claim
         self._session_key = session_key
         self._lease_token = lease_token
+        self._gateway_guard = gateway_guard
         self._finished = False
         self._failed = False
         self._terminal_complete = False
@@ -278,6 +281,11 @@ class Authorization:
     def _live_deadline_state(self):
         authorizer = self._authorizer
         try:
+            if authorizer.local_identity != self._local_identity:
+                raise CredentialError("configured local identity was replaced")
+            gateway_deadline = None
+            if self._gateway_guard is not None:
+                gateway_deadline = self._gateway_guard.deadline_monotonic
             view, sample = authorizer._current_view()
             authorizer._assert_credential(view, self.actor, sample)
             authorizer._assert_credential(view, self.local, sample)
@@ -297,10 +305,13 @@ class Authorization:
                          view.credential_deadlines.get(self.actor.serial, -1.0),
                          view.credential_deadlines.get(self.local.serial, -1.0),
                          grant_deadline]
+            if gateway_deadline is not None:
+                deadlines.append(gateway_deadline)
             if self._terminal_complete:
                 authorizer.session_bindings.assert_terminal(
                     self.binding, actor=self.actor.record, local=self.local.record,
-                    grant=grant, model_id=self.model_id, key=self._session_key)
+                    grant=grant, model_id=self.model_id, key=self._session_key,
+                    ingress_identity=self._ingress_identity)
                 deadlines.append(authorizer.session_bindings.authorization_deadline(
                     self._session_key, now_monotonic=sample.monotonic,
                     terminal=True))
@@ -313,7 +324,8 @@ class Authorization:
                         grant=grant, model_id=self.model_id,
                         session_id=self.binding["session_id"],
                         worker_boot_id=self.binding["worker_boot_id"],
-                        lease_token=self._lease_token)
+                        lease_token=self._lease_token,
+                        ingress_identity=self._ingress_identity)
                 else:
                     authorizer.session_bindings.assert_claim_live(self._session_claim)
                 deadlines.append(authorizer.session_bindings.authorization_deadline(
@@ -325,9 +337,13 @@ class Authorization:
                     grant=grant, model_id=self.model_id,
                     session_id=self.binding["session_id"],
                     worker_boot_id=self.binding["worker_boot_id"],
-                    lease_token=self._lease_token)
+                    lease_token=self._lease_token,
+                    ingress_identity=self._ingress_identity)
                 deadlines.append(authorizer.session_bindings.authorization_deadline(
                     self._session_key, now_monotonic=sample.monotonic))
+            if self._gateway_guard is not None:
+                final_gateway_deadline = self._gateway_guard.deadline_monotonic
+                deadlines.append(final_gateway_deadline)
             deadline = min(deadlines)
             if sample.monotonic >= deadline:
                 raise SessionError("authorization deadline expired")
@@ -341,6 +357,11 @@ class Authorization:
                                                        reason="authorization-invalidated")
             raise
         return deadline, sample.monotonic
+
+    @property
+    def _ingress_identity(self):
+        return (None if self._gateway_guard is None
+                else self._gateway_guard.ingress_identity)
 
     @property
     def deadline_monotonic(self) -> float:
@@ -359,7 +380,17 @@ class Authorization:
         self._live_deadline_state()
         return True
 
+    def _assert_gateway_live(self):
+        if self._gateway_guard is not None:
+            self._gateway_guard.assert_live()
+
     def complete(self, response):
+        try:
+            return self._complete(response)
+        finally:
+            self._assert_gateway_live()
+
+    def _complete(self, response):
         """Validate response identity and seal a new OpenSession lease before write."""
         if self._finished:
             raise SessionError("authorization response was already completed")
@@ -368,10 +399,12 @@ class Authorization:
             # Coordinator JSON response/event schemas remain owned by its service.
             # The adapter echoes binding_bytes as initial metadata and calls
             # assert_live() again immediately before every emitted event.
+            self._assert_gateway_live()
             self._finished = True
             return response
         descriptor = getattr(response, "DESCRIPTOR", None)
         if getattr(descriptor, "full_name", None) != "steamboat.v1.Response":
+            self._assert_gateway_live()
             raise BindingError("worker response must be the parsed v1 Response")
         if response.code != "OK":
             if self.binding.method == "OpenSession" and self._session_claim is not None:
@@ -382,19 +415,23 @@ class Authorization:
                     "RenewSession", "Step", "CloseSession", "CancelSession"):
                 self._authorizer.session_bindings.invalidate(
                     key=self._session_key, reason="mutating-operation-failed")
+            self._assert_gateway_live()
             self._finished = True
             return response
         if (response.protocol_version != 1 or response.manifest_fingerprint != self.model_id
                 or response.worker_boot_id != self._authorizer.local_identity.boot_id):
             self.fail(cache_may_exist=True)
+            self._assert_gateway_live()
             raise BindingError("worker response identity differs from the admitted target")
         method = self.binding.method
         if method != "Describe" and response.session_id != self.binding["session_id"]:
             self.fail(cache_may_exist=True)
+            self._assert_gateway_live()
             raise BindingError("worker response session differs from the binding")
         if method == "OpenSession":
             if response.max_positions != _field(self.payload, "max_positions"):
                 self.fail(cache_may_exist=True)
+                self._assert_gateway_live()
                 raise BindingError("OpenSession response reservation differs from the request")
             self._authorizer.session_bindings.seal_open(self._session_claim,
                                                         response.lease_token)
@@ -402,6 +439,7 @@ class Authorization:
         elif method != "Describe":
             if response.lease_token != self._lease_token:
                 self.fail(cache_may_exist=True)
+                self._assert_gateway_live()
                 raise BindingError("worker response lease differs from the request")
         if method == "Step":
             if (response.sequence != _field(self.payload, "sequence")
@@ -410,11 +448,13 @@ class Authorization:
                     or response.end_position != response.start_position + response.token_count
                     or response.next_sequence != response.sequence + 1):
                 self.fail(cache_may_exist=True)
+                self._assert_gateway_live()
                 raise BindingError("Step response does not acknowledge the submitted operation")
         if method in ("CloseSession", "CancelSession"):
             self._authorizer.session_bindings.complete_operation(
                 self._session_key, method, reclaimed=response.reclaimed is True)
             self._terminal_complete = True
+        self._assert_gateway_live()
         self._finished = True
         return response
 
@@ -545,6 +585,71 @@ class Authorizer:
 
     def authorize(self, service: str, method: str, payload: Any,
                   metadata, peer_certificate_pem: bytes) -> Authorization:
+        """Authorize one direct-TLS request using only its TLS peer leaf."""
+        return self._authorize_with_actor_pem(
+            service, method, payload, metadata, peer_certificate_pem,
+            ingress_guard=None)
+
+    def authorize_gateway(self, service: str, method: str, payload: Any,
+                          metadata, *, ingress, envelope: bytes,
+                          request_bytes: bytes, frame_sequence: int) -> Authorization:
+        """Admit a single delegated request from one owned gateway TLS stream.
+
+        This method is the only core boundary for gateway requests. It mints
+        the ingress guard itself and then reuses the exact direct C1 checks.
+        """
+        from .gateway_ingress import (GatewayIngressError, GatewayOperationGuard,
+                                      GatewayWorkerIngress)
+        from .gateway_delegation import GatewayDelegationVerifier
+
+        if type(ingress) is not GatewayWorkerIngress:
+            raise GatewayIngressError("an exact owned gateway ingress is required")
+        verifier = ingress.verifier
+        tls_object = getattr(ingress, "_ssl_object", None)
+        if (type(verifier) is not GatewayDelegationVerifier
+                or type(tls_object) is not ssl.SSLObject
+                or tls_object.server_side is not False
+                or tls_object.server_hostname != verifier.endpoint_host
+                or ingress.clock is not self.clock
+                or verifier.clock is not self.clock
+                or ingress.sessions is not self.session_bindings
+                or verifier.local_identity != self.local_identity
+                or ingress._local_identity != self.local_identity):
+            raise GatewayIngressError("gateway ingress owners differ from this Authorizer")
+        if type(request_bytes) is not bytes or not 1 <= len(request_bytes) <= MAX_REQUEST_BYTES:
+            ingress.close("gateway-invalid-frame")
+            raise BindingError("raw gateway request exceeds its 1 MiB bound")
+        try:
+            guard = ingress.verify_operation(envelope, metadata, request_bytes, frame_sequence)
+            if type(guard) is not GatewayOperationGuard:
+                raise GatewayIngressError("ingress did not mint its concrete operation guard")
+            guard.assert_live()
+            delegated = guard.delegation
+            if (delegated.payload["service"] != service
+                    or delegated.payload["method"] != method
+                    or service != WORKER_SERVICE or method not in WORKER_METHODS):
+                raise ScopeError("gateway delegation does not match the worker entrypoint")
+            request = _request(payload, self.worker_request_type)
+            serializer = getattr(request, "SerializeToString", None)
+            if not callable(serializer):
+                raise BindingError("worker payload has no deterministic protobuf serializer")
+            serialized = serializer(deterministic=True)
+            if type(serialized) is not bytes or serialized != request_bytes:
+                raise BindingError("raw gateway bytes differ from the parsed worker payload")
+            if delegated.payload["frame_sequence"] != frame_sequence:
+                raise ScopeError("gateway delegation sequence differs from ingress admission")
+        except Exception as error:
+            ingress.close("gateway-invalid-frame")
+            if isinstance(error, (BindingError, ScopeError, GatewayIngressError)):
+                raise
+            raise BindingError("worker payload cannot be serialized deterministically") from error
+        return self._authorize_with_actor_pem(
+            service, method, request, metadata,
+            delegated.actor_certificate_pem, ingress_guard=guard)
+
+    def _authorize_with_actor_pem(self, service: str, method: str, payload: Any,
+                                  metadata, peer_certificate_pem: bytes,
+                                  *, ingress_guard=None) -> Authorization:
         """Authorize one existing wire method before entering its runtime handler."""
         binding = parse_metadata(service, method, metadata)
         if type(peer_certificate_pem) is not bytes or len(peer_certificate_pem) > MAX_CERTIFICATE_BYTES:
@@ -602,12 +707,16 @@ class Authorizer:
                 view.deadline_monotonic,
                 view.credential_deadlines.get(actor.serial, sample.monotonic),
                 view.credential_deadlines.get(local.serial, sample.monotonic),
-                view.grant_deadlines.get(grant.identity, sample.monotonic))
+                view.grant_deadlines.get(grant.identity, sample.monotonic),
+                (ingress_guard.deadline_monotonic if ingress_guard is not None
+                 else requested_expiry))
             claim = self.session_bindings.claim(
                 binding, actor=actor.record, local=local.record, grant=grant,
                 model_id=model_id, lifetime_ms=lifetime, max_positions=positions,
                 idle_lease_ms=idle_lease, hard_expiry_monotonic=hard_expiry,
-                requested_expiry_monotonic=requested_expiry)
+                requested_expiry_monotonic=requested_expiry,
+                ingress_identity=(None if ingress_guard is None
+                                  else ingress_guard.ingress_identity))
             session_key = claim.key
         elif service == WORKER_SERVICE and method not in ("Describe",):
             if self.session_bindings is None:
@@ -616,11 +725,13 @@ class Authorizer:
             session_key = self.session_bindings.check(
                 binding, actor=actor.record, local=local.record, grant=grant,
                 model_id=model_id, session_id=binding["session_id"],
-                worker_boot_id=binding["worker_boot_id"], lease_token=lease)
+                worker_boot_id=binding["worker_boot_id"], lease_token=lease,
+                ingress_identity=(None if ingress_guard is None
+                                  else ingress_guard.ingress_identity))
         return Authorization(self, binding=binding, actor=actor, local=local,
                              grant=grant, model_id=model_id, payload=payload,
                              session_claim=claim, session_key=session_key,
-                             lease_token=lease)
+                             lease_token=lease, gateway_guard=ingress_guard)
 
     def _validate_worker_payload(self, method: str, binding: Binding, request):
         if type(_field(request, "protocol_version", 0)) is not int or _field(request, "protocol_version", 0) != 1:
