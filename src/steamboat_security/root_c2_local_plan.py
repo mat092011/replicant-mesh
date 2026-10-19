@@ -88,8 +88,13 @@ def _plan_doc(plan, *, include_digest=True):
             or len(identities) != len(set(identities))
             or any((x.account_id, x.device_id) != (account, device) for x in local)):
         raise CredentialError("complete local specs do not match the local principal")
+    generation = _hash(plan.generation_sha256, "generation hash")
+    if any(x.generation_sha256 != generation for x in local):
+        raise CredentialError("complete local specs differ from the plan generation")
     expected_enabled = tuple(x for x in local if x.role in plan.enabled_roles)
     expected_disabled = tuple(x for x in local if x.role not in plan.enabled_roles)
+    if set(plan.enabled_roles) != {x.role for x in enabled}:
+        raise CredentialError("enabled roles do not exactly match enabled launch specs")
     if enabled != expected_enabled or disabled != expected_disabled:
         raise CredentialError("enabled and disabled specs are not the exact canonical local projections")
     host_local = {x.identity for x in local if x.role == "host"}

@@ -135,6 +135,16 @@ class C2LocalPlanTests(unittest.TestCase):
 
     def test_recomputed_digest_does_not_hide_spec_or_scope_inconsistency(self):
         plan = self._derive(epoch=6)
+        wrong_generation = c2_local_plan_document(plan)
+        wrong_generation["complete_local_specs"][0]["generation_sha256"] = "d" * 64
+        with self.assertRaisesRegex(CredentialError, "plan generation"):
+            parse_c2_local_plan(self._resign_local_doc(wrong_generation))
+
+        extra_enabled_role = c2_local_plan_document(plan)
+        extra_enabled_role["enabled_roles"] = ["host", "personal_coordinator"]
+        with self.assertRaisesRegex(CredentialError, "exactly match enabled launch specs"):
+            parse_c2_local_plan(self._resign_local_doc(extra_enabled_role))
+
         raw = c2_local_plan_document(plan)
         raw["enabled_specs"][0]["boot_id"] = "a" * 32
         with self.assertRaisesRegex(CredentialError, "exact canonical local projections"):
