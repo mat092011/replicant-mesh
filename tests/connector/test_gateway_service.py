@@ -16,7 +16,6 @@ from steamboat_connector.channel_writer import writer_reservation_overhead_bytes
 from steamboat_connector.gateway_service import (
     GatewayService, GatewayServiceError, required_communication_memory_bytes,
 )
-from steamboat_connector import gateway_service as gateway_service_module
 from steamboat_runtime.protocol import PROTOCOL_VERSION
 from steamboat_runtime.protocol.wire import Request, Response, serialize_message
 from steamboat_security.gateway_egress import GatewayCoordinatorEgress
@@ -144,12 +143,23 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         driver = ChannelSocket(client_socket, owner, fx.meter_budget,
                                role="host", boot_id=fx.socket_host_boot)
         cleanup = {"owner": owner, "driver": driver, "stream": None,
-                   "socket": client_socket}
+                   "socket": client_socket, "coordinator": True}
         self._client_cleanup[id(driver)] = cleanup
         self.addCleanup(self._close_client, cleanup)
+        self.clients.append((owner, driver, None, None, client_socket, None))
+        return owner, driver, None
+
+    def _ensure_coordinator_hello(self, owner, driver):
+        index = next(i for i, item in enumerate(self.clients) if item[1] is driver)
+        current = self.clients[index]
+        if current[2] is not None:
+            return current[2]
+        if (not owner.handshake_complete or driver.pending_plaintext_bytes
+                or driver.pending_ciphertext_bytes or owner.pending_encrypted_bytes):
+            return None
         hello = CoordinatorHelloClient(owner, reassembly_capacity=wire.MAX_BUNDLE_BYTES)
-        self.clients.append((owner, driver, hello, None, client_socket, None))
-        return owner, driver, hello
+        self.clients[index] = (owner, driver, hello, current[3], current[4], current[5])
+        return hello
 
     @staticmethod
     def _close_client(cleanup):
@@ -186,6 +196,9 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                         and not owner.pending_encrypted_bytes):
                     if hello is None and self._client_cleanup[id(driver)].get("worker_boot_id"):
                         hello, ingress = self._ensure_worker_hello(owner, driver)
+                        self.clients[index] = (owner, driver, hello, stream, sock, ingress)
+                    elif hello is None and self._client_cleanup[id(driver)].get("coordinator"):
+                        hello = self._ensure_coordinator_hello(owner, driver)
                         self.clients[index] = (owner, driver, hello, stream, sock, ingress)
                 if (stream is None and hello is not None and owner.handshake_complete
                         and not driver.pending_plaintext_bytes
@@ -354,10 +367,9 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         service.pump_once()
         self.assertEqual(service.pending_channels, 1)
         accepted = service._accepted[0]
-        with patch("steamboat_connector.gateway_service.time.monotonic",
-                   side_effect=[accepted.accepted_at + 6.0]):
-            with self.assertRaisesRegex(GatewayServiceError, "five seconds"):
-                service.pump_once()
+        service._monotonic = lambda: accepted.accepted_at + 6.0
+        with self.assertRaisesRegex(GatewayServiceError, "five seconds"):
+            service.pump_once()
         self.assertFalse(service._accepting)
         self.assertEqual(service.pending_channels, 1)
         self.assertTrue(accepted.close_started)
@@ -566,7 +578,7 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         self.assertEqual(service._workers, {})
         self.assertEqual(service.pending_channels, 1)
 
-    def test_stop_during_router_registration_retires_late_registration(self):
+    def _exercise_router_registration_barrier(self, *, stop_before_release, expire):
         service = self._service(expected=((self.fx.device_id, self.fx.worker_boot_id),))
         self._worker_client(self.fx.worker_boot_id)
         self._coordinator_client()
@@ -603,6 +615,10 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                     hello, ingress = self._ensure_worker_hello(owner, driver)
                     if hello is not None:
                         self.clients[index] = (owner, driver, hello, stream, sock, ingress)
+                elif hello is None and self._client_cleanup[id(driver)].get("coordinator"):
+                    hello = self._ensure_coordinator_hello(owner, driver)
+                    if hello is not None:
+                        self.clients[index] = (owner, driver, hello, stream, sock, ingress)
                 if (stream is None and hello is not None and owner.handshake_complete
                         and not driver.pending_plaintext_bytes
                         and not driver.pending_ciphertext_bytes
@@ -629,22 +645,38 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                 time.sleep(0.001)
             self.assertTrue(entered.wait(1.0),
                             "genuine worker HELLO did not reach router registration")
-            service.stop()
-            self.assertFalse(service._resources_closed)
             accepted_at = service._accepted[0].accepted_at
-            with patch.object(gateway_service_module.time, "monotonic",
-                              return_value=accepted_at + 5.01):
+            if stop_before_release:
+                service.stop()
+                self.assertFalse(service._resources_closed)
+            else:
+                self.assertTrue(service._accepting,
+                                "deadline-only case must not Stop before callback return")
+            if expire:
+                service._monotonic = lambda: accepted_at + 5.01
+                release.set()
+                service_thread.join(2.0)
+            else:
                 release.set()
                 service_thread.join(2.0)
         self.assertFalse(service_thread.is_alive())
-        self.assertEqual(len(errors), 1)
-        self.assertIsInstance(errors[0], GatewayServiceError)
-        self.assertIn("five seconds", str(errors[0]))
+        if expire:
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], GatewayServiceError)
+            self.assertIn("five seconds", str(errors[0]))
+        else:
+            self.assertEqual(errors, [])
         self.assertTrue(service._resources_closed)
         self.assertEqual(service._workers, {})
         self.assertIsNone(service.multiplexer)
         self.assertEqual(service.router._workers, {})
         self.assertEqual(service.pending_channels, 1)
+
+    def test_stop_during_router_registration_retires_late_registration(self):
+        self._exercise_router_registration_barrier(stop_before_release=True, expire=False)
+
+    def test_bootstrap_deadline_expires_after_router_registration_callback(self):
+        self._exercise_router_registration_barrier(stop_before_release=False, expire=True)
 
     def test_coordinator_tls_on_worker_listener_is_rejected_by_fixed_purpose(self):
         service = self._service(expected=((self.fx.device_id, self.fx.worker_boot_id),))

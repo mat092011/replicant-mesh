@@ -211,6 +211,7 @@ class GatewayService:
         self._resources_closed = False
         self._worker_capacity = worker_reassembly_capacity
         self._coordinator_capacity = coordinator_reassembly_capacity
+        self._monotonic = time.monotonic
         listeners = (worker_listener, coordinator_listener)
         with _RETENTION_LOCK:
             if len(_LIVE_SERVICES) + len(_RETAINED_SERVICES) >= _MAX_RETAINED_SERVICES:
@@ -245,7 +246,7 @@ class GatewayService:
         raise GatewayServiceError(reason)
 
     def _check_bootstrap_deadline(self, pending):
-        if time.monotonic() - pending.accepted_at > MAX_BOOTSTRAP_SECONDS:
+        if self._monotonic() - pending.accepted_at > MAX_BOOTSTRAP_SECONDS:
             self._fail("TLS and HELLO bootstrap exceeded five seconds")
 
     def _close_listener_once(self, listener):
@@ -295,7 +296,7 @@ class GatewayService:
                 client, _peer = listener.accept()
             except BlockingIOError:
                 return
-            pending = _Accepted(purpose, client, time.monotonic())
+            pending = _Accepted(purpose, client, self._monotonic())
             self._accepted.append(pending)
             client.setblocking(False)
             if purpose == "coordinator":
@@ -406,7 +407,7 @@ class GatewayService:
         with self._stop_lock:
             if not self._accepting:
                 return False
-            expired = (time.monotonic() - pending.accepted_at
+            expired = (self._monotonic() - pending.accepted_at
                        > MAX_BOOTSTRAP_SECONDS)
             if not expired:
                 if pending.purpose == "worker":
@@ -437,7 +438,7 @@ class GatewayService:
             # A factory can return after Stop; capture its ownership before
             # allowing the pump to quiesce so the finalizer can retire it.
             with self._stop_lock:
-                expired = (time.monotonic() - pending.accepted_at
+                expired = (self._monotonic() - pending.accepted_at
                            > MAX_BOOTSTRAP_SECONDS)
                 if expired:
                     self._failed = "TLS and HELLO bootstrap exceeded five seconds"
