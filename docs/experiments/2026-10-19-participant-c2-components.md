@@ -1210,3 +1210,46 @@ record. This targeted regression result does not establish full C1 regression,
 actual C2 fixed-role readiness, shared physical limits or the real C2 route.
 C2.1–C2.6 remain open; host-service and coordinator model-owner implementation
 are still under review.
+
+## Host-service focused native run and coordinator fixture diagnostic
+
+The focused host-service suite passed 44 unique tests with zero skips,
+failures or errors in 8.250 seconds (2026-10-19 21:52:08.950–21:52:20.388
+UTC). The frozen source head was
+`df7ea6db746cb98e67eae27b3ce80018e3dd9bfa`, with 486 files and digest
+`c5a72ac9fe832805869fd0c0f34e5b0f3cec08255378787a55293d7758fab7ad`. Its
+pinned image was
+`sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`;
+the test log SHA-256 is
+`d3fd83a6be769f491a730748d05c07c6d72c75373ff8a33a97f4a8d478ff187c`. The
+suite contained 20 host-service cases and 24 channel-socket cases. It ran with
+the existing caps: 2 CPUs, 6 GiB RAM, 256 PIDs, no network, read-only root,
+all capabilities dropped, no-new-privileges, init, 15-second stop timeout,
+256 MiB `/tmp`, 16 MiB `/app/.lab`, and offline read-only model artifacts.
+
+The service tests include an assigned-stage readiness probe and loopback TLS
+factory/pump, exercise actual SIGTERM, and check that unknown socket, TLS and
+future outcomes retain owners. This is not a complete fixed selected-role
+process or proof of HELLO/READY, RPC numerics or physical quota enforcement.
+Those integrations remain pending.
+
+An earlier coordinator-root native probe at head
+`0543e48f795e0c9dcb49d9b3e17d800209041fdd` (492 files; source digest
+`3702179484d46b15925844659edd7ed3e06d31042ce99cc522a2ad48815bee59`) ran 13
+cases in 2.009 seconds: two passed and 11 errored during fixture setup, with
+zero skips. Its log SHA-256 is
+`26db25481811f52aba10b0aee9012c0970fb666ed39e822616f0a78c73144dff`. The
+fixture's signed grant model differed from the selected host group, so the
+failures occurred before test bodies. A fixture-only correction at `15c2` was
+source-reviewed. The follow-up passed all 13 tests with zero skips, failures or
+errors in 7.384 seconds on frozen head
+`15c2ffc76a29e6d1a809c6f662c30af5d46410a0`, 492 files, digest
+`f7bb9c2d3c33f74dc2c547d55a2dc2ef7da41cea6970b64c664309435066fe04`; log
+SHA-256 `962f7638f2fe031c05e8d3875a2a5f6c147462bb4b26165d02c07a01e08a4b5f`.
+It covered actual assigned-head finish health, cancelled awaiter/held-CPU
+invalidation, child-lease lock-thread bounded close, and strict signed key,
+assignment and root checks. This is not a full coordinator role, listener,
+route or READY test. Full coordinator runtime-close boundedness and fixed-role
+integration remain under review. Neither coordinator-root probe nor the
+host-service pass closes a C2 gate. C2.1–C2.6 remain open; C3 and research
+statuses are unchanged.

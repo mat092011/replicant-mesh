@@ -1079,3 +1079,26 @@ skips in 32.121 seconds. The latter includes real mTLS and model-backed cases
 using the required read-only reference fixture. The [component record](experiments/2026-10-19-participant-c2-components.md)
 retains the original failure and paired controls. Full C1 regression and actual
 C2 role/resource/route integration remain pending; every C2 gate remains open.
+
+**C2 host-service focused run, 2026-10-19:** 44 unique tests passed with zero
+skips, failures or errors in 8.250 seconds on a 486-file frozen source snapshot
+at head `df7ea6db746cb98e67eae27b3ce80018e3dd9bfa` (digest
+`c5a72ac9fe832805869fd0c0f34e5b0f3cec08255378787a55293d7758fab7ad`). The
+run included 20 host-service tests and 24 channel-socket controls, using the
+existing 2 CPU, 6 GiB, 256 PID, 15-second stop, no-network, read-only-root,
+dropped-capability, no-new-privileges, init and offline read-only artifact
+configuration. It exercises an assigned-stage readiness probe, loopback TLS
+factory/pump, actual SIGTERM and uncertain socket/TLS/future cleanup retention.
+It does not establish a full fixed selected-role process, HELLO/READY, RPC
+numerics or physical quota enforcement. The same run history retains an
+earlier coordinator-root probe with 2 passes and 11 fixture setup errors: the
+grant fixture model disagreed with the selected host group before test bodies
+ran. After a fixture-only correction, the follow-up passed all 13 tests with
+zero skips in 7.384 seconds at head
+`15c2ffc76a29e6d1a809c6f662c30af5d46410a0` (492 files; digest
+`f7bb9c2d3c33f74dc2c547d55a2dc2ef7da41cea6970b64c664309435066fe04`). It
+covers selected-head checks and child-lease bounded close, not a full
+coordinator role, listener, route or READY. These focused runs do not close a
+C2 gate. C2.1–C2.6 remain open; C3 is unchanged. See the
+[component record](experiments/2026-10-19-participant-c2-components.md) for
+exact run identities, the retained setup failure and scope limitations.
