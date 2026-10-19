@@ -1018,3 +1018,17 @@ resource enforcement, deployed multi-device routing and CT-11/CT-13 remain
 unproven. C2.1–C2.6 and the C2 exit gate remain open; C3 and research statuses
 are unchanged. See the [component evidence record](experiments/2026-10-19-participant-c2-components.md)
 for the retained failed attempts and hashes.
+
+A later focused consumer runtime-guard run passed 48 tests with zero skips in
+16.285 seconds at head `2a24b99d51a7d79e7eae2f24d748b72ffa739db1` (470-file
+source digest `8af0cb35015177e2360aec0857865d9eff679cde27afbdeda8f02a0aa090051f`,
+log SHA-256 `63977fb70d788882938087e03be61727333cb43f160b403cae8d78308b095b83`).
+It combines 21 consumer transport tests, 14 fake-client guard/delivery/cancel
+tests and 13 actual signed C2 consumer-binding tests. It does not wire the
+binding owner into live C1 RPC/controller delivery. The earlier 48-test run
+had one test failure (log SHA-256
+`8b505b4f741b91deb943c6f2458d3a85fe6264e8f994c42a54acbe72f5cade7f`); a
+test-only event-loop yield/check corrected it. Neither this focused run nor
+the expiry-probe rerun changes the combined component-33 result. The report
+retains both attempts and limitations. C2.1–C2.6 remain open; C3 and research
+statuses are unchanged.

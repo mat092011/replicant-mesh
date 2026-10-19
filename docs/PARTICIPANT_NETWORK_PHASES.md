@@ -301,6 +301,17 @@ routing. C2.1–C2.6 and the C2 exit gate remain open, and C3 has not advanced.
 Hashes, retained attempts and limits are in the
 [component record](experiments/2026-10-19-participant-c2-components.md).
 
+A later focused consumer runtime-guard run passed 48 tests with zero skips in
+16.285 seconds on a 470-file snapshot (head
+`2a24b99d51a7d79e7eae2f24d748b72ffa739db1`, digest
+`8af0cb35015177e2360aec0857865d9eff679cde27afbdeda8f02a0aa090051f`). The
+run combines existing consumer transport tests, fake-client guard/delivery/
+cancellation tests and actual signed C2 consumer-binding tests. It does not
+wire the binding owner into live C1 RPC or controller delivery. The combined
+component-33 inventory remains at 910 passes and one test-probe failure; it
+has not been rerun with the probe or consumer test corrections. These remain
+focused component results, not C2 phase acceptance; C2.1–C2.6 remain open.
+
 ## C3 — Validate one GPU execution path
 
 **Outcome:** one explicitly supported GPU/backend/precision combination preserves

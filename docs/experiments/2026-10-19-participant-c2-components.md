@@ -889,7 +889,8 @@ remain open; C3 and research statuses are unchanged.
 
 The focused host assembly check passed 8 tests with zero skips in 6.001
 seconds. Its frozen source head was
-`1ca5f3f42e3cf130e4a41287134d29e315f315f1` (one-file overlay source digest
+`1ca5f3f42e3cf130e4a41287134d29e315f315f1` (complete frozen source snapshot:
+468 files; digest
 `9822bd408011bf18ebdfdbb6c82961d69760011e4176a0874fd10d7e5782a3c1`); the
 test log SHA-256 is
 `e4390f532afd5d637d17f6aab767a2f8dc53fced3cbb753b1e7668c7baa7d986`. The
@@ -950,3 +951,38 @@ startup or READY, three-role execution, deployed gateway or WAN behavior,
 aggregate physical-resource enforcement, or CT-11/CT-13 split-host numerical
 and lifecycle acceptance. C2.1–C2.6 and the C2 exit gate remain open; C3 and
 research gate statuses are unchanged.
+
+## Later focused consumer runtime guard
+
+A focused consumer run passed 48 tests with zero skips in 16.285 seconds
+(2026-10-19 20:45:07.453–20:45:25.629 UTC). The source manifest was frozen at
+`2a24b99d51a7d79e7eae2f24d748b72ffa739db1`, digest
+`8af0cb35015177e2360aec0857865d9eff679cde27afbdeda8f02a0aa090051f`, with
+470 files. The runner mounted the complete frozen `src` and `tests` trees
+read-only over the pinned image
+`sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`.
+The log SHA-256 is
+`63977fb70d788882938087e03be61727333cb43f160b403cae8d78308b095b83`.
+The bounded container used 2 CPUs, 6 GiB memory, 256 PIDs, no network,
+read-only root, dropped capabilities, no-new-privileges, init and a
+15-second stop bound.
+
+The 48 cases comprise 21 existing consumer-transport tests, 14 new tests for
+the fake client's guard/delivery/cancellation behavior, and 13 actual signed
+C2 consumer-binding tests. They verify sticky invalidation, fast cancellation,
+retention on uncertain cleanup, guarded caller resumption, withholding queued
+tokens and bounded rejected loops. The consumer path adds no Torch import.
+These are separate component tests: they do not wire the binding owner into a
+live C1 RPC, controller or complete consumer-delivery path.
+
+The first run on head `b14c15d6b36c5ad8c0bdb00a7465112c0680d006`, source digest
+`ac1937a80e524d3eaff575dfb4326ed049eb457492ba752c78637f2df2090dbc`, ran 48
+tests with 47 passes and one failure (zero skips; 16.214 seconds; log SHA-256
+`8b505b4f741b91deb943c6f2458d3a85fe6264e8f994c42a54acbe72f5cade7f`). Its
+queued-callback invalidation test had not yielded to the event loop before
+awaiting an already-completed future. The test-only fix yields once and checks
+that invalidation is set before awaiting; the corrected run above passed. The
+combined component-33 inventory was not rerun with this consumer change or the
+earlier corrected expiry probe, so neither focused pass changes its recorded
+910-pass/one-failure result. All C2 gates remain open; C3 and research statuses
+are unchanged.
