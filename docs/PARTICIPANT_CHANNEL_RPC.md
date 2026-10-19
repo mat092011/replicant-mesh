@@ -45,12 +45,15 @@ repository's isolated PyTorch/Protobuf runtime.
 Each service constructor requires explicit independent data and cleanup
 capture reservations. They must cover all supported admissions before parsing;
 there is no default or implicit capacity. Data admission reserves
-`8 * MAX_PROTOBUF_BYTES + MAX_ENVELOPE_BYTES + MAX_BINDING_BYTES + 64 KiB`
-per operation (currently 8,495,104 bytes), and nine slots require 76,455,936
-bytes. Cleanup admission reserves
-`4 * MAX_CONTROL_PROTOBUF_BYTES + MAX_ENVELOPE_BYTES + MAX_BINDING_BYTES +
-64 KiB` per operation (currently 139,264 bytes), and eight slots require
-1,114,112 bytes. An occupied slot keeps its reservation until compute and
+`8 * MAX_PROTOBUF_BYTES + 64 * MAX_ENVELOPE_BYTES + 16 * MAX_BINDING_BYTES +
+128 KiB` per operation (currently 10,747,904 bytes), and nine slots require
+96,731,136 bytes. Cleanup admission reserves
+`8 * MAX_CONTROL_PROTOBUF_BYTES + 64 * MAX_ENVELOPE_BYTES +
+16 * MAX_BINDING_BYTES + 128 KiB` per operation (currently 2,424,832 bytes),
+and eight slots require 19,398,656 bytes. The envelope and binding factors
+conservatively allow for JSON and canonical-binding object expansion before
+authentication; they are accounting targets, not measured allocator peaks.
+An occupied slot keeps its reservation until compute and
 authorization ownership are released, including after an awaiting RPC is
 canceled. Gateway relay request captures use the same independent caps.
 The worker follows nested pending-task descendants before attempting
@@ -63,15 +66,24 @@ configured RPC capture accounting, not Python allocator overhead, runtime
 fixed state or total process memory. Role-level resource accounting must sum
 co-located reservations and separately account for those costs.
 
+After a valid delegated sequence is consumed, a C1 `SessionError` with the
+ingress and bridge still live returns a bounded `EXECUTION_FAILED` response for
+that exact message. A cancelled operation whose C1 owner is in
+`cache-cleanup-pending` returns `CANCELLED` while its compute task, authorization
+and byte reservation remain retained until confirmed cleanup. C1 session
+invalidation remains authoritative; cancellation does not imply physical cache
+reclamation, and subsequent session operations may receive an explicit denial.
+
 `channel_protobuf.preflight_worker_protobuf` scans each request/response wire
 payload before generated protobuf parsing. It uses a single memoryview and
 scalar scanner state, rejects unknown/duplicate singular fields, invalid wire
 types, nonminimal or overflowing varints and truncation, and limits nested
 TensorEnvelope shape expansion to three values before protobuf sees it. The
-conservative 8x data capture allowance remains the accounting target for
-protobuf decode, canonical-copy and serialization transients. It is not a
-measured allocator peak or a process RSS guarantee; the native focused run
-must measure/control the implementation on the pinned runtime.
+protobuf factor, envelope expansion factor and binding expansion factor are
+conservative accounting targets for decode, canonical-copy and JSON parsing
+transients. They are not measured allocator peaks or a process RSS guarantee;
+the native focused run must measure/control the implementation on the pinned
+runtime.
 
 Heartbeat payloads use the fixed 13-byte `C2H1` PING/PONG contract. The worker
 service validates gateway PINGs against ingress generation and logical control

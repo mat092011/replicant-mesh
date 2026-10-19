@@ -31,10 +31,28 @@ from steamboat_runtime.protocol.wire import (
     Request, Response, parse_message, serialize_message, validate_response,
 )
 from steamboat_security.codec import METADATA_KEY, parse_metadata
+from steamboat_security.errors import SessionError
+from steamboat_runtime.protocol.secure_transport import AuthorizationRevoked
 
 
 class ChannelRpcError(RuntimeError):
     """Authenticated C2 message or execution failed closed."""
+
+
+class _RpcCaptureOwner:
+    """Strongly retain admitted bytes and authorization through retirement."""
+
+    __slots__ = ("message", "decoded", "request", "authorization",
+                 "is_control", "reservation")
+
+    def __init__(self, message, decoded, request, authorization, is_control,
+                 reservation):
+        self.message = message
+        self.decoded = decoded
+        self.request = request
+        self.authorization = authorization
+        self.is_control = is_control
+        self.reservation = reservation
 
 
 _CLEANUP = frozenset({"CloseSession", "CancelSession", "SessionStatus"})
@@ -45,11 +63,20 @@ _MONITOR_INTERVAL = 5.0
 # Conservative, explicit retained-capture reservations. Each admission reserves
 # the entire maximum before decoding: wire bundle, raw protobuf copy, parsed
 # protobuf/object allowance, canonical binding, signed envelope and bookkeeping.
-_RPC_FIXED_CAPTURE_BYTES = 64 * 1024
-_DATA_CAPTURE_BYTES = (8 * MAX_PROTOBUF_BYTES + MAX_ENVELOPE_BYTES
-                       + MAX_BINDING_BYTES + _RPC_FIXED_CAPTURE_BYTES)
-_CONTROL_CAPTURE_BYTES = (4 * MAX_CONTROL_PROTOBUF_BYTES + MAX_ENVELOPE_BYTES
-                          + MAX_BINDING_BYTES + _RPC_FIXED_CAPTURE_BYTES)
+# JSON parsing of an unauthenticated envelope can expand many short values and
+# container slots beyond its wire length. Reserve a conservative 64x envelope
+# and 16x binding factor until the envelope signature/schema has been checked.
+_RPC_FIXED_CAPTURE_BYTES = 128 * 1024
+_ENVELOPE_EXPANSION_FACTOR = 64
+_BINDING_EXPANSION_FACTOR = 16
+_DATA_CAPTURE_BYTES = (8 * MAX_PROTOBUF_BYTES
+                       + _ENVELOPE_EXPANSION_FACTOR * MAX_ENVELOPE_BYTES
+                       + _BINDING_EXPANSION_FACTOR * MAX_BINDING_BYTES
+                       + _RPC_FIXED_CAPTURE_BYTES)
+_CONTROL_CAPTURE_BYTES = (8 * MAX_CONTROL_PROTOBUF_BYTES
+                          + _ENVELOPE_EXPANSION_FACTOR * MAX_ENVELOPE_BYTES
+                          + _BINDING_EXPANSION_FACTOR * MAX_BINDING_BYTES
+                          + _RPC_FIXED_CAPTURE_BYTES)
 _RELAY_CAPTURE_BYTES = _DATA_CAPTURE_BYTES
 
 
@@ -66,7 +93,7 @@ def _delegation_sequence(envelope):
         outer = json.loads(envelope.decode("utf-8", "strict"))
         payload = outer["payload"]
         sequence = payload["frame_sequence"]
-    except (UnicodeError, ValueError, TypeError, KeyError) as error:
+    except (UnicodeError, ValueError, TypeError, KeyError, RecursionError) as error:
         raise ChannelRpcError("delegation envelope lacks a logical sequence") from error
     if type(sequence) is not int or not 1 <= sequence <= wire.MAX_SEQUENCE:
         raise ChannelRpcError("delegation logical sequence is invalid")
@@ -77,6 +104,31 @@ def _binding(decoded):
     metadata = ((METADATA_KEY, decoded.binding),)
     binding = parse_metadata("steamboat.v1.Worker", decoded.method, metadata)
     return metadata, binding
+
+
+def _is_scoped_session_cancellation(ingress, bridge, request):
+    """Recognize only the C1 cache-cleanup state caused by a live CancelSession."""
+    try:
+        if ingress.poll_unavailable() or bridge.status().get("unavailable"):
+            return False
+        records = bridge.authorizer_core.session_bindings.records()
+        return any(
+            notice.worker_boot_id == request.worker_boot_id
+            and notice.session_id == request.session_id
+            and notice.reason == "cache-cleanup-pending"
+            for notice in records)
+    except BaseException:
+        return False
+
+
+def _error_response(bridge, method, request, code):
+    identity = bridge.authorizer_core.local_identity
+    response = Response(
+        protocol_version=1, manifest_fingerprint=identity.model_id,
+        worker_boot_id=identity.boot_id, session_id=request.session_id,
+        lease_token=request.lease_token, sequence=request.sequence,
+        code=code, message="operation did not complete")
+    return validate_response(method, request, response)
 
 
 class WorkerChannelRpc:
@@ -111,6 +163,8 @@ class WorkerChannelRpc:
         self._data_bytes = 0
         self._control_bytes = 0
         self._retained_releases = set()
+        self._stuck_captures = set()
+        self._fatal_error = None
         self._last_monitor = 0.0
 
     async def run(self):
@@ -133,6 +187,8 @@ class WorkerChannelRpc:
                     if self.ingress.poll_unavailable():
                         raise ChannelRpcError("worker gateway ingress expired or changed policy")
                 await asyncio.sleep(_PUMP_INTERVAL)
+            if self._fatal_error is not None:
+                raise ChannelRpcError("worker RPC task failed; stream retired") from self._fatal_error
         except asyncio.CancelledError:
             self.stop()
             raise
@@ -191,10 +247,27 @@ class WorkerChannelRpc:
         lane = "control" if is_control else "data"
         # GatewayWorkerIngress verifies the envelope, exact C1 bytes, parsed Request,
         # authenticated TLS peer and logical lane sequence as one admission.
-        authorization = self.bridge.incoming_authorizer.authorize_gateway(
-            service="steamboat.v1.Worker", method=decoded.method, payload=request,
-            metadata=metadata, ingress=self.ingress, envelope=decoded.envelope,
-            request_bytes=decoded.protobuf, frame_sequence=sequence, wire_lane=lane)
+        try:
+            authorization = self.bridge.incoming_authorizer.authorize_gateway(
+                service="steamboat.v1.Worker", method=decoded.method, payload=request,
+                metadata=metadata, ingress=self.ingress, envelope=decoded.envelope,
+                request_bytes=decoded.protobuf, frame_sequence=sequence, wire_lane=lane)
+        except SessionError:
+            # authorize_gateway only leaves the stream open for a C1 failure
+            # after delegation verification consumed this lane sequence.
+            if self.ingress.poll_unavailable() or self.bridge.status().get("unavailable"):
+                self.stop()
+                raise
+            response = _error_response(self.bridge, decoded.method, request,
+                                       "EXECUTION_FAILED")
+            payload = wire.encode_bundle(
+                decoded.method, wire.BUNDLE_RESPONSE,
+                fragment_kind=wire.CONTROL_RESPONSE if is_control else wire.RESPONSE,
+                protobuf=serialize_message(response, MAX_MESSAGE_BYTES))
+            self.stream.enqueue(kind=wire.CONTROL_RESPONSE if is_control else wire.RESPONSE,
+                                message_id=message.message_id, payload=payload)
+            self._release(is_control, reservation)
+            return
         if authorization.binding_bytes != binding.encoded:
             authorization.fail(cache_may_exist=False)
             authorization.close()
@@ -207,6 +280,7 @@ class WorkerChannelRpc:
     def _task_finished(self, task):
         self._active.discard(task)
         if not task.cancelled() and task.exception() is not None:
+            self._fatal_error = task.exception()
             self.stop()
 
     async def _execute(self, message, decoded, request, authorization, is_control,
@@ -214,12 +288,15 @@ class WorkerChannelRpc:
         transferred = False
         completed = False
         secure_pending = None
+        capture_owner = _RpcCaptureOwner(
+            message, decoded, request, authorization, is_control, reservation)
         try:
             response = await _run_guarded(
                 self.bridge.handler.handle(decoded.method, request), authorization,
                 self.bridge.authorization_watcher,
                 timeout=300,
-                failure_cache_may_exist=decoded.method != "Describe")
+                failure_cache_may_exist=decoded.method != "Describe",
+                close_authorization_on_pending=False)
             if not isinstance(response, Response):
                 raise ChannelRpcError("worker handler returned a non-protobuf response")
             authorization.complete(response)
@@ -234,7 +311,42 @@ class WorkerChannelRpc:
             # _run_guarded retained the still-running compute and authorization owner.
             transferred = bool(getattr(error, "authorization_transferred", False))
             secure_pending = error
+            if transferred and _is_scoped_session_cancellation(
+                    self.ingress, self.bridge, request):
+                response = _error_response(self.bridge, decoded.method, request,
+                                           "CANCELLED")
+                payload = wire.encode_bundle(
+                    decoded.method, wire.BUNDLE_RESPONSE,
+                    fragment_kind=wire.CONTROL_RESPONSE if is_control else wire.RESPONSE,
+                    protobuf=serialize_message(response, MAX_MESSAGE_BYTES))
+                self.stream.enqueue(kind=wire.CONTROL_RESPONSE if is_control else wire.RESPONSE,
+                                    message_id=message.message_id, payload=payload)
+                return
             self.stop()
+            raise
+        except AuthorizationRevoked:
+            if _is_scoped_session_cancellation(self.ingress, self.bridge, request):
+                response = _error_response(self.bridge, decoded.method, request,
+                                           "CANCELLED")
+                payload = wire.encode_bundle(
+                    decoded.method, wire.BUNDLE_RESPONSE,
+                    fragment_kind=wire.CONTROL_RESPONSE if is_control else wire.RESPONSE,
+                    protobuf=serialize_message(response, MAX_MESSAGE_BYTES))
+                self.stream.enqueue(kind=wire.CONTROL_RESPONSE if is_control else wire.RESPONSE,
+                                    message_id=message.message_id, payload=payload)
+                return
+            raise
+        except SessionError:
+            if _is_scoped_session_cancellation(self.ingress, self.bridge, request):
+                response = _error_response(self.bridge, decoded.method, request,
+                                           "CANCELLED")
+                payload = wire.encode_bundle(
+                    decoded.method, wire.BUNDLE_RESPONSE,
+                    fragment_kind=wire.CONTROL_RESPONSE if is_control else wire.RESPONSE,
+                    protobuf=serialize_message(response, MAX_MESSAGE_BYTES))
+                self.stream.enqueue(kind=wire.CONTROL_RESPONSE if is_control else wire.RESPONSE,
+                                    message_id=message.message_id, payload=payload)
+                return
             raise
         except BaseException:
             if not completed:
@@ -247,35 +359,45 @@ class WorkerChannelRpc:
         finally:
             if transferred and secure_pending is not None:
                 release = asyncio.create_task(
-                    self._release_after(secure_pending.tasks, authorization,
-                                        is_control, reservation))
+                    self._release_after(secure_pending.tasks, capture_owner))
                 self._retained_releases.add(release)
-                release.add_done_callback(self._release_finished)
+                release.add_done_callback(
+                    lambda task, owner=capture_owner: self._release_finished(task, owner))
             if not transferred:
                 try:
-                    authorization.close()
+                    result = authorization.close()
+                    if inspect.isawaitable(result):
+                        await result
                 except BaseException:
                     # Ownership is uncertain; keep the slot and byte charge
                     # permanently rather than admitting replacement work.
+                    self._stuck_captures.add(capture_owner)
                     self.stop()
                 else:
                     self._release(is_control, reservation)
 
-    async def _release_after(self, tasks, authorization, is_control, reservation):
+    async def _release_after(self, tasks, capture_owner):
         # Follow descendants from nested secure handoffs, then require a
         # successful authorization retirement before releasing the reservation.
-        await _wait_owned_tasks(tasks)
-        result = authorization.close()
-        if inspect.isawaitable(result):
-            await result
-        self._release(is_control, reservation)
+        try:
+            await _wait_owned_tasks(tasks)
+            result = capture_owner.authorization.close()
+            if inspect.isawaitable(result):
+                await result
+        except BaseException:
+            self._stuck_captures.add(capture_owner)
+            raise
+        self._release(capture_owner.is_control, capture_owner.reservation)
 
-    def _release_finished(self, task):
+    def _release_finished(self, task, capture_owner):
         self._retained_releases.discard(task)
         # Retrieve failures. A failed/uncertain close intentionally leaves the
         # admission charge occupied for this stream's lifetime.
         if not task.cancelled():
-            task.exception()
+            if task.exception() is not None:
+                self._stuck_captures.add(capture_owner)
+        else:
+            self._stuck_captures.add(capture_owner)
 
     def _release(self, is_control, reservation):
         if is_control:

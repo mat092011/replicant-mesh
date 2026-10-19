@@ -58,6 +58,17 @@ class ChannelProtobufPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(ChannelProtobufError, "shape exceeds"):
             preflight_worker_protobuf(payload, response=False)
 
+    def test_largest_supported_runtime_tensor_shape_and_data_are_accepted(self):
+        # The current tiny runtime supports hidden=64 and <=1,152 positions.
+        # This is a structurally valid maximum-size Step tensor (1,152*64*4).
+        packed_shape = length_field(1, b"\x01\x80\x09\x40")
+        tensor = (packed_shape + length_field(2, b"float32_le")
+                  + length_field(3, b"batch_sequence_hidden")
+                  + b"\x20\x80\x80\x12"
+                  + length_field(5, b"x" * (1152 * 64 * 4)))
+        request = b"\x08\x01" + length_field(13, tensor)
+        preflight_worker_protobuf(request, response=False)
+
     def test_tensor_depth_and_duplicate_nested_fields_are_rejected(self):
         nested_tensor = length_field(13, b"\x08\x00")
         with self.assertRaises(ChannelProtobufError):

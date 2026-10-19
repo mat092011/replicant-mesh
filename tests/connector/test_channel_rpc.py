@@ -128,7 +128,9 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
                 stream=self.fx.worker_server_stream, bridge=object(),
                 data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
                 control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
-        for envelope in (b"", b"{}", b'{"payload":{"frame_sequence":true}}'):
+        deeply_nested = b'{"payload":{"frame_sequence":' + b"[" * 400 + b"0" + b"]" * 400 + b"}}"
+        for envelope in (b"", b"{}", b'{"payload":{"frame_sequence":true}}',
+                         deeply_nested):
             with self.subTest(envelope=envelope), self.assertRaises(ChannelRpcError):
                 _delegation_sequence(envelope)
 
@@ -144,8 +146,8 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
             control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
         _, _, binding = self.fx._binding_metadata(
-            "Describe", operation_id=new_id("op"), request_id=new_id("req"),
-            session_id="")
+            "Step", operation_id=new_id("op"), request_id=new_id("req"),
+            session_id=new_id("ses"))
         def encode_varint(value):
             output = bytearray()
             while value > 0x7f:
@@ -158,7 +160,7 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         # One packed repeated field with a million zero dimensions is under
         # MAX_PROTOBUF_BYTES but must fail before generated protobuf expansion.
         malicious = wire.encode_bundle(
-            "Describe", wire.REQUEST, fragment_kind=wire.DATA, binding=binding,
+            "Step", wire.REQUEST, fragment_kind=wire.DATA, binding=binding,
             protobuf=b"\x6a" + encode_varint(len(packed)) + packed)
         message = SimpleNamespace(kind=wire.DATA, message_id=b"Q" * 16,
                                   payload=malicious)
@@ -265,16 +267,19 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
 
         class Executor:
             def __init__(self):
-                self.cache = None
+                self.caches = []
+                self.last_cache = None
                 self.started = threading.Event()
                 self.release = threading.Event()
             def new_cache(self):
-                self.cache = Cache()
-                return self.cache
+                cache = Cache()
+                self.caches.append(cache)
+                return cache
             def execute(self, hidden, cache, position):
+                self.last_cache = cache
                 cache.position += hidden.shape[1]
                 self.started.set()
-                if not self.release.wait(3):
+                if not self.release.wait(10):
                     raise RuntimeError("test did not release blocked compute")
                 return hidden + 1
 
@@ -328,7 +333,7 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         demux_task = asyncio.create_task(response_demux())
         self.addAsyncCleanup(self._cancel_task, demux_task)
 
-        async def rpc(method, request, *, lane=wire.DATA):
+        async def rpc(method, request, *, lane=wire.DATA, response_timeout=1.0):
             session_id = request.session_id if method != "Describe" else ""
             if method == "OpenSession":
                 context = {"request_id": new_id("req"), "route_id": new_id("route")}
@@ -350,7 +355,7 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             self.fx.coordinator_client_stream.enqueue(kind=lane, message_id=message_id,
                                                        payload=payload)
             try:
-                return await asyncio.wait_for(future, timeout=1.0)
+                return await asyncio.wait_for(future, timeout=response_timeout)
             finally:
                 pending_responses.pop(message_id, None)
 
@@ -371,9 +376,24 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         step_task = asyncio.create_task(rpc("Step", req(
             "Step", session_id=first_session_id, lease_token=opened.lease_token,
             sequence=0, start_position=0, token_count=1,
-            tensor=encode_tensor(torch.zeros((1, 1, 64))))))
+            tensor=encode_tensor(torch.zeros((1, 1, 64)))), response_timeout=7.0))
         self.assertTrue(await asyncio.to_thread(executor.started.wait, 1),
                         "actual WorkerHandler executor did not enter Step")
+        # A second independent session may open while the first session's
+        # executor is blocked; control remains independently serviceable.
+        other_session_id = new_id("ses")
+        _, _, other_open_raw = await rpc("OpenSession", req(
+            "OpenSession", session_id=other_session_id, lease_token="",
+            max_positions=8, lifetime_ms=30000, idle_lease_ms=10000))
+        other_open = WorkerResponse.FromString(other_open_raw)
+        self.assertEqual(other_open.code, "OK")
+        first_cache = executor.caches[0]
+        status_kind, status_method, status_raw = await rpc(
+            "SessionStatus", req("SessionStatus", session_id=first_session_id,
+                                 lease_token=opened.lease_token), lane=wire.CONTROL)
+        status = WorkerResponse.FromString(status_raw)
+        self.assertEqual((status_kind, status_method, status.code),
+                         (wire.CONTROL_RESPONSE, "SessionStatus", "OK"))
         cancel_kind, cancel_method, cancel_raw = await rpc(
             "CancelSession", req("CancelSession", session_id=first_session_id,
                                   lease_token=opened.lease_token), lane=wire.CONTROL)
@@ -385,15 +405,20 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
                                  lease_token=opened.lease_token), lane=wire.CONTROL)
         status = WorkerResponse.FromString(status_raw)
         self.assertEqual((status_kind, status_method, status.code),
-                         (wire.CONTROL_RESPONSE, "SessionStatus", "OK"))
+                         (wire.CONTROL_RESPONSE, "SessionStatus", "EXECUTION_FAILED"))
+        self.assertFalse(self.fx.worker_client_stream.closed)
         self.assertTrue(executor.started.is_set())
-        self.assertIsNotNone(executor.cache)
-        self.assertEqual(executor.cache.position, 1)
-        executor.release.set()
+        self.assertEqual(first_cache.position, 1)
         step_kind, step_method, step_raw = await step_task
         step = WorkerResponse.FromString(step_raw)
         self.assertEqual((step_kind, step_method, step.code),
                          (wire.RESPONSE, "Step", "CANCELLED"))
+        self.assertGreater(self.bridge.status()["active_authorizations"], 0)
+        self.assertGreaterEqual(service._data_count, 1)
+        executor.release.set()
+        deadline = time.monotonic() + 1.0
+        while self.bridge.status()["active_authorizations"] and time.monotonic() < deadline:
+            await asyncio.sleep(0.001)
         self.assertEqual(self.bridge.status()["active_authorizations"], 0)
         self.assertEqual(handler.sessions, {})
 
@@ -413,13 +438,16 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await asyncio.to_thread(executor.started.wait, 1))
         self.fx.worker_client_stream.close()
         self.assertGreater(self.bridge.status()["active_authorizations"], 0)
-        self.assertEqual(executor.cache.position, 1)
+        self.assertEqual(executor.last_cache.position, 1)
         executor.release.set()
         deadline = time.monotonic() + 1.0
         while self.bridge.status()["active_authorizations"] and time.monotonic() < deadline:
             await asyncio.sleep(0.001)
         self.assertEqual(self.bridge.status()["active_authorizations"], 0)
-        await asyncio.gather(lost_step_task, return_exceptions=True)
+        # The request's caller may lose its response when the worker stream is
+        # closed, but its failure is still observed here rather than discarded.
+        lost_result = await asyncio.gather(lost_step_task, return_exceptions=True)
+        self.assertIsInstance(lost_result[0], asyncio.TimeoutError)
 
     async def _stop_service_tasks(self, service, relay, service_task, relay_task, executor):
         executor.release.set()
@@ -428,12 +456,19 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         for task in (service_task, relay_task):
             if not task.done():
                 task.cancel()
-        await asyncio.gather(service_task, relay_task, return_exceptions=True)
+        results = await asyncio.gather(service_task, relay_task, return_exceptions=True)
+        for name, result in zip(("worker service", "gateway relay"), results):
+            if isinstance(result, BaseException) and not isinstance(
+                    result, asyncio.CancelledError):
+                self.fail(f"{name} task failed during fixture cleanup: {result!r}")
 
     async def _cancel_task(self, task):
         if not task.done():
             task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        result, = await asyncio.gather(task, return_exceptions=True)
+        if isinstance(result, BaseException) and not isinstance(
+                result, asyncio.CancelledError):
+            self.fail(f"fixture demultiplexer failed: {result!r}")
 
     def test_capture_reservations_are_mandatory_and_cover_all_admissions(self):
         from steamboat_connector.channel_rpc import WorkerChannelRpc
@@ -487,8 +522,10 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         authorization = FaultingAuthorization()
         service._data_count = 1
         service._data_bytes = _DATA_CAPTURE_BYTES
-        retirement = asyncio.create_task(service._release_after(
-            (owner,), authorization, False, _DATA_CAPTURE_BYTES))
+        from steamboat_connector.channel_rpc import _RpcCaptureOwner
+        capture = _RpcCaptureOwner(None, None, None, authorization, False,
+                                   _DATA_CAPTURE_BYTES)
+        retirement = asyncio.create_task(service._release_after((owner,), capture))
         await asyncio.sleep(0)
         self.assertEqual(service._data_count, 1)
         self.assertFalse(child.done())
@@ -498,6 +535,7 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(authorization.close_called)
         self.assertEqual(service._data_count, 1)
         self.assertEqual(service._data_bytes, _DATA_CAPTURE_BYTES)
+        self.assertIn(capture, service._stuck_captures)
 
 
 if __name__ == "__main__":
