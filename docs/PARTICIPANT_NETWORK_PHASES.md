@@ -275,9 +275,12 @@ frozen source/image identities, resource limits, focused native evidence and
 retained failures. These results do not establish fixed-role readiness, a
 deployed multi-device route, shared physical resource enforcement or CT-11/CT-13
 acceptance. C2.1–C2.6 and the C2 exit gate remain open; C3–C9 remain at their
-existing statuses. The component inventory predates selected-pin catalog and
-assignment-hash fixes still awaiting review and native validation. Its report
-records both successful focused runs and earlier fixture failures.
+existing statuses. Selected-pin catalog and assignment-hash checks were
+pending at the combined-inventory checkpoint and were separately exercised in
+a later artifact-scope native run. Later focused evidence also covers the
+cohort client, runtime guard/RPC cleanup and component-32 checks on ZimaBlade;
+the report retains earlier fixture failures and scopes. These checks do not
+close a C2 task or phase gate.
 
 ## C3 — Validate one GPU execution path
 

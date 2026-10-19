@@ -840,11 +840,47 @@ focused histories. Their compact run record is:
 | Startup profile native2 | 84 passed, zero skips in 4.577 s | Source head `dea4dfd45ae9562243ae3c678d031afa8860730a`, digest `08044732e111785e7d2f7fa6cd6e475fff1e09ee54eeb068d325ac75a40d0a16`; `56bdebac263029f43d8b3d7791b014d4dcf1e395d1675828a73f91624947e188` |
 
 The focused successes are distinct runs from the combined 872-test inventory.
-That inventory predates the exact-catalog, raw-catalog-key and assignment-hash
-selected-pin fixes; those fixes are still pending review and native validation.
+At that inventory checkpoint, exact-catalog, raw-catalog-key and
+assignment-hash selected-pin fixes were still pending review and native
+validation; the separate artifact-scope run below subsequently exercised those
+host-side binding checks.
 Component 32 is component-level evidence, not phase acceptance. C2.1–C2.6 and
 the C2 exit gate remain open, C3 is unchanged, and no supported GPU or
 pooled-GPU performance result is established. Cohort SDK and host model
 composition remain separate incomplete work. Shared physical CPU, RAM, disk,
 traffic and session-queue enforcement and CT-11/CT-13 split-host
 numerical/lifecycle acceptance are still required.
+
+## Later focused C2 controls after component 32
+
+These checks were run after the frozen component-32 inventory. They add
+component evidence without changing its 872-test count or closing a C2 phase
+gate.
+
+| Focused component | Native result and frozen source | Scope |
+|---|---|---|
+| Cohort client | 45 passed, zero skips in 5.735 s; head `88022b4886fb448b9a79fad14f5f56f2fe5934b2`, source digest `4da4a4d58493bf92e2073271fc9988564da912e6eed394a6d6c8e231e8ae6565`; log SHA-256 `d1161753c9f3703f79dab0945bcb5c7bafd71ada40be083742616b928da01be6` | One shared TLS/HELLO client pump supports up to three fixed targets and manual response completion. It does not execute three workers. |
+| Artifact host scope | 85 passed, zero skips in 5.306 s; head `af31c321bd8ab3e5952dff1f44f1e2f7b9c60631`, source digest `0b8813cabcf9abca0632b8e6f0c9924ca821883d4bb8c31d07ccc60d621aabf2`; log SHA-256 `f18636aa80e8fa4c48abca773a759f12fde31bb32e4f14ab03aa903c77a858a1` | Host selected-catalog identity, raw 65-byte P-256 public-key pin, assignment hash and complete-group binding. Coordinator binding does not invent worker assignment or hash anchors. |
+| Runtime guard and RPC cleanup | 26 passed, zero skips in 10.058 s; head `19e203cbf418b7f73408062aa98664a091d01452`, source digest `c2ad2522e4897c3adbc211c2dd6ced13d30e794259adebd162a6449e28812ff9`; log SHA-256 `d318d255b78b223637f36783b12ddcc0f36eb67296d5ee47fa81810abd359f73` | One-shot invalidation fencing, bounded maintenance cadence, nonblocking wake handling, C1 cleanup uncertainty and one close attempt after observer failure while capture remains retained. |
+| Zima component 32 | 22 passed, zero skips in 19.260 s on source digest `598e52e9ff773ccca83e32580715a604e886a78ba46ea1f9ee5b36be316f05b` (463 files); log SHA-256 `2c4e5037b3180b88f9aebf5bff034b3f4d4092d2482ff2d4c9340bd295894b0b` | Same component-32 source and pinned dependencies; Linux UID 1000, 1 CPU, 512 MiB RAM, 128 PIDs, no network, read-only root, no Torch/model route. The selected-config and loopback gateway checks are not a phase result. |
+
+The Zima run used image `sha256:f59bbd3473b6819cd8af4eda51fe4f6ed5e1feaab39961c75f151e82fa38e00f`; all 463 selected files matched the frozen source proof. The container exited 0 and was absent after cleanup. This validates the selected component checks on that host only.
+
+The initial cohort inventory discovered 54 IDs but only 42 were unique, so it
+was rejected before execution (log SHA-256
+`b1101cd174a0eee1f897f4742951a78c3c15a542680d5864a274e32d3b75f0f3`). The
+first corrected native cohort run reported 20 passes and 25 fixture errors
+after its constructor fixture failed (log SHA-256
+`f555309406544f8377a275f06945a4889637e68c2d72c784e2690390d31da6e7`). The
+first artifact-scope native invocation did not execute tests because its
+private probe file was missing (log SHA-256
+`5036ae99b1871d4a893ad0ec5ee4dc0c3e4ec78b0d74450fb863187698b93bec`). The
+first runtime-guard inventory was rejected before tests because it named the
+wrong security module (log SHA-256
+`20d40186b989bb41fb8ab7d4967eac187f2759c6be7e3e397ef2d784cd0da4e8`). These
+attempts are not counted as passes.
+
+Host assembly, fixed-role worker/coordinator startup and readiness, shared
+physical resource enforcement, complete deployed multi-device routing, and
+the CT-11/CT-13 split-host numerical/lifecycle run remain pending. C2.1–C2.6
+remain open; C3 and research statuses are unchanged.

@@ -973,6 +973,9 @@ any C2 gate: fixed-role controller/readiness, deployed two-device routing,
 aggregate physical-resource enforcement and CT-11/CT-13 remain outstanding.
 C2.1–C2.6 stay open; C3 and research P0–P8 statuses are unchanged. The
 component inventory predates the exact-catalog, raw-catalog-key and
-assignment-hash selected-pin fixes, which remain pending review and native
-validation. The component report records the focused startup, gateway, child
-configuration and profile attempts, including retained fixture failures.
+assignment-hash selected-pin fixes; these were pending at that checkpoint and
+were separately validated in a later artifact-scope native run. Later focused
+native evidence also covers the cohort client, runtime guard/RPC cleanup, and
+the component-32 suite on ZimaBlade. The component report records these runs
+and the earlier fixture failures. None establishes fixed-role readiness or
+closes a C2 gate.
