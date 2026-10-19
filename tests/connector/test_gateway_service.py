@@ -250,8 +250,10 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         deadline = time.monotonic() + 2.0
         delivered = None
         while time.monotonic() < deadline and delivered is None:
+            coordinator_client.pump()
+            for client_stream in worker_streams:
+                client_stream.pump()
             service.pump_once()
-            worker_streams[selected].pump()
             delivered = worker_streams[selected].pop_message()
             time.sleep(0.001)
         self.assertIsNotNone(delivered)
@@ -645,6 +647,11 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                 time.sleep(0.001)
             self.assertTrue(entered.wait(1.0),
                             "genuine worker HELLO did not reach router registration")
+            captured = tuple(service._accepted)
+            self.assertEqual(len(captured), 2)
+            self.assertEqual({item.purpose for item in captured},
+                             {"worker", "coordinator"})
+            self.assertLessEqual(len(captured), len(service.expected_workers) + 1)
             accepted_at = service._accepted[0].accepted_at
             if stop_before_release:
                 service.stop()
@@ -670,7 +677,8 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         self.assertEqual(service._workers, {})
         self.assertIsNone(service.multiplexer)
         self.assertEqual(service.router._workers, {})
-        self.assertEqual(service.pending_channels, 1)
+        self.assertEqual(service.pending_channels, 2)
+        self.assertTrue(all(item.close_complete for item in captured))
 
     def test_stop_during_router_registration_retires_late_registration(self):
         self._exercise_router_registration_barrier(stop_before_release=True, expire=False)
