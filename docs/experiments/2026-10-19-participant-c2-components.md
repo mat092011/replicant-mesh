@@ -388,3 +388,92 @@ their coordinator spanning at least two physical machines. The laptop and
 ZimaBlade CPU host are available. No additional hardware requirement has been
 established. No WAN/NAT universality, GPU, pooled-capacity, performance or later
 research gate is claimed. C2 remains unpublished until all of its gates pass.
+
+## Follow-up evidence after component 26
+
+The component-26 result above remains the latest complete component inventory:
+474 passed, zero skipped, failed or errored, in 26.529 seconds, from frozen
+source `afc889c302625f5871f9273059d80206fbb1b4eca09a71984e2d6983c4383818`
+(395 files), with image
+`sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`.
+Later probes exercise selected code and integrations; they do not relabel that
+inventory or establish a new full-pipeline pass.
+
+### Assigned artifact pin handoff
+
+A read-only native overlay of source
+`7a1c84f775d6b221e6cdb4760eb90f67c00acc89f636b17d1d957ec9d08a5212` (397 files)
+on the pinned component-26 image passed 75 tests, zero skips/failures/errors,
+in 4.609 seconds. The run used the same two-CPU, 6-GiB, 256-PID, no-network,
+read-only-root, all-capabilities-dropped, no-new-privileges container controls,
+with 256-MiB `/tmp` and 16-MiB lab tmpfs. It started at
+2026-10-19 16:52:31.570Z and completed at 16:52:37.664Z; log SHA-256:
+`b95b2c616b7e6025c1a3349d5d7ec704545c04e3b37d52802c0cb257b135ce54`.
+This exercises an actual signed installed store and a real CPython `-I -S`
+supervised child exec retaining inherited pin descriptors, with startup gated
+by the host and coordinator locks. The fake cgroup population remains fixture
+evidence, not OS attestation. It does not establish persistent pool/readiness
+integration or the selected C2 aggregate startup flow.
+
+Earlier pin inventories are retained: pin-native1 had 73 cases, 70 passed and
+3 failed in 3.390 seconds; pin-native2 had 73 cases, 72 passed and 1 failed in
+3.312 seconds. Their failures led to corrections for composite owner retention,
+exact dup2 descriptor reuse and private fixture state mode 0700. Production
+resource limits were not relaxed. The corrected third run is the selected
+component result; the prior failures remain part of the record.
+
+### Watchdog publication race
+
+With the unchanged baked component-26 production code and the same resource
+limits, a deterministic 30-ms fake SIGKILL exit delay reproduces the old
+publication timing failure: the original target expects a populated group
+before the fake process has exited and fails in 0.148 seconds. The corrected
+fixture publishes only after child exit and passes 20 repetitions in
+3.551 seconds. The log SHA-256 is
+`2e63f7606ee5a8784f3cb01e419b30bbccffe649a3801d1f18e7a83a1be35d86`.
+This supports the fixture timing diagnosis; it does not add a new production
+watchdog behavior claim.
+
+### Root-group policy review
+
+Review of source `20f71ea` found a pure, inert scope/stateless policy check with
+eight local tests passing, plus review-confirmed high-severity negative cases
+for a wrong scope and wrong domain. The mechanism does not provide local
+identity, claims, high-water persistence or readiness. C1's accepted singular
+root profile cannot establish startup for three workers. Explicitly selected
+C2 aggregate scope/claim policy and its cold-retirement integration remain
+missing; no root-group startup acceptance is recorded.
+
+### RPC, SDK and transport status
+
+Native RPC ownership probe 5 demonstrated the production ownership defect with
+the real compute still alive after authentication closed (exit 1; log SHA-256
+`06296ed941d3c0ddb73128467a6912a1e55582db834ba9137c365a363023e738`). A later
+probe corrected the first native bridge assertion but still failed when another
+legitimate open stream remained alive. A follow-up closed that stream; probe 7
+passed both body-cancel and stream-loss cases and zero-resource assertions, but
+two expected-disconnect cleanup cases still failed. The newer native-8
+confirmation-code probe is under review and has no result accepted in this
+record. RPC ownership therefore remains source-review/native-unaccepted.
+
+Native SDK probe 6 ran 12 cases with 11 passing and one failing in 2.845
+seconds: short-request C1 expiry killed the global pump. Diagnostic expiry 7
+attributed the failure to `GeneratorExit` from a caught exception traceback
+shared with the live pump and cleared by `unittest.assertRaises`. A one-line
+source correction to clear that shared traceback was identified, but no passing
+native rerun is recorded. SDK remains unaccepted. Raw protobuf guard 8 passed
+locally; control/data reservation targets have not yet been measured under
+native peak load.
+
+Transport native probe 8 is still under review. The earlier native probe 4
+failed, so neither probe is evidence of a source-accepted, native-green
+framed-stream/router/RPC/SDK path. The successful local socket/accounting
+controls and component-26 tests remain bounded component evidence only.
+
+### Remaining C2 integration
+
+Actual fixed-role backend enforcement, authenticated enrollment, selected
+aggregate root-group startup, resource-pool integration and CT-11/CT-13 laptop
+plus ZimaBlade routed numerical/lifecycle evidence remain incomplete. These
+are the outstanding gates; no additional hardware blocker has been established.
+All C2 checklist items remain open, and C3 has not advanced.

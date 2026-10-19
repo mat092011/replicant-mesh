@@ -2,7 +2,8 @@
 
 Prepared 2026-10-17 from [PARTICIPANT_NETWORK_PLAN.md](PARTICIPANT_NETWORK_PLAN.md).
 **C0 passed on 2026-10-17; C1 validation and exit criteria were accepted on
-2026-10-19; C2–C9 remain planned.** See the [C1 final validation
+2026-10-19; C2 implementation is in progress and unaccepted; C3–C9 remain
+planned.** See the [C1 final validation
 record](experiments/2026-10-18-participant-c1.md) and [C0 validation
 record](experiments/2026-10-17-participant-c0.md). Trial 78 passed all 878
 unique required software-regression cases with zero skips, failures or errors
@@ -30,7 +31,7 @@ bounded subset of compatible machines.
 
 ## Phase overview
 
-C0 is **Passed**; C1 is **Passed**; C2–C9 are **Planned**. The hardware column describes an exit requirement,
+C0 is **Passed**; C1 is **Passed**; C2 is **In progress**; C3–C9 are **Planned**. The hardware column describes an exit requirement,
 not a reason to stop independent preparation. Responsibility labels are proposed
 roles, not assigned people or staffing commitments.
 
@@ -208,12 +209,14 @@ Begin C4 integration and optional C8 UI scaffolding; no community pilot yet.
 
 **Implementation resumed, 2026-10-19:** the maintainer authorized continuing C2
 after completed C1 publication. The [component record](experiments/2026-10-19-participant-c2-components.md)
-records a 474-case, skip-free Docker component gate, including same-container
-assigned-handler numerical parity, real worker stream-loss cleanup and authenticated
-transport/accounting components. Earlier failed runs and their corrections are retained. A separate
-ZimaBlade OS probe verified task-scoped CPU/RAM enforcement. Actual combined
-daemon enforcement, both authenticated gateway hops and the outbound split-host
-route remain incomplete; every C2 checkbox remains open.
+records the latest complete 474-case, skip-free Docker inventory, followed by
+selected source and native probes. The pinned-artifact child handoff and watchdog
+publication fixture passed their bounded probes. RPC ownership, SDK, transport
+and aggregate root-group integration remain incomplete or under review; these
+follow-ups do not change the full-inventory result. A separate ZimaBlade OS probe
+verified task-scoped CPU/RAM enforcement. Actual combined daemon enforcement,
+both authenticated gateway hops and the outbound split-host route remain
+incomplete; every C2 checkbox remains open and C3 has not advanced.
 The [connector design](PARTICIPANT_CONNECTOR_DESIGN.md) freezes the required gates.
 
 ## C3 — Validate one GPU execution path

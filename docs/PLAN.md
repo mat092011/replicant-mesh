@@ -865,13 +865,16 @@ statuses remain unchanged. Work stops after C1 as requested.
 **C2 resumed, 2026-10-19:** the maintainer authorized further implementation
 after the completed C1 stop point. C1 remains accepted and published at `89ea4b1`.
 The [C2 component record](experiments/2026-10-19-participant-c2-components.md)
-records a 474-case, skip-free Docker component gate: shared-store assigned-handler numerical
-comparison, real process ownership, explicit gateway admission and actual
-`WorkerHandler` stream-loss cleanup. A separate bounded ZimaBlade OS probe
-measured kernel CPU throttling and a role memory-limit OOM kill, with task
-cleanup. These are component results. C2.1–C2.6 and its exit gate remain open
-pending actual daemon/resource integration, both authenticated gateway hops,
-bounded socket transport and shared metering, and the split-host outbound
-numerical/lifecycle gate. C2 is unpublished; C3 and research gate statuses are
-unchanged. Work uses the laptop and ZimaBlade and stops if additional hardware
-is required.
+records the latest complete 474-case, skip-free Docker component gate, including
+shared-store assigned-handler numerical comparison, real process ownership,
+explicit gateway admission and actual `WorkerHandler` stream-loss cleanup. Later
+selected probes add a passing assigned-artifact pin child handoff and a
+watchdog-publication fixture reproduction; native RPC/SDK/transport and aggregate
+root-group checks remain unresolved or under review. A separate bounded
+ZimaBlade OS probe measured kernel CPU throttling and a role memory-limit OOM
+kill, with task cleanup. These are component results, not phase acceptance.
+C2.1–C2.6 and its exit gate remain open pending actual daemon/resource
+integration, both authenticated gateway hops, a source-accepted native transport
+path, and the split-host outbound numerical/lifecycle gate. C2 is unpublished;
+C3 and research gate statuses are unchanged. Work uses the laptop and ZimaBlade;
+no additional hardware requirement has been established.
