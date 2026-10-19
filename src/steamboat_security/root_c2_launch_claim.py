@@ -15,6 +15,7 @@ import json
 import os
 import re
 import stat
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -195,6 +196,10 @@ class C2LaunchClaimStore:
         self._uid = expected_uid
         self._fault_hook = _fault_hook
         self._unknown = False
+        self._lifetime = threading.Condition(threading.Lock())
+        self._busy = False
+        self._owner_thread = None
+        self._ready = False
         try:
             self._fd = _open_directory_chain(Path(os.path.abspath(os.fspath(root))), expected_uid=expected_uid)
         except (OSError, TypeError, ValueError) as error:
@@ -202,17 +207,48 @@ class C2LaunchClaimStore:
         try:
             self._ensure_lock()
             with self._lock(): self._scan()
+            self._ready = True
         except BaseException:
             fd, self._fd = self._fd, -1
             try: os.close(fd)
             except OSError: self._unknown = True
             raise
 
+    @contextmanager
+    def _operation(self, *, allow_unknown=False, allow_closed=False):
+        """Own the root directory descriptor; reject callback reentrancy."""
+        ident = threading.get_ident()
+        with self._lifetime:
+            if self._owner_thread == ident:
+                raise StorageError("C2 claim operation cannot be reentered")
+            while self._busy:
+                self._lifetime.wait()
+            already_closed = self._fd < 0
+            if already_closed and not allow_closed:
+                raise StorageError("C2 claim store is closed or latched")
+            if not already_closed and self._unknown and not allow_unknown:
+                raise StorageError("C2 claim store is closed or latched")
+            if not already_closed:
+                self._busy = True
+                self._owner_thread = ident
+        if already_closed:
+            yield
+            return
+        try:
+            yield
+        finally:
+            with self._lifetime:
+                self._owner_thread = None
+                self._busy = False
+                self._lifetime.notify_all()
+
     def close(self):
-        fd, self._fd = getattr(self, "_fd", -1), -1
-        if fd >= 0:
+        with self._operation(allow_unknown=True, allow_closed=True):
+            fd, self._fd = self._fd, -1
+            if fd < 0:
+                return
             try: os.close(fd)
-            except OSError:
+            except BaseException:
                 self._unknown = True
                 raise
     def __enter__(self): return self
@@ -240,6 +276,8 @@ class C2LaunchClaimStore:
     def _lock(self):
         if self._fd < 0 or self._unknown:
             raise StorageError("C2 claim store is closed or latched")
+        if self._ready and self._owner_thread != threading.get_ident():
+            raise StorageError("C2 claim root descriptor is not owned by this operation")
         import fcntl
         fd = os.open(_LOCK, os.O_RDWR | os.O_NOFOLLOW, dir_fd=self._fd)
         try:
@@ -301,6 +339,16 @@ class C2LaunchClaimStore:
 
     def claim(self, *, selector_sha256, activation_manifest_sha256, generation_sha256,
               new_role_launch_specs, new_host_group_scopes, fresh_selected_validator):
+        with self._operation():
+            return self._claim_owned(selector_sha256=selector_sha256,
+                activation_manifest_sha256=activation_manifest_sha256,
+                generation_sha256=generation_sha256,
+                new_role_launch_specs=new_role_launch_specs,
+                new_host_group_scopes=new_host_group_scopes,
+                fresh_selected_validator=fresh_selected_validator)
+
+    def _claim_owned(self, *, selector_sha256, activation_manifest_sha256, generation_sha256,
+                     new_role_launch_specs, new_host_group_scopes, fresh_selected_validator):
         if self._fd < 0 or self._unknown:
             raise StorageError("C2 claim store is closed or latched")
         generation = _hash(generation_sha256, "generation hash")

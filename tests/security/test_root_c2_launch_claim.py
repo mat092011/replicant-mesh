@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import multiprocessing
+import threading
 import tempfile
+import stat
 import unittest
 from dataclasses import replace
 from unittest import mock
@@ -165,6 +167,100 @@ class C2ClaimFixture(unittest.TestCase):
             with self.assertRaises(TypeError):
                 store.claim(**args, fresh_selected_validator=async_validator)
             self.assertEqual(set(os.listdir(root)), {"claim.lock"})
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX store")
+    def test_callback_cannot_reenter_close_or_claim(self):
+        root = Path(self.fx_case.temp.name) / "claims-reentrant"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        args = dict(selector_sha256=self.cohort.selector_sha256,
+            activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+            generation_sha256=self.cohort.generation_sha256,
+            new_role_launch_specs=self.cohort.new_specs,
+            new_host_group_scopes=self.cohort.new_groups)
+        with C2LaunchClaimStore(root, expected_uid=os.geteuid()) as store:
+            rejected = []
+            def callback(_record):
+                for operation in (store.close,
+                    lambda: store.claim(**args, fresh_selected_validator=lambda _r: None)):
+                    with self.assertRaises(StorageError): operation()
+                    rejected.append(True)
+                return None
+            store.claim(**args, fresh_selected_validator=callback)
+            self.assertEqual(len(rejected), 2)
+
+    @unittest.skipUnless(os.name == "posix" and hasattr(os, "O_NOFOLLOW"),
+                         "native POSIX descriptor lifetime")
+    def test_external_close_waits_through_root_fsync_and_fd_reuse(self):
+        root = Path(self.fx_case.temp.name) / "claims-lifetime"
+        root.mkdir(mode=0o700); os.chmod(root, 0o700)
+        args = dict(selector_sha256=self.cohort.selector_sha256,
+            activation_manifest_sha256=self.cohort.activation_manifest_sha256,
+            generation_sha256=self.cohort.generation_sha256,
+            new_role_launch_specs=self.cohort.new_specs,
+            new_host_group_scopes=self.cohort.new_groups)
+        store = C2LaunchClaimStore(root, expected_uid=os.geteuid())
+        root_fd = store._fd
+        fsync_entered, fsync_release = threading.Event(), threading.Event()
+        close_started, close_waiting, close_done = threading.Event(), threading.Event(), threading.Event()
+        results, failures, reused = [], [], []
+        original_fsync, original_close = os.fsync, os.close
+
+        def blocked_fsync(fd):
+            if fd == root_fd and not fsync_entered.is_set():
+                fsync_entered.set()
+                if not fsync_release.wait(10): raise OSError("root fsync barrier timed out")
+            return original_fsync(fd)
+
+        def claim_thread():
+            try: results.append(store.claim(**args, fresh_selected_validator=lambda _r: None))
+            except BaseException as error: failures.append(error)
+
+        def close_thread():
+            close_started.set()
+            try:
+                store.close()
+                reused.append(os.open(os.devnull, os.O_RDONLY))
+            except BaseException as error: failures.append(error)
+            finally: close_done.set()
+
+        condition = store._lifetime
+        class ObservedCondition:
+            def __enter__(self): condition.__enter__(); return self
+            def __exit__(self, *args): return condition.__exit__(*args)
+            def wait(self, timeout=None):
+                if threading.current_thread() is closer:
+                    close_waiting.set()
+                return condition.wait(timeout)
+            def notify_all(self): return condition.notify_all()
+        store._lifetime = ObservedCondition()
+
+        claimant, closer = threading.Thread(target=claim_thread), threading.Thread(target=close_thread)
+        try:
+            with mock.patch.object(c2_claim_module.os, "fsync", blocked_fsync):
+                claimant.start()
+                self.assertTrue(fsync_entered.wait(5))
+                closer.start()
+                self.assertTrue(close_started.wait(5))
+                self.assertTrue(close_waiting.wait(5), "close did not wait for claim ownership")
+                self.assertFalse(close_done.wait(0.1), "close invalidated an active root fsync")
+                self.assertTrue(stat.S_ISDIR(os.fstat(root_fd).st_mode))
+                fsync_release.set()
+                claimant.join(5); closer.join(5)
+            self.assertFalse(claimant.is_alive())
+            self.assertFalse(closer.is_alive())
+            self.assertFalse(failures)
+            self.assertEqual(len(results), 1)
+            self.assertTrue(close_done.is_set())
+            self.assertEqual(reused, [root_fd])
+            os.fstat(reused[0])
+            with self.assertRaises(StorageError): store.claim(**args,
+                fresh_selected_validator=lambda _r: None)
+        finally:
+            fsync_release.set()
+            if claimant.is_alive(): claimant.join(5)
+            if closer.is_alive(): closer.join(5)
+            store.close()
+            if reused: original_close(reused[0])
 
     @unittest.skipUnless(os.name == "posix", "native POSIX store")
     def test_malformed_public_specs_and_duplicate_principal_reject(self):

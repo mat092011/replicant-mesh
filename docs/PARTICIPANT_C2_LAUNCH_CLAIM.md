@@ -20,6 +20,9 @@ and partial or uncertain writes fail closed. A claim file created with
 `O_EXCL` is never deleted or retried. Historical parent and child boot IDs
 cannot be claimed again under a later selector or generation, and each returning
 principal's admission epoch must strictly advance.
+Each store instance serializes the complete claim and close over the directory
+descriptor lifetime. A concurrent close waits until the final root fsync ends;
+the synchronous validator cannot reenter claim or close on that instance.
 
 The caller supplies a trusted synchronous `fresh_selected_validator`. It must
 validate the record against the entire current selected cohort: all parent
