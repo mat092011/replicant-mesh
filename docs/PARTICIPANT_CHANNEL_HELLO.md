@@ -33,6 +33,11 @@ construction. A registered-worker capability is immutable, identity-only, and
 rechecks the exact genuine server TLS owner and authenticated channel on use;
 it does not indicate loaded readiness or authorize an application round trip.
 Reconnection, policy change, or owner replacement requires a new bootstrap.
+The worker client's bootstrap construction, HELLO send, and ACK commit run
+inside the ingress admission/liveness transaction, which checks both heartbeat
+and delegation deadlines and latches an expired ingress closed. Duplicate TLS
+owner claims are recorded atomically; closing a duplicate owner happens only
+after releasing the claim registry lock.
 
 Coordinator egress uses the same bounded bootstrap with a fresh nonce generated
 inside the genuine `GatewayCoordinatorEgress` owner. The gateway compares the

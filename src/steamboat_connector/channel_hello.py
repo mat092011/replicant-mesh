@@ -41,6 +41,15 @@ class ChannelHelloError(ValueError):
     """A bootstrap is malformed, unowned, stale, or out of order."""
 
 
+def _claim_owner(registry, owner):
+    """Atomically claim an owner without invoking owner code under the registry lock."""
+    with _OWNER_LOCK:
+        if owner in registry:
+            return False
+        registry[owner] = "claimed"
+        return True
+
+
 def _generation_bytes(value):
     if type(value) is not str or len(value) != 32:
         raise ChannelHelloError("worker ingress generation is invalid")
@@ -243,23 +252,27 @@ class WorkerHelloClient:
             raise TypeError("HELLO requires genuine worker ingress and TLS owners")
         if ingress._tls_owner is not tls_owner or not tls_owner.handshake_complete:
             raise ChannelHelloError("ingress is not bound to this completed TLS owner")
-        with _OWNER_LOCK:
-            if tls_owner in _CLIENT_OWNERS:
-                ingress.close("gateway-invalid-frame")
-                raise ChannelHelloError("worker TLS owner already claimed for HELLO")
-            _CLIENT_OWNERS[tls_owner] = "claimed"
-        self.ingress, self.tls_owner = ingress, tls_owner
-        self.generation = _generation_bytes(ingress.stream_generation)
-        self._expected = _identity(ingress)
-        self._state = "hello"
-        self.hello_frame = _frame(_canonical(self._expected), self.generation)
-        self._reader = _BoundedHelloReader(self.generation)
-        self.decoder = None
-        self.reassembly_capacity = capacity
-        self.decoder_reservation_bytes = None
-        self._lock = threading.RLock()
-        self._hello_sent = False
-        self._sealed = True
+        with ingress.admission_transaction():
+            if not _claim_owner(_CLIENT_OWNERS, tls_owner):
+                duplicate = True
+            else:
+                duplicate = False
+            if not duplicate:
+                self.ingress, self.tls_owner = ingress, tls_owner
+                self.generation = _generation_bytes(ingress.stream_generation)
+                self._expected = _identity(ingress)
+                self._state = "hello"
+                self.hello_frame = _frame(_canonical(self._expected), self.generation)
+                self._reader = _BoundedHelloReader(self.generation)
+                self.decoder = None
+                self.reassembly_capacity = capacity
+                self.decoder_reservation_bytes = None
+                self._lock = threading.RLock()
+                self._hello_sent = False
+                self._sealed = True
+        if duplicate:
+            ingress.close("gateway-invalid-frame")
+            raise ChannelHelloError("worker TLS owner already claimed for HELLO")
 
     def _fault(self):
         self._state = "faulted"
@@ -278,11 +291,13 @@ class WorkerHelloClient:
                 self._fault()
                 raise ChannelHelloError("worker HELLO may be sent exactly once")
             try:
-                if self.ingress._tls_owner is not self.tls_owner or _identity(self.ingress) != self._expected:
-                    raise ChannelHelloError("worker ingress identity or TLS owner changed")
-                written = self.tls_owner.write_plaintext(self.hello_frame)
-                if written != len(self.hello_frame):
-                    raise ChannelHelloError("worker TLS owner did not accept the complete HELLO")
+                with self.ingress.admission_transaction():
+                    if (self.ingress._tls_owner is not self.tls_owner
+                            or _identity(self.ingress) != self._expected):
+                        raise ChannelHelloError("worker ingress identity or TLS owner changed")
+                    written = self.tls_owner.write_plaintext(self.hello_frame)
+                    if written != len(self.hello_frame):
+                        raise ChannelHelloError("worker TLS owner did not accept the complete HELLO")
                 self._hello_sent = True
                 return written
             except Exception:
@@ -312,10 +327,9 @@ class WorkerHelloClient:
                 frame = self._reader.feed(chunk)
                 if frame is None:
                     return None
-                with self.ingress._state.lock:
+                with self.ingress.admission_transaction():
                     if self.ingress._tls_owner is not self.tls_owner or _identity(self.ingress) != self._expected:
                         raise ChannelHelloError("worker ingress identity or TLS owner changed")
-                    self.ingress._policy_and_worker()
                     if not self.tls_owner.is_live:
                         raise ChannelHelloError("worker TLS owner is no longer live")
                     generation, payload = self._reader.expected_generation, frame[FRAGMENT_HEADER_BYTES:]
@@ -415,11 +429,9 @@ class WorkerHelloServer:
         if not is_authenticated_worker_channel(channel) or (
                 authenticated_channel is not None and authenticated_channel is not channel):
             raise ChannelHelloError("channel record is not owned by this TLS connection")
-        with _OWNER_LOCK:
-            if owner in _SERVER_OWNERS:
-                owner.close()
-                raise ChannelHelloError("gateway TLS owner already claimed for HELLO")
-            _SERVER_OWNERS[owner] = "claimed"
+        if not _claim_owner(_SERVER_OWNERS, owner):
+            owner.close()
+            raise ChannelHelloError("gateway TLS owner already claimed for HELLO")
         server = cls.__new__(cls)
         server.owner, server.channel = owner, channel
         server._state = "hello"
@@ -616,11 +628,9 @@ class CoordinatorHelloClient:
         capacity = _normal_capacity(reassembly_capacity)
         if not is_owned_gateway_coordinator_egress(egress) or not egress.handshake_complete:
             raise TypeError("coordinator HELLO requires genuine authenticated egress")
-        with _OWNER_LOCK:
-            if egress in _COORDINATOR_CLIENTS:
-                egress.close()
-                raise ChannelHelloError("coordinator egress already claimed for HELLO")
-            _COORDINATOR_CLIENTS[egress] = "claimed"
+        if not _claim_owner(_COORDINATOR_CLIENTS, egress):
+            egress.close()
+            raise ChannelHelloError("coordinator egress already claimed for HELLO")
         self.egress = egress
         self.tls_owner = egress._tls
         self._expected = _coordinator_identity(egress)
@@ -795,11 +805,9 @@ class CoordinatorHelloServer:
         if (not is_authenticated_coordinator_channel(channel)
                 or (authenticated_channel is not None and authenticated_channel is not channel)):
             raise ChannelHelloError("coordinator channel is not owned by this TLS connection")
-        with _OWNER_LOCK:
-            if owner in _COORDINATOR_SERVERS:
-                owner.close()
-                raise ChannelHelloError("gateway TLS owner already claimed for coordinator HELLO")
-            _COORDINATOR_SERVERS[owner] = "claimed"
+        if not _claim_owner(_COORDINATOR_SERVERS, owner):
+            owner.close()
+            raise ChannelHelloError("gateway TLS owner already claimed for coordinator HELLO")
         server = cls.__new__(cls)
         server.owner, server.channel = owner, channel
         server._state = "hello"

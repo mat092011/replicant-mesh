@@ -4,16 +4,20 @@ import json
 import copy
 import secrets
 import struct
+import threading
 import unittest
+from unittest.mock import patch
 
+import steamboat_connector.channel_hello as _hello_module
 from steamboat_connector.channel_hello import (
     ChannelHelloError, CoordinatorHelloClient, CoordinatorHelloServer,
     RegisteredWorker, WorkerHelloClient, WorkerHelloServer,
     _BoundedHelloReader, _parse_hello,
 )
 from steamboat_security.channel_tls import OwnedWorkerTLS
-from steamboat_security.gateway_ingress import GatewayWorkerIngress
+from steamboat_security.gateway_ingress import GatewayIngressError, GatewayWorkerIngress
 from steamboat_security.gateway_tls import OwnedGatewayWorkerTLS
+from steamboat_security.gateway_coordinator_tls import OwnedGatewayCoordinatorTLS
 from steamboat_security.gateway_tls import GatewayWorkerTLSError
 from steamboat_security.sessions import SessionBindings
 from steamboat_connector.channel_wire import (HELLO, MAX_BUNDLE_BYTES, DATA,
@@ -99,6 +103,23 @@ class ChannelHelloTests(unittest.TestCase):
             RegisteredWorker(None, self.fixture.server,
                              self.fixture.server.authenticated_channel,
                              client.generation, b"n" * 16)
+
+    def test_ack_after_ingress_heartbeat_expiry_cannot_commit(self):
+        client = WorkerHelloClient(self.ingress, self.fixture.client,
+                                   reassembly_capacity=self.capacity)
+        server = WorkerHelloServer.from_tls(self.fixture.server,
+                                            reassembly_capacity=self.capacity)
+        ack = server.accept_hello(client.hello_frame)
+        clock = self.fixture.fixture.fixture
+        clock.mono += 61
+        clock.wall += 61
+        with self.assertRaises(GatewayIngressError):
+            client.feed_ack(ack)
+        self.assertTrue(self.ingress.poll_unavailable())
+        self.assertFalse(self.fixture.client.is_live)
+        self.assertIsNone(client.decoder)
+        with self.assertRaises(ChannelHelloError):
+            _ = client.initial_sequence
 
     def test_hello_and_ack_traverse_the_actual_mutual_tls_plaintext_engines(self):
         client = WorkerHelloClient(self.ingress, self.fixture.client,
@@ -209,6 +230,12 @@ class ChannelHelloTests(unittest.TestCase):
             WorkerHelloServer.from_tls(self.fixture.server,
                                        reassembly_capacity=self.capacity)
         self.assertFalse(self.fixture.server.is_live)
+
+    def test_duplicate_worker_factory_never_closes_under_registry_lock(self):
+        owner = self.fixture.server
+        WorkerHelloServer.from_tls(owner, reassembly_capacity=self.capacity)
+        _assert_duplicate_factory_lock_order(self, owner, OwnedGatewayWorkerTLS,
+            lambda: WorkerHelloServer.from_tls(owner, reassembly_capacity=self.capacity))
 
     def test_same_worker_generation_cannot_be_replayed_on_another_tls_connection(self):
         client_bootstrap = WorkerHelloClient(
@@ -340,6 +367,13 @@ class CoordinatorHelloTests(unittest.TestCase):
         self.server_owner.close()
         self.fixture.tearDown()
 
+    def test_duplicate_coordinator_factory_never_closes_under_registry_lock(self):
+        owner = self.server_owner
+        CoordinatorHelloServer.from_tls(owner, reassembly_capacity=self.capacity)
+        _assert_duplicate_factory_lock_order(self, owner, OwnedGatewayCoordinatorTLS,
+            lambda: CoordinatorHelloServer.from_tls(owner,
+                                                    reassembly_capacity=self.capacity))
+
     def test_coordinator_hello_matches_actual_c1_actor_and_tenant(self):
         client = CoordinatorHelloClient(self.egress,
                                         reassembly_capacity=self.capacity)
@@ -400,6 +434,7 @@ class CoordinatorHelloTests(unittest.TestCase):
                 self.server_owner, reassembly_capacity=self.capacity)
         self.assertFalse(self.server_owner.is_live)
 
+
     def test_coordinator_egress_cannot_be_claimed_twice(self):
         CoordinatorHelloClient(self.egress, reassembly_capacity=self.capacity)
         with self.assertRaises(ChannelHelloError):
@@ -432,6 +467,83 @@ class CoordinatorHelloTests(unittest.TestCase):
         with self.assertRaises(ChannelHelloError):
             server.accept_hello(forged)
         self.assertFalse(self.server_owner.is_live)
+
+
+def _assert_duplicate_factory_lock_order(testcase, owner, owner_type, factory):
+    raw_lock = _hello_module._OWNER_LOCK
+    registry_entered = threading.Event()
+    allow_registry_entry = threading.Event()
+    held = threading.Event()
+    release = threading.Event()
+    close_started = threading.Event()
+    errors = []
+    original_close = owner_type.close
+
+    class ObservedRegistryLock:
+        def __enter__(self):
+            self.acquire()
+            return self
+
+        def __exit__(self, *_exc):
+            self.release()
+
+        def acquire(self, *args, **kwargs):
+            acquired = raw_lock.acquire(*args, **kwargs)
+            if acquired and threading.current_thread().name == "duplicate-factory":
+                registry_entered.set()
+                if not allow_registry_entry.wait(2):
+                    errors.append(TimeoutError("registry entry release timed out"))
+            return acquired
+
+        def release(self):
+            raw_lock.release()
+
+    def hold_owner_lock():
+        with owner._lock:
+            held.set()
+            if not release.wait(2):
+                errors.append(TimeoutError("owner lock release timed out"))
+
+    def observed_close(instance):
+        if instance is owner:
+            close_started.set()
+        return original_close(instance)
+
+    def duplicate_factory():
+        try:
+            factory()
+        except ChannelHelloError:
+            return
+        except Exception as error:
+            errors.append(error)
+        else:
+            errors.append(AssertionError("duplicate owner factory unexpectedly succeeded"))
+
+    locker = threading.Thread(target=hold_owner_lock, daemon=True)
+    with patch.object(owner_type, "close", observed_close), \
+            patch.object(_hello_module, "_OWNER_LOCK", ObservedRegistryLock()):
+        duplicate = threading.Thread(target=duplicate_factory, name="duplicate-factory",
+                                     daemon=True)
+        duplicate.start()
+        try:
+            testcase.assertTrue(registry_entered.wait(1), "duplicate path did not enter registry")
+            locker.start()
+            testcase.assertTrue(held.wait(1), "helper did not acquire owner lock")
+            allow_registry_entry.set()
+            testcase.assertTrue(close_started.wait(1), "duplicate path did not reach owner close")
+            available = _hello_module._OWNER_LOCK.acquire(timeout=0.5)
+            testcase.assertTrue(available,
+                                "duplicate path held registry lock while waiting for owner close")
+            if available:
+                _hello_module._OWNER_LOCK.release()
+        finally:
+            allow_registry_entry.set()
+            release.set()
+            locker.join(1)
+            duplicate.join(1)
+    testcase.assertFalse(locker.is_alive())
+    testcase.assertFalse(duplicate.is_alive())
+    testcase.assertEqual(errors, [])
 
 if __name__ == "__main__":
     unittest.main()
