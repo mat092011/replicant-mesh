@@ -202,8 +202,12 @@ def validate_child_pin(metadata, *, clock, verifier):
         if index:
             global_copy = None
             try:
+                # Establish an owner before either dup can allocate an FD;
+                # a MemoryError in owner construction after dup would leak it.
+                pair_owner = _owner_for_partial_pair(None)
                 global_copy = os.dup(originals[0])
-                pair_owner = _owner_for_partial_pair(global_copy)
+                pair_owner.global_fd = global_copy
+                pair_owner._close_outcomes["global_fd"] = "open"
                 role_copy = os.dup(originals[1])
                 pair_owner.role_fd = role_copy
                 pair_owner._close_outcomes["role_fd"] = "open"

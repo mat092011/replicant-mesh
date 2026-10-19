@@ -149,7 +149,8 @@ class RuntimePinHandoffTests(unittest.TestCase):
             pin.release.assert_not_called()
             self.assertIn("host", self.backend._pinned_roles)
             self.cgroup.set_empty()
-            self.assertTrue(self.backend.stop(["host"], 0.2)["host"])
+            result = self.backend.stop(["host"], 0.2)["host"]
+            self.assertTrue(result)
             pin.release.assert_called_once_with()
             self.assertNotIn("host", self.backend._pinned_roles)
 
@@ -183,6 +184,88 @@ class RuntimePinHandoffTests(unittest.TestCase):
             self.assertEqual(popen.call_count, 1)
             pin.release.assert_not_called()
             self.assertIn("host", self.backend._pinned_roles)
+
+    def test_slow_pin_release_runs_outside_stop_locks_and_remains_observable(self):
+        pin, verifier, metadata, catalog, assignment = self._configured_group_pin()
+        release_entered = __import__("threading").Event()
+        allow_release = __import__("threading").Event()
+        pin.release.side_effect = lambda: (release_entered.set(), allow_release.wait(2))
+        holder = {}
+
+        def spawn(args, **kwargs):
+            process = FakeProcess(args, kwargs, self.cgroup)
+            holder["process"] = process
+            return process
+
+        def wait_for_empty(owned, deadline):
+            while time.monotonic() < deadline:
+                if owned.process.poll() is not None:
+                    self.cgroup.set_empty(owned.group)
+                    return True
+                time.sleep(0.002)
+            return False
+
+        self.backend._wait_empty = wait_for_empty
+        with (mock.patch.object(RuntimeArtifactGroupPin, "assert_open_descriptors",
+                                return_value=True),
+              mock.patch.object(RuntimeArtifactGroupPin, "child_launch_metadata",
+                                return_value=metadata),
+              mock.patch.object(CatalogVerifier, "verify_catalog", return_value=catalog),
+              mock.patch.object(CatalogVerifier, "verify_assignment",
+                                return_value=assignment),
+              mock.patch("steamboat_connector.process_supervisor.atomic_write_private",
+                         side_effect=lambda path, data: Path(path).write_bytes(data)),
+              mock.patch("steamboat_connector.process_supervisor.read_private_json",
+                         side_effect=lambda path, **kwargs: __import__("json").loads(
+                             Path(path).read_text(encoding="utf-8"))),
+              mock.patch.object(ProcessRoleBackend, "_read_ready", return_value=True),
+              mock.patch("steamboat_connector.process_supervisor.signal",
+                         SimpleNamespace(SIGTERM=15, SIGKILL=9)),
+              mock.patch("steamboat_connector.process_supervisor.os.write",
+                         side_effect=lambda fd, data: len(data) if data == b"R" else 0),
+              mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
+                         side_effect=spawn),
+              mock.patch("steamboat_connector.process_supervisor.os.killpg",
+                         side_effect=lambda pid, sig: holder["process"].on_signal(
+                             sig, kill_descendants=False), create=True)):
+            self.assertTrue(self.backend.configure_pinned_role(
+                "host", {"test_mode": True}, pin, catalog_verifier=verifier))
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            started = time.monotonic()
+            self.assertFalse(self.backend.stop(["host"], 0.05)["host"])
+            self.assertTrue(release_entered.wait(0.2))
+            self.assertLess(time.monotonic() - started, 0.15)
+            self.assertTrue(self.backend._lock.acquire(timeout=0.05))
+            self.backend._lock.release()
+            started = time.monotonic()
+            self.assertTrue(self.backend.request_stop(["host"])["host"])
+            self.assertLess(time.monotonic() - started, 0.05)
+            self.assertIn("host", self.backend._pinned_roles)
+            allow_release.set()
+            self.assertTrue(self.backend.stop(["host"], 0.5)["host"])
+            pin.release.assert_called_once_with()
+
+    def test_failed_pin_release_is_sticky_and_never_retried(self):
+        pin, verifier, metadata, catalog, assignment = self._configured_group_pin()
+        pin.release.side_effect = OSError("injected uncertain pin release")
+        with (mock.patch.object(RuntimeArtifactGroupPin, "assert_open_descriptors",
+                                return_value=True),
+              mock.patch.object(RuntimeArtifactGroupPin, "child_launch_metadata",
+                                return_value=metadata),
+              mock.patch.object(CatalogVerifier, "verify_catalog", return_value=catalog),
+              mock.patch.object(CatalogVerifier, "verify_assignment",
+                                return_value=assignment),
+              mock.patch("steamboat_connector.process_supervisor.atomic_write_private",
+                         side_effect=lambda path, data: Path(path).write_bytes(data))):
+            self.assertTrue(self.backend.configure_pinned_role(
+                "host", {"test_mode": True}, pin, catalog_verifier=verifier))
+            self.assertFalse(self.backend.release_configured_pin("host"))
+            self.assertFalse(self.backend.release_configured_pin("host"))
+            self.assertTrue(self.backend._lock.acquire(timeout=0.05))
+            self.backend._lock.release()
+            pin.release.assert_called_once_with()
+            self.assertIn("host", self.backend._pinned_roles)
+            self.assertIn("host", self.backend._pin_release_blocked)
 
     def test_child_helper_requires_exact_trusted_clock_and_verifier(self):
         with self.assertRaises(RuntimePinHandoffError):
@@ -329,6 +412,34 @@ class RuntimePinHandoffTests(unittest.TestCase):
         for fd in original:
             with self.assertRaises(OSError):
                 os.fstat(fd)
+
+    def test_partial_owner_is_allocated_before_descriptor_duplication(self):
+        import steamboat_connector.runtime_pin_handoff as handoff_module
+        clock = Clock(uncertainty_seconds=lambda: 0.0)
+        public_key = _public_key()
+        original = (os.open(os.devnull, os.O_RDONLY),
+                    os.open(os.devnull, os.O_RDONLY))
+        metadata = _child_group_metadata(self.temp.name, original, public_key, count=2)
+        verifier = CatalogVerifier(public_key, clock=clock)
+        class Owner:
+            def __init__(self, fds):
+                self.fds = fds
+
+            def close(self):
+                for fd in self.fds:
+                    os.close(fd)
+
+        with (mock.patch("steamboat_connector.aggregate_artifact_pin.validate_inherited_group_pin",
+                         return_value=(Owner(original), object())),
+              mock.patch.object(handoff_module, "_owner_for_partial_pair",
+                                side_effect=MemoryError("injected owner allocation failure")),
+              mock.patch.object(handoff_module.os, "dup",
+                                side_effect=AssertionError("dup must follow owner allocation"))):
+            with self.assertRaises(MemoryError):
+                validate_child_pin(metadata, clock=clock, verifier=verifier)
+        for fd in original:
+            os.fstat(fd)
+            os.close(fd)
 
     @unittest.skipUnless(sys.platform.startswith("linux"),
                          "descriptor close ambiguity follows Linux fd reuse semantics")

@@ -80,6 +80,38 @@ class _StopWatchdog:
     closing: bool = False
 
 
+class _PinReleaseMonitor:
+    """Prestarted owner that performs potentially slow pin fsync outside locks."""
+
+    def __init__(self, pin):
+        self.pin = pin
+        self.armed = threading.Event()
+        self.completed = threading.Event()
+        self.success = None
+        self.error = None
+        self.thread = threading.Thread(target=self._run,
+                                       name="artifact-pin-release", daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        self.armed.wait()
+        try:
+            self.pin.release()
+        except BaseException as error:
+            self.error = error
+            self.success = False
+        else:
+            self.success = True
+        finally:
+            self.completed.set()
+
+    def arm(self):
+        self.armed.set()
+
+    def wait_until(self, deadline):
+        return self.completed.wait(max(0.0, deadline - time.monotonic()))
+
+
 class ProcessRoleBackend:
     """Own fixed role children under cgroup-v2 on the pinned CPython 3.12 runtime.
 
@@ -99,6 +131,7 @@ class ProcessRoleBackend:
         # This map is intentionally process-local. A persisted JSON config is
         # never sufficient proof that its numeric descriptor values are live.
         self._pinned_roles = {}
+        self._pin_cleanups = {}
         self._pin_release_blocked = set()
         self._start_intents = {}
         self._watchdog_lock = threading.Lock()
@@ -240,7 +273,12 @@ class ProcessRoleBackend:
                 atomic_write_private(self._config_path(role), encoded)
             except (OSError, StorageError):
                 return False
+            try:
+                cleanup = _PinReleaseMonitor(pin)
+            except Exception:
+                return False
             self._pinned_roles[role] = (pin, catalog_verifier, pin_meta)
+            self._pin_cleanups[role] = cleanup
             return True
 
     def release_configured_pin(self, role):
@@ -253,12 +291,23 @@ class ProcessRoleBackend:
             entry = self._pinned_roles.get(role)
             if entry is None:
                 return False
-            pin = entry[0]
-            try:
-                pin.release()
-            except Exception:
+            cleanup = self._pin_cleanups.get(role)
+            if cleanup is None:
+                return False
+            # Fence start admission while release runs outside the ledger lock.
+            self._pin_release_blocked.add(role)
+        deadline = time.monotonic() + STOP_GRACE_MAX_SECONDS
+        cleanup.arm()
+        if not cleanup.wait_until(deadline) or not cleanup.success:
+            return False
+        with self._lock:
+            if (role in self._owned or role in self._start_intents
+                    or role in self._pin_release_blocked
+                    or self._pinned_roles.get(role) is not entry):
                 return False
             self._pinned_roles.pop(role, None)
+            self._pin_cleanups.pop(role, None)
+            self._pin_release_blocked.discard(role)
             try:
                 self._config_path(role).unlink(missing_ok=True)
             except OSError:
@@ -905,7 +954,14 @@ class ProcessRoleBackend:
 
             for role, owned in active:
                 effective_stop, _ = self._effective_deadlines(owned)
-                own_deadline = min(deadline, effective_stop or deadline)
+                # Once the leader is reaped and its cgroup removed, a later
+                # stop call may observe the prestarted descriptor-release
+                # monitor within that call's bounded deadline. This does not
+                # extend any live-process termination deadline.
+                cleanup_only = (owned.artifact_pin is not None
+                                and owned.leader_reaped and owned.group_removed)
+                own_deadline = (deadline if cleanup_only else
+                                min(deadline, effective_stop or deadline))
                 empty = (owned.group_removed or self._wait_empty(owned, own_deadline))
                 remaining = max(0.0, own_deadline - time.monotonic())
                 owned.reaped_event.wait(remaining)
@@ -926,19 +982,42 @@ class ProcessRoleBackend:
                                 if reclaimed and not owned.group_removed:
                                     reclaimed = self._remove_empty_group(owned.group)
                                     owned.group_removed = reclaimed
-                                if reclaimed and owned.artifact_pin is not None:
-                                    try:
-                                        owned.artifact_pin.release()
-                                    except Exception:
-                                        reclaimed = False
-                                    else:
-                                        self._pinned_roles.pop(role, None)
-                                        self._pin_release_blocked.discard(role)
-                                if reclaimed:
+                                if reclaimed and owned.artifact_pin is None:
                                     del self._owned[role]
                                     owned.reclaimed = True
                         finally:
                             self._lock.release()
+                if reclaimed and owned.artifact_pin is not None:
+                    # Pin release can fsync the artifact-store directory. The
+                    # configured monitor owns it strongly and performs that
+                    # work after both lifecycle and escalation locks are free.
+                    cleanup = self._pin_cleanups.get(role)
+                    if cleanup is None:
+                        reclaimed = False
+                    else:
+                        cleanup.arm()
+                        # The child/group proof is already complete. Bound this
+                        # cleanup observation by the current stop invocation,
+                        # even when an earlier process-termination deadline
+                        # has elapsed.
+                        completed = cleanup.wait_until(deadline)
+                        reclaimed = bool(completed and cleanup.success)
+                    if reclaimed:
+                        if not self._acquire_until(self._lock, deadline):
+                            reclaimed = False
+                        else:
+                            try:
+                                reclaimed = (self._owned.get(role) is owned
+                                             and owned.leader_reaped
+                                             and owned.group_removed)
+                                if reclaimed:
+                                    self._pinned_roles.pop(role, None)
+                                    self._pin_cleanups.pop(role, None)
+                                    self._pin_release_blocked.discard(role)
+                                    del self._owned[role]
+                                    owned.reclaimed = True
+                            finally:
+                                self._lock.release()
                 if reclaimed:
                     self._retire_stop_watchdog(role, owned.start_intent)
                     results[role] = True

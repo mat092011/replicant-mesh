@@ -49,6 +49,34 @@ class ArtifactPinLockTests(unittest.TestCase):
         for descriptor in tuple(self._fds):
             self._close_fd(descriptor)
 
+    def test_invalid_inherited_pin_retains_ambiguous_close_owner(self):
+        descriptors = (os.open(os.devnull, os.O_RDONLY),
+                       os.open(os.devnull, os.O_RDONLY))
+        real_close = os.close
+
+        def close_then_raise(descriptor):
+            real_close(descriptor)
+            if descriptor == descriptors[1]:
+                raise OSError("injected close result ambiguity")
+
+        with mock.patch.object(artifact_pin.os, "close", side_effect=close_then_raise):
+            with self.assertRaises(artifact_pin.ArtifactPinError) as caught:
+                artifact_pin.validate_inherited_pin(
+                    descriptors[0], descriptors[1], root=self.root, uid=self.uid,
+                    role="invalid", record_path=self.root / "unused",
+                    expected_record={}, clock_domain="", captured_mono=0,
+                    catalog_deadline=2, assignment_deadline=1, clock=object(),
+                    signed_catalog=b"", signed_assignment=b"", verifier=object())
+        owner = caught.exception.pin_owner
+        self.assertEqual(owner._state, "faulted")
+        self.assertEqual(owner._uncertain_descriptors["role_fd"], descriptors[1])
+        replacement = os.open(os.devnull, os.O_RDONLY)
+        self.assertEqual(replacement, descriptors[1])
+        with self.assertRaises(artifact_pin.ArtifactPinError):
+            owner.close_after_failed_acquire()
+        os.fstat(replacement)
+        os.close(replacement)
+
     def tearDown(self):
         error = None
         try:
@@ -190,14 +218,25 @@ class ArtifactPinLockTests(unittest.TestCase):
         replacement_global, replacement_role = register(os.dup(global_fd)), register(os.dup(role_fd))
         owned.pop(replacement_global)
         owned.pop(replacement_role)
-        with self.assertRaises(artifact_pin.ArtifactPinError):
-            artifact_pin.validate_inherited_pin(
-                replacement_global, replacement_role, root=self.root, uid=self.uid,
-                role="host", record_path=self.root / name, expected_record=record,
-                clock_domain=clock_identity(), captured_mono=captured,
-                catalog_deadline=captured + 60, assignment_deadline=captured + 60,
-                clock=clock, signed_catalog=catalog_bytes,
-                signed_assignment=replacement_bytes, verifier=verifier)
+        real_close = os.close
+
+        def close_then_raise(descriptor):
+            real_close(descriptor)
+            if descriptor == replacement_role:
+                raise OSError("injected late cleanup ambiguity")
+
+        with mock.patch.object(artifact_pin.os, "close", side_effect=close_then_raise):
+            with self.assertRaises(artifact_pin.ArtifactPinError) as caught:
+                artifact_pin.validate_inherited_pin(
+                    replacement_global, replacement_role, root=self.root, uid=self.uid,
+                    role="host", record_path=self.root / name, expected_record=record,
+                    clock_domain=clock_identity(), captured_mono=captured,
+                    catalog_deadline=captured + 60, assignment_deadline=captured + 60,
+                    clock=clock, signed_catalog=catalog_bytes,
+                    signed_assignment=replacement_bytes, verifier=verifier)
+        self.assertEqual(caught.exception.pin_owner._state, "faulted")
+        self.assertEqual(caught.exception.pin_owner._uncertain_descriptors["role_fd"],
+                         replacement_role)
         # Parent teardown must not drop the child's descriptor copies.
         close_owned(role_fd)
         close_owned(global_fd)

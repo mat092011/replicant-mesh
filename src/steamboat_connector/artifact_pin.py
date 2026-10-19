@@ -611,6 +611,10 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
     teardown after compute has stopped.
     """
     raw = (global_fd, role_fd)
+    # Take ownership before any validation or cleanup operation can fail.
+    # This owner records close(2) ambiguity and is transferred to the returned
+    # guard only after the complete signed-identity check succeeds.
+    input_owner = PartialArtifactPinOwner(global_fd, role_fd)
     try:
         _require_linux()
         from steamboat_connector.catalog import CatalogVerifier
@@ -652,9 +656,11 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
                 or captured_mono >= min(catalog_deadline, assignment_deadline)):
             raise ArtifactPinError("inherited runtime pin clock fence is malformed")
     except BaseException:
-        close_errors = _close_inherited_descriptors(raw)
-        if close_errors:
-            raise ArtifactPinError("invalid inherited pin descriptor cleanup failed") from close_errors[0]
+        try:
+            input_owner.close_after_failed_acquire()
+        except ArtifactPinError as cleanup_error:
+            cleanup_error.pin_owner = input_owner
+            raise cleanup_error
         raise
     success = False
     try:
@@ -742,10 +748,17 @@ def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,
             hashlib.sha256(signed_catalog).hexdigest(),
             MappingProxyType(dict(record)))
         guard.check()
+        input_owner.global_fd = None
+        input_owner.role_fd = None
+        input_owner._close_outcomes["global_fd"] = "absent"
+        input_owner._close_outcomes["role_fd"] = "absent"
+        input_owner._state = "closed"
         success = True
         return guard
     finally:
         if not success:
-            close_errors = _close_inherited_descriptors(raw)
-            if close_errors:
-                raise ArtifactPinError("invalid inherited pin descriptor cleanup failed") from close_errors[0]
+            try:
+                input_owner.close_after_failed_acquire()
+            except ArtifactPinError as cleanup_error:
+                cleanup_error.pin_owner = input_owner
+                raise cleanup_error
