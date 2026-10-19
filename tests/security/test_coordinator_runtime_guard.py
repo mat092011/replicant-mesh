@@ -124,11 +124,16 @@ class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_is_rechecked_after_c1_live_check_before_unary_delegate(self):
         adapter = _adapter()
         auth = _Auth()
+        assert_calls = []
         calls = []
-        auth.on_assert_live = lambda: (
-            calls.append(True),
-            adapter.request_runtime_invalidation("C1 live check completed after stop")) \
-            if len(calls) == 4 else None
+
+        def invalidate_on_fourth_live_check():
+            assert_calls.append(True)
+            if len(assert_calls) == 4:
+                adapter.request_runtime_invalidation(
+                    "C1 live check completed after stop")
+
+        auth.on_assert_live = invalidate_on_fourth_live_check
 
         async def describe(_payload, _context):
             calls.append("delegate")
@@ -137,17 +142,23 @@ class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         adapter.service.describe_rpc = describe
         with self.assertRaises(AuthorizationRevoked):
             await adapter._produce_unary("Describe", b"", _Context(), auth)
+        self.assertEqual(len(assert_calls), 4)
         self.assertEqual(calls.count("delegate"), 0)
         self.assertEqual(auth.complete_calls, 0)
 
     async def test_runtime_is_rechecked_after_c1_live_check_before_unary_complete(self):
         adapter = _adapter()
         auth = _Auth()
+        assert_calls = []
         calls = []
-        auth.on_assert_live = lambda: (
-            calls.append(True),
-            adapter.request_runtime_invalidation("C1 live check completed after stop")) \
-            if len(calls) == 5 else None
+
+        def invalidate_on_fifth_live_check():
+            assert_calls.append(True)
+            if len(assert_calls) == 5:
+                adapter.request_runtime_invalidation(
+                    "C1 live check completed after stop")
+
+        auth.on_assert_live = invalidate_on_fifth_live_check
 
         async def describe(_payload, _context):
             calls.append("delegate")
@@ -156,6 +167,7 @@ class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         adapter.service.describe_rpc = describe
         with self.assertRaises(AuthorizationRevoked):
             await adapter._produce_unary("Describe", b"", _Context(), auth)
+        self.assertEqual(len(assert_calls), 5)
         self.assertEqual(calls.count("delegate"), 1)
         self.assertEqual(auth.complete_calls, 0)
 
