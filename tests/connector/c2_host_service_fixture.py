@@ -25,16 +25,34 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from steamboat_security.certificates import (
     certificate_sha256, generate_ca, generate_private_key_pem,
     public_key_sha256, serial_hex,
 )
 from steamboat_security.channel_policy import sign_channel_policy
+from steamboat_security.channel_certificates import (
+    issue_channel_certificate, make_channel_csr,
+)
 
 _RETAINED_UNCERTAIN_FIXTURES = []
+_RETENTION_LOCK = threading.Lock()
+_MAX_RETAINED_FIXTURES = 8
+
+
+def _reserve_retention_slot():
+    with _RETENTION_LOCK:
+        if len(_RETAINED_UNCERTAIN_FIXTURES) >= _MAX_RETAINED_FIXTURES:
+            raise RuntimeError("C2 fixture retention capacity is exhausted")
+        slot = {"fixture": None}
+        _RETAINED_UNCERTAIN_FIXTURES.append(slot)
+        return slot
+
+
+def _release_retention_slot(slot):
+    with _RETENTION_LOCK:
+        if slot in _RETAINED_UNCERTAIN_FIXTURES:
+            _RETAINED_UNCERTAIN_FIXTURES.remove(slot)
 
 
 def _pem_private(key):
@@ -47,26 +65,16 @@ def _pem_public(key):
         serialization.PublicFormat.SubjectPublicKeyInfo)
 
 
-def _gateway_certificate(ca_pem, ca_key_pem, *, now):
-    ca = x509.load_pem_x509_certificate(ca_pem)
-    signer = serialization.load_pem_private_key(ca_key_pem, password=None)
-    key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
-    start = datetime.fromtimestamp(now - 2, timezone.utc)
-    stop = datetime.fromtimestamp(now + 240, timezone.utc)
-    certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(ca.subject)
-        .public_key(key.public_key()).serial_number(x509.random_serial_number())
-        .not_valid_before(start.replace(tzinfo=None)).not_valid_after(stop.replace(tzinfo=None))
-        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-        .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False,
-            key_encipherment=False, data_encipherment=False, key_agreement=True,
-            key_cert_sign=False, crl_sign=False, encipher_only=None, decipher_only=None),
-            critical=True)
-        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
-        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
-            critical=False)
-        .sign(signer, hashes.SHA256()))
-    return (certificate.public_bytes(serialization.Encoding.PEM), _pem_private(key), certificate)
+def _gateway_certificate(ca_pem, ca_key_pem, *, now, identity="gw-c2-host"):
+    key_pem = generate_private_key_pem()
+    csr = make_channel_csr(key_pem, kind="gateway", identity=identity,
+                           ip_addresses=("127.0.0.1",))
+    certificate_pem = issue_channel_certificate(
+        ca_pem, ca_key_pem, csr, kind="gateway", identity=identity,
+        now=datetime.fromtimestamp(now, timezone.utc), lifetime_seconds=240,
+        ip_addresses=("127.0.0.1",))
+    certificate = x509.load_pem_x509_certificate(certificate_pem)
+    return certificate_pem, key_pem, certificate
 
 
 def _listener():
@@ -97,8 +105,6 @@ class LifecycleCgroupStandIn:
 
     def attach_child(self, group, process):
         group = Path(group)
-        if process.poll() is not None:
-            raise RuntimeError("cannot attach a reaped child")
         (group / "cgroup.events").write_text("populated 1\n", encoding="ascii")
         (group / "cgroup.procs").write_text(str(process.pid), encoding="ascii")
         watcher = threading.Thread(target=self._observe_reaped_process,
@@ -148,6 +154,10 @@ class C2HostProcessFixture:
     def __init__(self, artifacts_dir="/artifacts", scratch_dir=None):
         if not sys_platform_linux():
             raise RuntimeError("actual C2 host process fixture requires Linux")
+        self._retention_slot = _reserve_retention_slot()
+        self._retention_slot["fixture"] = self
+        self._cleanup_confirmed = False
+        self._closed = False
         from steamboat_runtime.manifest import load_manifest
         from steamboat_runtime.protocol.clock import clock_identity
         from steamboat_security.channel_policy import canonical_json as policy_json
@@ -162,21 +172,20 @@ class C2HostProcessFixture:
             dir=scratch_dir)
         self.root = Path(self._temp.name)
         os.chmod(self.root, 0o700)
-        self.listeners = (_listener(), _listener())
-        wall = 2_000_000_000
-        self.gateway_ca, self.gateway_ca_key = generate_ca(
-            common_name="C2 host process fixture gateway CA", now=wall-30,
-            lifetime_days=1)
-        self.gateway_cert, self.gateway_key, self.gateway_x509 = _gateway_certificate(
-            self.gateway_ca, self.gateway_ca_key, now=wall)
+        self._stack = ExitStack()
+        self._stack.callback(self._cleanup_owners)
+        listeners = []
+        for _ in range(2):
+            listener = _listener()
+            listeners.append(listener)
+            self._stack.callback(listener.close)
+        self.listeners = tuple(listeners)
+        self.gateway_ca = self.gateway_ca_key = None
+        self.gateway_cert = self.gateway_key = self.gateway_x509 = None
+        from cryptography.hazmat.primitives.asymmetric import ec
         self.policy_key = ec.generate_private_key(ec.SECP256R1())
         self.policy_private_pem = _pem_private(self.policy_key)
         self.policy_public_pem = _pem_public(self.policy_key)
-        self._stack = ExitStack()
-        self._stack.callback(self._temp.cleanup)
-        for listener in self.listeners:
-            self._stack.callback(listener.close)
-        self._stack.callback(self._cleanup_owners)
         self.policy_owner = self.traffic = self.gateway = self.startup = None
         self.backend = self.cgroup = None
         self.clock = None
@@ -238,7 +247,13 @@ class C2HostProcessFixture:
         from steamboat_security.channel_policy import canonical_json as policy_json
         from steamboat_security.certificates import _pem_certificate
         from steamboat_security.channel_policy import sign_channel_policy
-        now = int(case.wall)
+        now = int(case.clock.sample().wall)
+        if self.gateway_ca is None:
+            self.gateway_ca, self.gateway_ca_key = generate_ca(
+                common_name="C2 host process fixture gateway CA", now=now - 30,
+                lifetime_days=1)
+            self.gateway_cert, self.gateway_key, self.gateway_x509 = _gateway_certificate(
+                self.gateway_ca, self.gateway_ca_key, now=now)
         candidate = case.fixture.candidate
         spec = next(item for item in candidate.new_launch_specs if item.role == "host")
         component = case.components[0]
@@ -284,6 +299,7 @@ class C2HostProcessFixture:
         policy_path.write_bytes(signed); os.chmod(policy_path, 0o600)
         digest = hashlib.sha256(policy_json(payload)).hexdigest()
         from steamboat_connector.channel_policy_store import PersistentChannelPolicyStore
+        policy_root.mkdir(mode=0o700)
         owner = PersistentChannelPolicyStore.provision(policy_root,
             expected_uid=os.geteuid(), verification_key_pem=self.policy_public_pem,
             clock=case.clock, minimum_revision=1, minimum_policy_digest=digest)
@@ -291,7 +307,7 @@ class C2HostProcessFixture:
         owner.close()
         from steamboat_security.codec import canonical_json
         settings = {"schema_version": 1, "profile": "native_posix_c2_host_runtime_v1",
-            "artifact_root": str(self.artifacts_dir),
+            "artifact_root": str(Path(case.root).parent / "artifact-store"),
             "catalog_public_key_hex": catalog_key.hex(),
             "component_allocations": {"worker-1": {"sessions": 1,
                 "kv_bytes": 32768, "cache_positions": 32, "queued_calls": 0}},
@@ -319,11 +335,14 @@ class C2HostProcessFixture:
         document = json.loads(signed.decode("utf-8", "strict"))
         payload = document["payload"]
         policy_digest = hashlib.sha256(canonical_json(payload)).hexdigest()
-        self.policy_owner = PersistentChannelPolicyStore.open_existing(
-            settings["gateway"]["policy_root"], expected_uid=os.geteuid(),
+        parent_policy_root = self.root / "gateway-policy-parent"
+        parent_policy_root.mkdir(mode=0o700)
+        self.policy_owner = PersistentChannelPolicyStore.provision(
+            parent_policy_root, expected_uid=os.geteuid(),
             verification_key_pem=settings["gateway"]["verification_key_pem"].encode("ascii"),
             clock=self.clock, minimum_revision=1,
             minimum_policy_digest=policy_digest)
+        self.policy_owner.install(signed)
         owner_policy = self._owner_policy()
         self.backend_policy = owner_policy
         traffic = settings["traffic"]
@@ -415,8 +434,6 @@ class C2HostProcessFixture:
             # Keep every downstream descriptor/lease reachable when process
             # reclamation is uncertain; test teardown must not manufacture a
             # cleanup proof by closing parent pins or the selected root.
-            if len(_RETAINED_UNCERTAIN_FIXTURES) < 8:
-                _RETAINED_UNCERTAIN_FIXTURES.append(self)
             return
         if self.policy_owner is not None and not self.policy_owner._closed:
             self.policy_owner.close()
@@ -424,9 +441,16 @@ class C2HostProcessFixture:
             self.cgroup.close()
         if self.startup is not None:
             self.startup.close()
+        self._cleanup_confirmed = True
 
     def close(self):
+        if self._closed:
+            return
+        self._closed = True
         self._stack.close()
+        if self._cleanup_confirmed:
+            self._temp.cleanup()
+            _release_retention_slot(self._retention_slot)
 
     def __enter__(self):
         return self

@@ -8,6 +8,13 @@ selected C2 binding and assigned worker stage, connects over signed loopback
 mTLS, completes worker TLS/HELLO, observes the supervisor's `READY`, then asks
 the supervisor to stop, reap and release the process.
 
+The gateway leaf uses the repository's actual gateway channel-certificate
+profile, including its URI identity and loopback IP SAN, and is issued from
+the selected fixture Clock's wall sample. The child and gateway own separate
+durable policy-store roots and independently install the same signed initial
+policy. The runtime artifact root points to the fixture's actual
+`ArtifactInstaller` pin root.
+
 The parent event loop continues pumping the actual `GatewayService` while the
 blocking supervisor start, READY and Stop operations run in worker threads.
 Both gateway listener endpoints are signed into the policy with distinct
@@ -28,6 +35,12 @@ reaping, pin release, protected storage, signatures, model stage execution,
 TLS and HELLO are the actual implementations. The test does not start a
 coordinator, establish a complete gateway route, send inference requests, or
 claim physically enforced resource quotas.
+
+The fixture reserves one of eight process-local retention slots before it
+acquires test resources. If process reclamation or owner cleanup is uncertain,
+teardown retains the fixture and its temporary directory instead of allowing
+the test framework to erase ownership evidence. The cgroup stand-in is only a
+lifecycle test seam; it does not provide physical process containment.
 
 Run the focused native case with:
 
