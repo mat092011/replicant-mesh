@@ -2,6 +2,10 @@
 
 These adapters do not start a process or establish worker readiness. The owning
 supervisor must still enforce shared resource reservations and runtime policy.
+Live checks currently acquire the installer lock and hash the assigned files.
+WorkerHandler calls them from its event loop during cache admission and execution,
+so this adapter does not establish prompt cancellation responsiveness. Integration
+needs a nonblocking pinned assignment lease or async admission that retains ownership.
 """
 
 from .assigned_artifacts import AssignedArtifactError, AssignedArtifactView
@@ -80,7 +84,11 @@ class AssignedStageExecutor:
         # inference_mode is thread-local; WorkerHandler invokes this from its
         # dedicated compute thread, so the context must be entered here.
         with torch.inference_mode():
-            return self.stage(hidden, cache, position)
+            result = self.stage(hidden, cache, position)
+        # Authorization may expire or be withdrawn while the stage computes.
+        # Do not deliver a result after that transition.
+        self._verify_live_assignment()
+        return result
 
 
 def build_assigned_worker_handler(view, *, boot_id=None, clock=None,

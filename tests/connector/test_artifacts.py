@@ -1636,6 +1636,7 @@ class AssignedModelIntegrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(dir=scratch) as temporary:
             handlers = []
+            exercise_started = False
             reference = PipelineModel(source)
             reference_sessions = {
                 "session-A": reference.open_session(16),
@@ -1730,15 +1731,26 @@ class AssignedModelIntegrationTests(unittest.TestCase):
                                 self.assertEqual(closed.code, "OK", closed.message)
                                 self.assertTrue(closed.reclaimed)
                                 described = await call("Describe", handler, "")
-                                self.assertEqual(described.active_sessions, 0)
-                                self.assertEqual(described.allocated_cache_bytes, 0)
+                                remaining = len(reference_sessions) - 1
+                                self.assertEqual(described.active_sessions, remaining)
+                                if remaining:
+                                    self.assertGreater(described.allocated_cache_bytes, 0)
+                                else:
+                                    self.assertEqual(described.allocated_cache_bytes, 0)
                     finally:
                         await asyncio.gather(
                             *(handler.shutdown() for handler in handlers),
                             return_exceptions=False)
 
+                exercise_started = True
                 asyncio.run(exercise())
             finally:
+                if handlers and not exercise_started:
+                    async def shutdown_unstarted_handlers():
+                        await asyncio.gather(
+                            *(handler.shutdown() for handler in handlers),
+                            return_exceptions=True)
+                    asyncio.run(shutdown_unstarted_handlers())
                 for session in reference_sessions.values():
                     session.close()
 

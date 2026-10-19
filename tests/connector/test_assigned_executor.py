@@ -22,12 +22,15 @@ class _Cache:
 
 
 class _Stage:
-    def __init__(self, start, end):
+    def __init__(self, start, end, on_call=None):
         self.start, self.end = start, end
         self.calls = []
+        self.on_call = on_call
 
     def __call__(self, hidden, cache, position):
         self.calls.append((hidden, cache, position))
+        if self.on_call is not None:
+            self.on_call()
         return "stage-result"
 
 
@@ -71,7 +74,7 @@ class AssignedExecutorTests(unittest.TestCase):
             result = executor.execute(hidden, cache, 3)
         self.assertEqual(result, "stage-result")
         self.assertEqual(executor.stage.calls, [(hidden, cache, 3)])
-        self.assertEqual(view._locked_manifest.call_count, 5)
+        self.assertEqual(view._locked_manifest.call_count, 6)
         view.load_coordinator_model.assert_not_called()
 
     def test_coordinator_and_non_view_inputs_are_rejected_before_load(self):
@@ -130,6 +133,29 @@ class AssignedExecutorTests(unittest.TestCase):
             with self.assertRaises(AssignedArtifactError):
                 executor.execute(object(), wrong_cache, 0)
         self.assertEqual(executor.stage.calls, [])
+
+    def test_deactivation_during_compute_rejects_result(self):
+        view = _view()
+        inactive = False
+
+        def validate_scope():
+            if inactive:
+                raise AssignedArtifactError("assignment became inactive")
+            return view.manifest
+
+        view._locked_manifest.side_effect = validate_scope
+        executor = assigned_executor.AssignedStageExecutor(view)
+
+        def deactivate():
+            nonlocal inactive
+            inactive = True
+
+        executor.stage.on_call = deactivate
+        fake_torch = SimpleNamespace(inference_mode=nullcontext)
+        with mock.patch.dict(sys.modules, {"torch": fake_torch}):
+            with self.assertRaisesRegex(AssignedArtifactError, "inactive"):
+                executor.execute(object(), _Cache(2, 4), 0)
+        self.assertEqual(len(executor.stage.calls), 1)
 
     def test_handler_receives_manifest_component_executor_and_owner_options(self):
         view = _view()
