@@ -159,6 +159,43 @@ class ChannelSocketTests(unittest.TestCase):
         with self.assertRaises(ChannelSocketError):
             driver.pump()
 
+    def test_close_releases_then_raises_is_sticky_unknown_and_never_retried(self):
+        class ReleaseThenRaiseSocket:
+            def __init__(self, sock):
+                self.sock = sock
+                self.close_calls = 0
+
+            def setblocking(self, value):
+                self.sock.setblocking(value)
+
+            def send(self, data):
+                return self.sock.send(data)
+
+            def recv(self, size):
+                return self.sock.recv(size)
+
+            def close(self):
+                self.close_calls += 1
+                self.sock.close()
+                raise OSError("close acknowledgement lost after release")
+
+        client_socket, peer_socket = self._connected_pair()
+        client_tls, unused_tls = self._owners()
+        wrapper = ReleaseThenRaiseSocket(client_socket)
+        driver = ChannelSocket(wrapper, client_tls, self.budget,
+            role="coordinator", boot_id=COORD_BOOT, test_socket=True)
+        try:
+            driver.close()
+            self.assertEqual(driver.socket_close_status, "uncertain")
+            self.assertEqual(wrapper.close_calls, 1)
+            self.assertEqual(client_socket.fileno(), -1)
+            driver.close()
+            self.assertEqual(driver.socket_close_status, "uncertain")
+            self.assertEqual(wrapper.close_calls, 1)
+        finally:
+            unused_tls.close()
+            peer_socket.close()
+
     def test_policy_revocation_closes_actual_socket_and_tls_owner(self):
         client_socket, server_socket = self._connected_pair()
         client_tls, server_tls = self._owners()

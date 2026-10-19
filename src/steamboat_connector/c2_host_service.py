@@ -688,6 +688,9 @@ class C2HostService:
     async def _shutdown(self, tasks):
         if self._stopping:
             return
+        if getattr(self, "_uncertain_startup_tasks", ()):
+            raise C2HostServiceError(
+                "startup task ownership is unresolved; retain owners until process reap")
         self._stopping = True
         self._ready = False
         if self._stop_event is not None:
@@ -719,9 +722,12 @@ class C2HostService:
                         raise C2HostServiceError("TLS owner close is uncertain")
             driver = channel.get("driver")
             if driver is not None:
-                if driver._socket.fileno() != -1:
+                if getattr(driver, "socket_close_status", None) != "closed":
                     raise C2HostServiceError("owned gateway socket close is uncertain")
-                if not getattr(driver._tls, "_closed", False):
+                tls = driver._tls
+                if (getattr(tls, "cleanup_uncertain", False)
+                        or getattr(tls, "cleanup_status", None) in ("pending", "uncertain")
+                        or not getattr(tls, "_closed", False)):
                     raise C2HostServiceError("owned TLS transport close is uncertain")
         current = asyncio.current_task()
         run_tasks = {channel.get("task") for channel in self._channels
@@ -774,6 +780,9 @@ class C2HostService:
                 closed = await self._runtime.close(grace_seconds=min(5.0, remaining))
                 if closed is not True:
                     raise C2HostServiceError("resident runtime did not confirm full cleanup")
+            if getattr(self, "_uncertain_startup_tasks", ()):
+                raise C2HostServiceError(
+                    "startup task ownership became unresolved; retain owners until process reap")
             if self._child_pins is not None and self._child_pins._state == "open":
                 self._child_pins.close()
             if self._binding_lease is not None:

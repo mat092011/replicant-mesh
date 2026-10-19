@@ -272,6 +272,88 @@ class C2HostServiceNativeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unresolved_startup_task_retains_every_owner(self):
+        service = object.__new__(C2HostService)
+        service._stopping = False
+        service._ready = False
+        service._stop_event = asyncio.Event()
+        service._channels = []
+        service._uncertain_startup_tasks = []
+        service._runtime = None
+        service._child_pins = object()
+        service._binding_lease = object()
+        service._child_binding = object()
+        service._channel_policy_owner = object()
+        service._clock_bridge = object()
+        service._close_error = None
+        service._shutdown_proven = False
+        owner_refs = (service._child_pins, service._binding_lease,
+                      service._child_binding, service._channel_policy_owner,
+                      service._clock_bridge)
+        never = asyncio.Event()
+        startup = asyncio.create_task(never.wait())
+        service._uncertain_startup_tasks.append(startup)
+        with self.assertRaisesRegex(C2HostServiceError, "startup task ownership"):
+            await service._shutdown([])
+        self.assertFalse(startup.done())
+        self.assertEqual(owner_refs, (service._child_pins, service._binding_lease,
+            service._child_binding, service._channel_policy_owner, service._clock_bridge))
+        self.assertFalse(service._shutdown_proven)
+        startup.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await startup
+
+    async def test_actual_uncertain_socket_close_retains_host_pins(self):
+        from tests.connector.test_channel_socket import ChannelSocketTests
+
+        fixture = ChannelSocketTests()
+        fixture.setUp()
+        try:
+            class ReleaseThenRaiseSocket:
+                def __init__(self, sock):
+                    self.sock = sock
+
+                def setblocking(self, value):
+                    self.sock.setblocking(value)
+
+                def send(self, data):
+                    return self.sock.send(data)
+
+                def recv(self, size):
+                    return self.sock.recv(size)
+
+                def close(self):
+                    self.sock.close()
+                    raise OSError("close acknowledgement lost after release")
+
+            from steamboat_connector.channel_socket import ChannelSocket
+            client_socket, peer_socket = fixture._connected_pair()
+            tls, _unused_tls = fixture._owners()
+            driver = ChannelSocket(ReleaseThenRaiseSocket(client_socket), tls,
+                fixture.budget, role="coordinator", boot_id="b" * 32,
+                test_socket=True)
+            pins = object()
+            service = object.__new__(C2HostService)
+            service._stopping = False
+            service._ready = False
+            service._stop_event = asyncio.Event()
+            service._channels = [{"rpc": None, "stream": None,
+                                  "driver": driver, "socket": None, "tls": tls}]
+            service._uncertain_startup_tasks = []
+            service._runtime = None
+            service._child_pins = pins
+            service._close_error = None
+            service._shutdown_proven = False
+            with self.assertRaisesRegex(C2HostServiceError, "socket close is uncertain"):
+                await service._shutdown([])
+            self.assertEqual(driver.socket_close_status, "uncertain")
+            self.assertIs(service._child_pins, pins)
+            self.assertFalse(service._shutdown_proven)
+            peer_socket.close()
+            _unused_tls.close()
+        finally:
+            fixture.tearDown()
+
     async def test_false_runtime_close_retains_all_downstream_owners(self):
         class Runtime:
             _bridges = {}
