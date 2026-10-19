@@ -16,7 +16,6 @@ RUN python -m pip install --no-cache-dir --require-hashes --no-index \
 COPY src/steamboat_connector /app/src/steamboat_connector
 COPY src/steamboat_security /app/src/steamboat_security
 COPY src/steamboat_runtime /app/src/steamboat_runtime
-COPY tests/__init__.py /app/tests/__init__.py
 COPY tests/connector/__init__.py /app/tests/connector/__init__.py
 COPY tests/security/__init__.py /app/tests/security/__init__.py
 COPY tests/connector/test_consumer_transport.py /app/tests/connector/test_consumer_transport.py
