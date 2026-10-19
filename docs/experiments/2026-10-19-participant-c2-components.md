@@ -313,6 +313,61 @@ It does not validate the pinned CPython 3.12 execution backend, persistent pool
 delegation, combined role enforcement, disk/traffic limits or C2 readiness.
 The laptop and ZimaBlade remain sufficient to attempt the planned CPU scope.
 
+## Authenticated transport and accounting components
+
+Component 26 passed **474 tests, zero skips/failures/errors, 26.529 seconds**.
+The frozen source was
+`afc889c302625f5871f9273059d80206fbb1b4eca09a71984e2d6983c4383818`
+(395 files); every file matched the rebuilt image
+`sha256:6a09109e0df58b0d0c080c8eaa5e2a78ad5de5f9318fecf48c8777e52de18f12`.
+The source-proof and test-log SHA-256 values are
+`28d89fc3afe144401c76477ea6a190247511a1786b252e951331c55895a012e7`
+and `b64dbff2a5a8818f29c3af0f5386cbdb2fd732196fe17238da4929803d6178f5`.
+The original two-CPU, 6-GiB, 256-PID, read-only, network-isolated container
+limits remained in effect. Its terminal inspection showed no OOM kill; the
+exited container was removed. These counts overlap earlier inventories.
+
+This inventory adds independently reviewed signed channel policy v2 with
+separate worker/coordinator endpoints, delegation v2 with separate strict data
+and control counters, bounded fragment encoding/reassembly, a control-priority
+writer and authenticated HELLO registration. TLS-owner and registration
+capabilities refer to actual peers; registration alone confers no work
+readiness. The atomic socket meter holds one shared ledger transaction over
+durable reservation, a non-consuming TLS liveness check, one nonblocking TCP
+call and exact settlement. The Linux inventory includes its persistent-file
+locking, no-I/O-on-contention and actual TLS/socket cases. TCP payload counts
+include TLS overhead; they exclude IP headers and retransmissions.
+
+Failures remain part of the evidence:
+
+| Component | Result and disposition |
+| --- | --- |
+| 19 | 355 passed; earlier transport inventory. |
+| 20 | 392 tests, two failing settlement subcases; durable-commit/cache fault handling corrected. |
+| 21 | 411 tests, one file-lock fixture child failed a conservative clock check; the concurrency fixture now uses an explicit monotonic-derived synthetic wall clock, with a separate sticky wall-rollback negative. Production clocks are unchanged. |
+| 22 | 418 passed; later independent review still found socket defects, subsequently corrected. |
+| 23 | Aborted before execution: the parent's expected inventory was 428 rather than the discovered 427. |
+| 24 | 427 tests, one stop-during-attach fixture failure; an exited fake process was incorrectly republished as a populated cgroup. |
+| 25 | 474 tests, two fixed-spin socket-delivery failures on Linux; corrected test waiting as described below. |
+| 26 | All 474 passed after the bounded fixture corrections. |
+
+The cgroup fixture correction changed no production supervisor code. A
+deterministic eligibility-to-publication barrier reproduces the invalid
+population when its liveness recheck is removed. With that correction, the
+unchanged native supervisor passed 100 repetitions of the original case and
+all 42 supervisor tests, with no skips.
+
+For the two socket cases, unchanged production code and fixed-spin tests passed
+20 repetitions when only test-socket TCP_NODELAY was enabled. Under the original
+socket settings, bounded real-monotonic delivery waits of at most one second
+then passed 20 repetitions and all 47 socket/accounting tests without skips.
+Payload, exact byte-accounting and subsequent control-delivery assertions remain
+in place. Production resource limits and deadlines were not relaxed.
+
+The gateway request producer and the composed framed socket service were not
+included in component 26. Their integration, application readiness and actual
+separate-device inference remain pending.
+
 ## Remaining acceptance work
 
 The daemon still needs actual backend, assigned artifact ownership and readiness

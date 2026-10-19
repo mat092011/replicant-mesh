@@ -865,7 +865,7 @@ statuses remain unchanged. Work stops after C1 as requested.
 **C2 resumed, 2026-10-19:** the maintainer authorized further implementation
 after the completed C1 stop point. C1 remains accepted and published at `89ea4b1`.
 The [C2 component record](experiments/2026-10-19-participant-c2-components.md)
-records a 299-case, skip-free Docker gate: shared-store assigned-handler numerical
+records a 474-case, skip-free Docker component gate: shared-store assigned-handler numerical
 comparison, real process ownership, explicit gateway admission and actual
 `WorkerHandler` stream-loss cleanup. A separate bounded ZimaBlade OS probe
 measured kernel CPU throttling and a role memory-limit OOM kill, with task

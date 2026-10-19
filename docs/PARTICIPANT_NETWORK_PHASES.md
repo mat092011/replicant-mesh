@@ -208,8 +208,9 @@ Begin C4 integration and optional C8 UI scaffolding; no community pilot yet.
 
 **Implementation resumed, 2026-10-19:** the maintainer authorized continuing C2
 after completed C1 publication. The [component record](experiments/2026-10-19-participant-c2-components.md)
-records a 299-case, skip-free Docker component gate, including same-container
-assigned-handler numerical parity and real worker stream-loss cleanup. A separate
+records a 474-case, skip-free Docker component gate, including same-container
+assigned-handler numerical parity, real worker stream-loss cleanup and authenticated
+transport/accounting components. Earlier failed runs and their corrections are retained. A separate
 ZimaBlade OS probe verified task-scoped CPU/RAM enforcement. Actual combined
 daemon enforcement, both authenticated gateway hops and the outbound split-host
 route remain incomplete; every C2 checkbox remains open.
