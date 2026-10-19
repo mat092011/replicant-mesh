@@ -4,8 +4,6 @@ These adapters do not start a process or establish worker readiness. The owning
 supervisor must still enforce shared resource reservations and runtime policy.
 """
 
-from steamboat_connector.catalog import CatalogError
-
 from .assigned_artifacts import AssignedArtifactError, AssignedArtifactView
 
 
@@ -58,18 +56,11 @@ class AssignedStageExecutor:
             raise AssignedArtifactError("host assignment changed while its stage was loading")
 
     def _verify_live_assignment(self):
-        try:
-            self.view._verify_current_expiry()
-        except CatalogError as error:
-            raise AssignedArtifactError(
-                "catalog or assignment expired before assigned stage operation") from error
-        assignment = self.view.assignment
-        if (assignment is None
-                or assignment.document_sha256 != self.assignment_sha256
-                or assignment.payload.get("assignment_id") != self.assignment_id
-                or assignment.payload.get("component") != self.worker_name
-                or assignment.payload.get("manifest_fingerprint") != self.manifest_fingerprint):
-            raise AssignedArtifactError("assigned stage authorization changed")
+        manifest, assignment, component = _validated_assignment(self.view)
+        if (component != self.worker_name
+                or manifest["fingerprint"] != self.manifest_fingerprint
+                or assignment.document_sha256 != self.assignment_sha256):
+            raise AssignedArtifactError("active assigned stage authorization changed")
 
     def new_cache(self):
         self._verify_live_assignment()

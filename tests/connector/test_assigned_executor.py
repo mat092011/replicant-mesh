@@ -48,7 +48,6 @@ def _view(*, role="host", component="worker-2", assignment_id=ASSIGNMENT_ID,
     view.assignment = SimpleNamespace(payload=payload,
                                       document_sha256=assignment_digest)
     view._locked_manifest = mock.Mock(return_value=manifest)
-    view._verify_current_expiry = mock.Mock()
     view.load_stage = mock.Mock(return_value=_Stage(start, end))
     view.new_layer_cache = mock.Mock(return_value=_Cache(start, end))
     return view
@@ -72,7 +71,7 @@ class AssignedExecutorTests(unittest.TestCase):
             result = executor.execute(hidden, cache, 3)
         self.assertEqual(result, "stage-result")
         self.assertEqual(executor.stage.calls, [(hidden, cache, 3)])
-        self.assertEqual(view._verify_current_expiry.call_count, 3)
+        self.assertEqual(view._locked_manifest.call_count, 5)
         view.load_coordinator_model.assert_not_called()
 
     def test_coordinator_and_non_view_inputs_are_rejected_before_load(self):
@@ -113,15 +112,18 @@ class AssignedExecutorTests(unittest.TestCase):
         with self.assertRaises(AssignedArtifactError):
             assigned_executor.AssignedStageExecutor(view)
 
-    def test_expiry_and_wrong_cache_scope_fail_before_compute(self):
+    def test_deactivated_scope_and_wrong_cache_fail_before_compute(self):
         view = _view()
         executor = assigned_executor.AssignedStageExecutor(view)
-        view._verify_current_expiry.side_effect = AssignedArtifactError("expired")
+        view._locked_manifest.side_effect = AssignedArtifactError("assignment is inactive")
         with self.assertRaises(AssignedArtifactError):
             executor.new_cache()
         view.new_layer_cache.assert_not_called()
+        with self.assertRaises(AssignedArtifactError):
+            executor.execute(object(), _Cache(2, 4), 0)
+        self.assertEqual(executor.stage.calls, [])
 
-        view._verify_current_expiry.side_effect = None
+        view._locked_manifest.side_effect = None
         wrong_cache = _Cache(0, 2)
         fake_torch = SimpleNamespace(inference_mode=nullcontext)
         with mock.patch.dict(sys.modules, {"torch": fake_torch}):

@@ -1560,6 +1560,188 @@ class AssignedModelIntegrationTests(unittest.TestCase):
                 asyncio.run(coordinator.close(timeout_seconds=1))
         self._assert_signed_header_rejections(source, scratch, manifest, now)
 
+    @unittest.skipUnless(sys.platform.startswith("linux")
+                         and os.environ.get("STEAMBOAT_ASSIGNED_TEST_SOURCE")
+                         and os.environ.get("STEAMBOAT_ASSIGNED_TEST_SCRATCH"),
+                         "parent Linux model gate must provide readonly artifacts and bounded scratch")
+    def test_assigned_executor_worker_handlers_preserve_interleaved_session_logits(self):
+        """Drive the real adapter, WorkerHandler and tensor wire codec on pinned weights."""
+        from steamboat_connector.catalog import RUNTIME_LOCK_SHA256
+        from steamboat_runtime.assigned_executor import build_assigned_worker_handler
+        from steamboat_runtime.manifest import load_manifest
+        from steamboat_runtime.model import PipelineModel
+        from steamboat_runtime.protocol.codec import decode_tensor, encode_tensor
+        from steamboat_runtime.protocol.worker_pb2 import Request
+        import torch
+
+        source = Path(os.environ["STEAMBOAT_ASSIGNED_TEST_SOURCE"])
+        scratch = Path(os.environ["STEAMBOAT_ASSIGNED_TEST_SCRATCH"])
+        manifest = load_manifest(source)
+        now = int(time.time())
+        file_entries = {}
+        for filename, digest in manifest["files"].items():
+            info = (source / filename).lstat()
+            self.assertTrue(stat.S_ISREG(info.st_mode))
+            file_entries[filename] = {"sha256": digest, "size_bytes": info.st_size}
+        manifest_bytes = (source / "modelmanifest.json").read_bytes()
+        file_entries["modelmanifest.json"] = {
+            "sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "size_bytes": len(manifest_bytes),
+        }
+        components = {
+            name: {"file": item["file"], "layer_range": item["layer_range"],
+                   "sha256": item["sha256"],
+                   "size_bytes": file_entries[item["file"]]["size_bytes"]}
+            for name, item in manifest["components"].items()
+        }
+        catalog_payload = {
+            "schema_version": 1, "catalog_revision": 1,
+            "issued_at": now - 10, "expires_at": now + 3600,
+            "model": {
+                "model_id": MODEL_ID, "model_revision": MODEL_REVISION,
+                "tokenizer_revision": MODEL_REVISION, "source_hashes": SOURCE_HASHES,
+                "device": "cpu", "dtype": "float32", "attention": "eager",
+                "compression": "none", "layout": "batch_sequence_hidden",
+                "batch_size": 1, "hidden_size": 64, "vocabulary_size": 32000,
+                "layers": 8, "model_context": 2048, "runtime_context": 1152,
+                "tied_input_output_weights": False,
+            },
+            "runtime": {
+                "os": "linux", "architecture": "amd64", "python": "3.12.15",
+                "torch": "2.14.1+cpu", "transformers": "5.19.0",
+                "grpcio": "1.84.0", "protobuf": "7.36.2",
+                "lock_sha256": RUNTIME_LOCK_SHA256,
+            },
+            "manifest": {"filename": "modelmanifest.json",
+                         "fingerprint": manifest["fingerprint"],
+                         **file_entries["modelmanifest.json"]},
+            "components": components, "files": file_entries,
+        }
+        catalog_bytes = _sign_document(catalog_payload, "catalog")
+        verifier = CatalogVerifier(_PUBLIC)
+
+        class SourceRetriever:
+            def iter_chunks(self, filename, *, deadline, max_chunk_bytes):
+                if filename not in ARTIFACT_FILENAMES:
+                    raise ValueError("unapproved source artifact")
+                path = source / filename
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    raise ValueError("source artifact is not a regular file")
+                with path.open("rb") as stream:
+                    while True:
+                        block = stream.read(max_chunk_bytes)
+                        if not block:
+                            return
+                        yield block
+
+        with tempfile.TemporaryDirectory(dir=scratch) as temporary:
+            handlers = []
+            reference = PipelineModel(source)
+            reference_sessions = {
+                "session-A": reference.open_session(16),
+                "session-B": reference.open_session(16),
+            }
+            try:
+                for index, component in enumerate(
+                        ("worker-1", "worker-2", "worker-3"), start=1):
+                    device_id = f"dev_{index:032x}"
+                    assignment_id = f"asg_{index:032x}"
+                    current_catalog = verifier.verify_catalog(catalog_bytes, now=now)
+                    assignment_bytes, _ = _assignment_bundle(
+                        verifier, current_catalog, role="host", component=component,
+                        now=now, assignment_id=assignment_id, device_id=device_id)
+                    installer = ArtifactInstaller(
+                        Path(temporary) / component, verifier,
+                        disk_ceiling_bytes=128 * 1024 * 1024,
+                        disk_headroom_bytes=16 * 1024 * 1024,
+                        wall_clock=lambda: now)
+                    installer.install(catalog_bytes, assignment_bytes, SourceRetriever(),
+                        account_id=_ACCOUNT, device_id=device_id, role="host")
+                    view = installer.open_view(assignment_id, account_id=_ACCOUNT,
+                        device_id=device_id, role="host", now=now)
+                    handlers.append(build_assigned_worker_handler(
+                        view, boot_id=f"{index:032x}"))
+
+                leases = {}
+                sequences = {(component, session): 0
+                    for component in ("worker-1", "worker-2", "worker-3")
+                    for session in reference_sessions}
+                positions = {session: 0 for session in reference_sessions}
+
+                async def call(method, handler, session_id, **fields):
+                    request_fields = {
+                        "protocol_version": 1,
+                        "manifest_fingerprint": handler.manifest["fingerprint"],
+                        "worker_boot_id": handler.boot_id,
+                        "session_id": session_id,
+                        "lease_token": leases.get((handler.worker_name, session_id), ""),
+                        "timeout_ms": handler.limits["rpc_timeout_seconds"] * 1000,
+                    }
+                    request_fields.update(fields)
+                    request = Request(**request_fields)
+                    return await handler.handle(method, request)
+
+                async def exercise():
+                    try:
+                        for handler in handlers:
+                            for session_id in reference_sessions:
+                                opened = await call("OpenSession", handler, session_id,
+                                    lease_token="", max_positions=16,
+                                    lifetime_ms=300000, idle_lease_ms=120000)
+                                self.assertEqual(opened.code, "OK", opened.message)
+                                leases[(handler.worker_name, session_id)] = opened.lease_token
+
+                        events = (("session-A", (1, 17, 19)),
+                                  ("session-B", (5, 7)),
+                                  ("session-A", (23,)),
+                                  ("session-B", (29,)),
+                                  ("session-A", (31,)),
+                                  ("session-B", (37,)))
+                        for session_id, token_values in events:
+                            input_ids = torch.tensor([token_values], dtype=torch.long)
+                            expected = reference_sessions[session_id].step(input_ids)
+                            with torch.inference_mode():
+                                hidden = reference.input_output.embed_tokens(input_ids)
+                            for handler in handlers:
+                                component = handler.worker_name
+                                count = len(token_values)
+                                encoded = encode_tensor(hidden, hidden_size=64,
+                                    max_tokens=handler.limits["max_positions"],
+                                    max_bytes=handler.limits["max_message_bytes"])
+                                response = await call("Step", handler, session_id,
+                                    sequence=sequences[(component, session_id)],
+                                    start_position=positions[session_id],
+                                    token_count=count, tensor=encoded)
+                                self.assertEqual(response.code, "OK", response.message)
+                                hidden = decode_tensor(response.tensor, count,
+                                    hidden_size=64,
+                                    max_tokens=handler.limits["max_positions"],
+                                    max_bytes=handler.limits["max_message_bytes"])
+                                sequences[(component, session_id)] += 1
+                            with torch.inference_mode():
+                                actual = reference.input_output.lm_head(
+                                    reference.input_output.norm(hidden[:, -1:, :]))
+                            torch.testing.assert_close(actual, expected, atol=1e-3, rtol=0)
+                            positions[session_id] += len(token_values)
+
+                        for handler in handlers:
+                            for session_id in reference_sessions:
+                                closed = await call("CloseSession", handler, session_id)
+                                self.assertEqual(closed.code, "OK", closed.message)
+                                self.assertTrue(closed.reclaimed)
+                                described = await call("Describe", handler, "")
+                                self.assertEqual(described.active_sessions, 0)
+                                self.assertEqual(described.allocated_cache_bytes, 0)
+                    finally:
+                        await asyncio.gather(
+                            *(handler.shutdown() for handler in handlers),
+                            return_exceptions=False)
+
+                asyncio.run(exercise())
+            finally:
+                for session in reference_sessions.values():
+                    session.close()
+
     def _assert_signed_header_rejections(self, source, scratch, manifest, now):
         from steamboat_runtime.manifest import fingerprint, validate_manifest
 
