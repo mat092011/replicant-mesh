@@ -169,6 +169,8 @@ class SecureCoordinatorService:
 
     def request_runtime_invalidation(self, reason="runtime invalidated"):
         """Synchronously fence work; listener pausing is scheduled on its owner loop."""
+        if self.runtime_guard is None:
+            raise ValueError("runtime invalidation requires a configured runtime guard")
         self._runtime_invalidated.set()
         self.unavailable = True
         self.runtime_owner.unavailable = True
@@ -198,11 +200,11 @@ class SecureCoordinatorService:
                 self.runtime_owner.unavailable = True
 
     def _check_runtime_guard(self):
+        if self.runtime_guard is None:
+            return
         self._bind_owner_loop()
         if self._runtime_invalidated.is_set():
             raise AuthorizationRevoked("coordinator runtime was invalidated")
-        if self.runtime_guard is None:
-            return
         try:
             result = self.runtime_guard()
             if inspect.isawaitable(result):
@@ -221,6 +223,9 @@ class SecureCoordinatorService:
         return _AuthorizedStreamContext(context, authorization, self._check_runtime_guard)
 
     def _runtime_authorization_watcher(self, authorization):
+        if self.runtime_guard is None:
+            return self.authorization_watcher
+
         async def watch(_authorization):
             self._bind_owner_loop()
             original = asyncio.create_task(_maybe_await(
@@ -1346,18 +1351,23 @@ class SecureCoordinatorService:
             invalidation = asyncio.create_task(
                 _maybe_await(self.authorization_watcher(authorization)))
             expiry = asyncio.create_task(asyncio.sleep(remaining))
-            runtime = asyncio.create_task(self._runtime_async_event.wait())
+            tasks = (invalidation, expiry)
+            runtime = None
+            if self.runtime_guard is not None:
+                self._bind_owner_loop()
+                runtime = asyncio.create_task(self._runtime_async_event.wait())
+                tasks = (invalidation, expiry, runtime)
             try:
-                done, _ = await asyncio.wait((invalidation, expiry, runtime),
+                done, _ = await asyncio.wait(tasks,
                     return_when=asyncio.FIRST_COMPLETED)
-                if runtime in done:
+                if runtime is not None and runtime in done:
                     raise AuthorizationRevoked("coordinator runtime was invalidated")
                 if expiry in done:
                     raise AuthorizationRevoked("trusted request context expired")
                 await invalidation
                 raise AuthorizationRevoked("consumer authorization was revoked")
             finally:
-                await _cancel_tasks_bounded((invalidation, expiry, runtime),
+                await _cancel_tasks_bounded(tasks,
                     message="consumer authorization watcher did not stop")
         return watch
 
@@ -1558,7 +1568,8 @@ async def create_secure_coordinator_server(service, *, listen_endpoint,
         request_context_factory=request_context_factory,
         capture_budget=capture_budget,
         max_generate_streams=max_generate_streams, runtime_guard=runtime_guard)
-    secure_service._bind_owner_loop()
+    if runtime_guard is not None:
+        secure_service._bind_owner_loop()
     reservation = await _maybe_await(connection_controller.reserve_listener(
         listener_id, connection_slots=listener_slots, pending_slots=listener_slots))
     if reservation is None or not callable(getattr(reservation, "release", None)):

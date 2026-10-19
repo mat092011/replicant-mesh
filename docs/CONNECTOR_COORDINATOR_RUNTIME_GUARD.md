@@ -23,7 +23,10 @@ path. It sets sticky refusal immediately and schedules acceptor pausing on the
 service's owner event loop. It does not wait for coordinator cleanup or claim
 that active work has been reclaimed. Existing authorization close, session
 cleanup, capture accounting, and uncertain-ownership retention remain in force.
-With `runtime_guard=None`, the service keeps its existing C1 behavior.
+With `runtime_guard=None`, the service keeps its existing C1 behavior and
+watcher task topology. `request_runtime_invalidation` is available only when a
+runtime guard was configured; calling it without one raises `ValueError` before
+changing service state.
 
 The focused tests use bounded fake C1 authorizations and gRPC contexts. They
 cover callback ordering, sticky invalidation, watcher wakeup, late factory and

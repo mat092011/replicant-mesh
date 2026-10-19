@@ -17,6 +17,8 @@ from steamboat_runtime.secure_coordinator_service import (
 from steamboat_runtime.protocol.secure_transport import AuthorizationRevoked
 from steamboat_runtime.protocol.secure_transport import SecureTaskPending
 
+_DEFAULT_GUARD = object()
+
 
 class _Coordinator:
     def submit(self, _input_ids, _new_tokens, *, trusted_request_context=None):
@@ -70,11 +72,13 @@ class _Context:
         raise AssertionError("invalidated runtime must refuse before metadata access")
 
 
-def _adapter(guard=None):
+def _adapter(guard=_DEFAULT_GUARD):
     async def watcher(_authorization):
         import asyncio
         await asyncio.Future()
 
+    if guard is _DEFAULT_GUARD:
+        guard = lambda: None
     return SecureCoordinatorService(
         _Service(), authorizer=type("Authorizer", (), {"authorize": lambda *_a, **_k: None})(),
         authorization_watcher=watcher, request_context_factory=lambda *_a: None,
@@ -83,12 +87,44 @@ def _adapter(guard=None):
 
 class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_none_guard_keeps_existing_stream_behavior(self):
-        adapter = _adapter()
+        adapter = _adapter(None)
         context = _Context()
         await _AuthorizedStreamContext(context, _Auth(), adapter._check_runtime_guard).write(
             {"type": "token"})
         self.assertEqual(context.writes, [{"type": "token"}])
         self.assertFalse(adapter._runtime_invalidated.is_set())
+        self.assertIs(adapter._runtime_authorization_watcher(_Auth()),
+                      adapter.authorization_watcher)
+
+    async def test_none_guard_preserves_two_task_context_watcher_topology(self):
+        import asyncio
+        from unittest.mock import patch
+
+        adapter = _adapter(None)
+        async def watcher(_authorization):
+            return None
+        adapter.authorization_watcher = watcher
+        trusted_context = type("Trusted", (), {"remaining_seconds": lambda _self: 1.0})()
+        callback = adapter._context_authorization_watcher(_Auth(), trusted_context)
+        original_create = asyncio.create_task
+        created = []
+
+        def record_create(coroutine):
+            task = original_create(coroutine)
+            created.append(task)
+            return task
+
+        with patch("asyncio.create_task", side_effect=record_create):
+            with self.assertRaises(AuthorizationRevoked):
+                await callback(_Auth())
+        self.assertEqual(len(created), 2)
+
+    async def test_none_guard_rejects_owner_invalidation_without_mutation(self):
+        adapter = _adapter(None)
+        with self.assertRaises(ValueError):
+            adapter.request_runtime_invalidation("unsupported for legacy C1")
+        self.assertFalse(adapter._runtime_invalidated.is_set())
+        self.assertFalse(adapter.unavailable)
 
     async def test_guard_requires_exact_none_and_latches_fail_closed(self):
         for bad in (False, True, 0, object()):
