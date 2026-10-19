@@ -419,6 +419,7 @@ class RuntimeArtifactPin:
         self._released = False
         self._release_faulted = False
         self._close_state = {"role": "open", "global": "open"}
+        self._release_lock = Lock()
         self._global_identity = InheritedArtifactPin._identity(global_fd)
         self._role_identity = InheritedArtifactPin._identity(role_fd)
 
@@ -502,6 +503,10 @@ class RuntimeArtifactPin:
             raise ArtifactPinError("verifier did not retain signed authority deadlines") from error
 
     def assert_open_descriptors(self):
+        with self._release_lock:
+            return self._assert_open_descriptors_locked()
+
+    def _assert_open_descriptors_locked(self):
         if self._released or self._release_faulted:
             raise ArtifactPinError("runtime artifact pin was released")
         try:
@@ -553,42 +558,46 @@ class RuntimeArtifactPin:
 
     def child_launch_metadata(self):
         """Return launch metadata; pass only these FDs to the child explicitly."""
-        self.assert_open_descriptors()
-        return {"global_fd": self.global_fd, "role_fd": self.role_fd,
-                "record_path": str(self.record_path), "record": dict(self.record),
-                "signed_catalog": self.signed_catalog,
-                "signed_assignment": self.signed_assignment,
-                "clock_domain": self.clock_domain, "captured_mono": self.captured_mono,
-                "catalog_deadline": self.catalog_deadline,
-                "assignment_deadline": self.assignment_deadline}
+        with self._release_lock:
+            self._assert_open_descriptors_locked()
+            return {"global_fd": self.global_fd, "role_fd": self.role_fd,
+                    "record_path": str(self.record_path), "record": dict(self.record),
+                    "signed_catalog": self.signed_catalog,
+                    "signed_assignment": self.signed_assignment,
+                    "clock_domain": self.clock_domain, "captured_mono": self.captured_mono,
+                    "catalog_deadline": self.catalog_deadline,
+                    "assignment_deadline": self.assignment_deadline}
 
     def release(self):
         """Drop parent ownership; caller must already have reaped child/cgroup."""
-        if self._released:
-            return
-        if self._release_faulted:
-            raise ArtifactPinError("runtime pin cleanup is faulted")
-        _remove_old_pin_record(self.root, self.record_path.name, self.uid,
-                               expected=self.record)
-        release_error = None
-        for name in ("role", "global"):
-            descriptor = getattr(self, name + "_fd")
-            if descriptor is None:
-                continue
-            try:
-                os.close(descriptor)
-            except OSError as error:
-                release_error = release_error or error
-                # close(2) errors leave descriptor state ambiguous. Never retry
-                # this number: it may already have been reused by the process.
-                self._close_state[name] = "unknown"
-                self._release_faulted = True
-            else:
-                setattr(self, name + "_fd", None)
-                self._close_state[name] = "closed"
-        if release_error is not None:
-            raise ArtifactPinError("runtime pin descriptor cleanup failed") from release_error
-        self._released = True
+        with self._release_lock:
+            if self._released:
+                return
+            if self._release_faulted:
+                raise ArtifactPinError("runtime pin cleanup is faulted")
+            _remove_old_pin_record(self.root, self.record_path.name, self.uid,
+                                   expected=self.record)
+            release_error = None
+            for name in ("role", "global"):
+                field_name = name + "_fd"
+                descriptor = getattr(self, field_name)
+                if descriptor is None:
+                    continue
+                # Consume ownership before close(2); an error leaves this
+                # descriptor number ambiguous and must never be retried.
+                setattr(self, field_name, None)
+                self._close_state[name] = "closing"
+                try:
+                    os.close(descriptor)
+                except OSError as error:
+                    release_error = release_error or error
+                    self._close_state[name] = "unknown"
+                    self._release_faulted = True
+                else:
+                    self._close_state[name] = "closed"
+            if release_error is not None:
+                raise ArtifactPinError("runtime pin descriptor cleanup failed") from release_error
+            self._released = True
 
 
 def validate_inherited_pin(global_fd, role_fd, *, root, uid, role, record_path,

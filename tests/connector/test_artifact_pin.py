@@ -50,10 +50,20 @@ class ArtifactPinLockTests(unittest.TestCase):
             self._close_fd(descriptor)
 
     def tearDown(self):
-        for owner in reversed(self._pin_owners):
-            owner.close()
-        self._cleanup_fds()
-        self.temporary.cleanup()
+        error = None
+        try:
+            for owner in reversed(self._pin_owners):
+                try:
+                    owner.close()
+                except BaseException as failure:
+                    error = error or failure
+        finally:
+            try:
+                self._cleanup_fds()
+            finally:
+                self.temporary.cleanup()
+        if error is not None:
+            raise error
 
     def test_global_shared_cross_role_pins_block_every_mutation(self):
         global_host = artifact_pin._lock(self.root, artifact_pin.GLOBAL_LOCK,
@@ -148,12 +158,18 @@ class ArtifactPinLockTests(unittest.TestCase):
         self.assertEqual(dict(validated.pin.record), record)
         self.assertFalse(os.get_inheritable(validated.pin.global_fd))
         self.assertFalse(os.get_inheritable(validated.pin.role_fd))
-        probe = subprocess.run(
+        probe = subprocess.Popen(
             [sys.executable, "-c",
              "import os,sys; fd=" + str(validated.pin.global_fd) + "\n"
              "try: os.fstat(fd)\nexcept OSError: sys.exit(0)\nsys.exit(2)"],
-            close_fds=False, check=False)
-        self.assertEqual(probe.returncode, 0, "CLOEXEC descriptor leaked across exec")
+            close_fds=False)
+        try:
+            returncode = probe.wait(timeout=5)
+        finally:
+            if probe.poll() is None:
+                probe.kill()
+            probe.wait(timeout=5)
+        self.assertEqual(returncode, 0, "CLOEXEC descriptor leaked across exec")
         forged_record = dict(record, boot_id="6" * 32)
         duplicate_global, duplicate_role = register(os.dup(global_fd)), register(os.dup(role_fd))
         owned.pop(duplicate_global)
@@ -267,6 +283,67 @@ class ArtifactPinClockTests(unittest.TestCase):
 
 
 class ArtifactPinCleanupTests(unittest.TestCase):
+    @staticmethod
+    def _release_pin():
+        pin = object.__new__(artifact_pin.RuntimeArtifactPin)
+        pin._released = False
+        pin._release_faulted = False
+        pin._close_state = {"role": "open", "global": "open"}
+        pin._release_lock = __import__("threading").Lock()
+        pin.role_fd, pin.global_fd = 85, 86
+        pin.root = Path("unused")
+        pin.record_path = Path(".runtime-pin-host.json")
+        pin.uid = 1
+        pin.record = {"pin_id": "x"}
+        return pin
+
+    def test_parent_release_serializes_concurrent_close_once(self):
+        import threading
+        entered = threading.Event()
+        proceed = threading.Event()
+        closed = []
+        pin = self._release_pin()
+        remove = mock.Mock()
+
+        def delayed_close(fd):
+            closed.append(fd)
+            if len(closed) == 1:
+                entered.set()
+                self.assertTrue(proceed.wait(2))
+
+        with mock.patch.object(artifact_pin, "_remove_old_pin_record", remove), \
+                mock.patch.object(artifact_pin.os, "close", side_effect=delayed_close):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(pin.release)
+                self.assertTrue(entered.wait(2))
+                second = pool.submit(pin.release)
+                proceed.set()
+                first.result(timeout=2)
+                second.result(timeout=2)
+        self.assertEqual(sorted(closed), [85, 86])
+        self.assertEqual(remove.call_count, 1)
+        self.assertTrue(pin._released)
+        self.assertIsNone(pin.role_fd)
+        self.assertIsNone(pin.global_fd)
+
+    def test_parent_release_close_error_latches_without_retry(self):
+        pin = self._release_pin()
+        remove = mock.Mock()
+        close = mock.Mock(side_effect=[OSError("unknown role fd state"), None])
+        with mock.patch.object(artifact_pin, "_remove_old_pin_record", remove), \
+                mock.patch.object(artifact_pin.os, "close", close):
+            with self.assertRaisesRegex(artifact_pin.ArtifactPinError, "cleanup failed"):
+                pin.release()
+            with self.assertRaisesRegex(artifact_pin.ArtifactPinError, "faulted"):
+                pin.release()
+        self.assertEqual(close.call_count, 2)
+        self.assertEqual(remove.call_count, 1)
+        self.assertFalse(pin._released)
+        self.assertTrue(pin._release_faulted)
+        self.assertEqual(pin._close_state, {"role": "unknown", "global": "closed"})
+        self.assertIsNone(pin.role_fd)
+        self.assertIsNone(pin.global_fd)
+
     def test_lock_contention_close_error_is_not_retried(self):
         close = mock.Mock(side_effect=OSError("ambiguous close"))
         with mock.patch.object(artifact_pin, "_require_linux"), \
@@ -325,6 +402,7 @@ class ArtifactPinCleanupTests(unittest.TestCase):
         pin._released = False
         pin._release_faulted = False
         pin._close_state = {"role": "open", "global": "open"}
+        pin._release_lock = __import__("threading").Lock()
         pin.role_fd, pin.global_fd = 41, 42
         pin.root = Path("unused")
         pin.record_path = Path(".runtime-pin-host.json")
