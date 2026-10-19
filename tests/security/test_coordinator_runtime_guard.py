@@ -15,6 +15,7 @@ from steamboat_runtime.secure_coordinator_service import (
     SecureCoordinatorService, _AuthorizedStreamContext,
 )
 from steamboat_runtime.protocol.secure_transport import AuthorizationRevoked
+from steamboat_runtime.protocol.secure_transport import SecureTaskPending
 
 
 class _Coordinator:
@@ -233,31 +234,102 @@ class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
                 return types.SimpleNamespace(cleanup_complete=True)
 
         handle = Handle()
+        submit_calls = []
+        finish_calls = []
 
         class Coordinator:
             def submit(self, *_args, **_kwargs):
+                submit_calls.append(True)
                 adapter.request_runtime_invalidation("submit returned after stop")
                 return handle
 
         adapter.service.coordinator = Coordinator()
         adapter.service.cleanups = set()
         async def finish(_handle, **_kwargs):
+            finish_calls.append((_handle, _kwargs))
             return None
         adapter.service._finish = finish
-        fake_torch = types.SimpleNamespace(tensor=lambda *_a, **_kw: object())
+        fake_torch = types.SimpleNamespace(
+            long=object(), tensor=lambda *_a, **_kw: object())
+        deadline = __import__("time").monotonic() + 30.0
         trusted_context = types.SimpleNamespace(
             assert_data_live=lambda: None,
-            hard_monotonic_deadline=100.0)
+            hard_monotonic_deadline=deadline)
         slot = {"producer_wrapper_tasks": set()}
         with patch.dict(sys.modules, {"torch": fake_torch}):
             with self.assertRaises(AuthorizationRevoked):
                 await adapter._generate_with_context(
                     {"input_ids": [1], "new_tokens": 1, "capture_logits": False,
-                     "timeout_seconds": 5}, _Context(), 100.0,
-                    trusted_context, _Auth(), slot, 50.0)
+                     "timeout_seconds": 5}, _Context(), deadline,
+                    trusted_context, _Auth(), slot, 20.0)
         self.assertIs(slot["handle"], handle)
+        self.assertEqual(submit_calls, [True])
+        self.assertEqual(len(finish_calls), 1)
+        self.assertIs(finish_calls[0][0], handle)
         self.assertTrue(slot["session_cleanup_confirmed"])
         self.assertEqual(adapter._unreclaimed_generate_slots, [])
+
+    async def test_pending_c1_watcher_remains_owned_before_authorization_close(self):
+        import asyncio
+        from unittest.mock import patch
+        from steamboat_runtime.protocol import secure_transport
+
+        adapter = _adapter()
+        cancellation_seen = asyncio.Event()
+        release_watcher = asyncio.Event()
+        watcher_tasks = []
+
+        async def stubborn_c1_watcher(_authorization):
+            watcher_tasks.append(asyncio.current_task())
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+                await release_watcher.wait()
+
+        adapter.authorization_watcher = stubborn_c1_watcher
+
+        class TrackedAuthorization(_Auth):
+            def __init__(self):
+                self.close_calls = 0
+                self.closed = asyncio.Event()
+
+            def remaining_seconds(self):
+                return 20.0
+
+            async def close(self):
+                self.close_calls += 1
+                self.closed.set()
+
+        authorization = TrackedAuthorization()
+        operation_cancelled = asyncio.Event()
+
+        async def blocked_operation():
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                operation_cancelled.set()
+                raise
+
+        adapter._bind_owner_loop()
+        with patch.object(secure_transport, "MAX_CANCELLATION_GRACE_SECONDS", 0.05):
+            operation = asyncio.create_task(secure_transport._run_guarded(
+                blocked_operation(), authorization,
+                adapter._runtime_authorization_watcher(authorization), timeout=10.0))
+            while not watcher_tasks:
+                await asyncio.sleep(0)
+            adapter.request_runtime_invalidation("runtime binding changed")
+            with self.assertRaises(SecureTaskPending) as raised:
+                await asyncio.wait_for(operation, 1.0)
+            self.assertTrue(cancellation_seen.is_set())
+            self.assertTrue(operation_cancelled.is_set())
+            self.assertIn(watcher_tasks[0], raised.exception.tasks)
+            self.assertEqual(authorization.close_calls, 0)
+            release_watcher.set()
+            await asyncio.wait_for(asyncio.gather(
+                *raised.exception.tasks, return_exceptions=True), 1.0)
+            await asyncio.wait_for(authorization.closed.wait(), 1.0)
+            self.assertEqual(authorization.close_calls, 1)
 
     async def test_invalidation_wakes_active_authorization_watcher(self):
         import asyncio
