@@ -7,6 +7,7 @@ streams and delegates every worker call through GatewayRouter.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 
@@ -22,7 +23,9 @@ from steamboat_connector.channel_wire import (
     MAX_BINDING_BYTES, MAX_CONTROL_PROTOBUF_BYTES, MAX_ENVELOPE_BYTES,
     MAX_PROTOBUF_BYTES,
 )
-from steamboat_runtime.protocol.secure_transport import _run_guarded, SecureTaskPending
+from steamboat_runtime.protocol.secure_transport import (
+    _run_guarded, _wait_owned_tasks, SecureTaskPending,
+)
 from steamboat_runtime.protocol.wire import (
     Request, Response, parse_message, serialize_message, validate_response,
 )
@@ -239,23 +242,37 @@ class WorkerChannelRpc:
             self.stop()
             raise
         finally:
-            if not transferred:
-                self._release(is_control, reservation)
-            elif secure_pending is not None:
+            if transferred and secure_pending is not None:
                 release = asyncio.create_task(
-                    self._release_after(secure_pending.tasks, is_control, reservation))
+                    self._release_after(secure_pending.tasks, authorization,
+                                        is_control, reservation))
                 self._retained_releases.add(release)
-                release.add_done_callback(self._retained_releases.discard)
+                release.add_done_callback(self._release_finished)
             if not transferred:
                 try:
                     authorization.close()
                 except BaseException:
+                    # Ownership is uncertain; keep the slot and byte charge
+                    # permanently rather than admitting replacement work.
                     self.stop()
+                else:
+                    self._release(is_control, reservation)
 
-    async def _release_after(self, tasks, is_control, reservation):
-        # An abandoned RPC waiter does not release memory still owned by compute.
-        await asyncio.gather(*tuple(tasks), return_exceptions=True)
+    async def _release_after(self, tasks, authorization, is_control, reservation):
+        # Follow descendants from nested secure handoffs, then require a
+        # successful authorization retirement before releasing the reservation.
+        await _wait_owned_tasks(tasks)
+        result = authorization.close()
+        if inspect.isawaitable(result):
+            await result
         self._release(is_control, reservation)
+
+    def _release_finished(self, task):
+        self._retained_releases.discard(task)
+        # Retrieve failures. A failed/uncertain close intentionally leaves the
+        # admission charge occupied for this stream's lifetime.
+        if not task.cancelled():
+            task.exception()
 
     def _release(self, is_control, reservation):
         if is_control:

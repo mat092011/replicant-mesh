@@ -53,6 +53,9 @@ bytes. Cleanup admission reserves
 1,114,112 bytes. An occupied slot keeps its reservation until compute and
 authorization ownership are released, including after an awaiting RPC is
 canceled. Gateway relay request captures use the same independent caps.
+The worker follows nested pending-task descendants before attempting
+authorization retirement; if retirement raises, that slot and its charge stay
+occupied for the stream lifetime.
 
 These reservations are separate from ChannelStream receive/reassembly and
 writer queues and GatewayRouter worker-writer reservations. They bound the

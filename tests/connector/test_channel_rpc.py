@@ -260,28 +260,58 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         relay_task = asyncio.create_task(relay.run())
         self.addAsyncCleanup(self._stop_service_tasks, service, relay,
                              service_task, relay_task, executor)
+        pending_responses = {}
+        session_contexts = {}
+
+        async def response_demux():
+            while not self.fx.coordinator_client_stream.closed:
+                self.fx.coordinator_client_stream.pump()
+                while True:
+                    response = self.fx.coordinator_client_stream.pop_message()
+                    if response is None:
+                        break
+                    waiter = pending_responses.pop(response.message_id, None)
+                    if waiter is None:
+                        raise AssertionError("response has no exact RPC message-ID waiter")
+                    future, expected_method = waiter
+                    try:
+                        bundle = wire.decode_bundle(response.payload,
+                                                    fragment_kind=response.kind)
+                        if bundle.method != expected_method:
+                            raise AssertionError("response method differs from exact RPC waiter")
+                        future.set_result((response.kind, bundle.method, bundle.protobuf))
+                    except BaseException as error:
+                        future.set_exception(error)
+                await asyncio.sleep(0.001)
+
+        demux_task = asyncio.create_task(response_demux())
+        self.addAsyncCleanup(self._cancel_task, demux_task)
 
         async def rpc(method, request, *, lane=wire.DATA):
+            session_id = request.session_id if method != "Describe" else ""
+            if method == "OpenSession":
+                context = {"request_id": new_id("req"), "route_id": new_id("route")}
+                session_contexts[session_id] = context
+            else:
+                context = session_contexts.get(session_id, {
+                    "request_id": new_id("req"), "route_id": new_id("route")})
             fields, metadata, binding = self.fx._binding_metadata(
-                method, operation_id=new_id("op"), request_id=new_id("req"),
-                session_id=request.session_id if method != "Describe" else "")
+                method, operation_id=new_id("op"), request_id=context["request_id"],
+                route_id=context["route_id"], session_id=session_id)
             raw = serialize_message(request)
             message_id = secrets.token_bytes(16)
+            if len(pending_responses) >= 17:
+                self.fail("fixture RPC response demultiplexer exceeded its bounded map")
+            future = asyncio.get_running_loop().create_future()
+            pending_responses[message_id] = (future, method)
             payload = wire.encode_bundle(method, wire.REQUEST, fragment_kind=lane,
                                          binding=binding, protobuf=raw)
             self.fx.coordinator_client_stream.enqueue(kind=lane, message_id=message_id,
                                                        payload=payload)
-            deadline = time.monotonic() + 1.0
-            while time.monotonic() < deadline:
-                self.fx.coordinator_client_stream.pump()
-                response = self.fx.coordinator_client_stream.pop_message()
-                if response is not None:
-                    self.assertEqual(response.message_id, message_id)
-                    bundle = wire.decode_bundle(response.payload,
-                                                fragment_kind=response.kind)
-                    return response.kind, bundle.method, bundle.protobuf
-                await asyncio.sleep(0.001)
-            self.fail(f"timed out waiting for {method} response")
+            try:
+                return await asyncio.wait_for(future, timeout=1.0)
+            finally:
+                pending_responses.pop(message_id, None)
 
         def req(method, **kwargs):
             base = dict(protocol_version=1,
@@ -290,26 +320,27 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             if method != "Describe": base["session_id"] = kwargs.pop("session_id")
             return Request(**(base | kwargs))
 
+        first_session_id = new_id("ses")
         kind, method, raw = await rpc("OpenSession", req(
-            "OpenSession", session_id="rpc-session", lease_token="",
+            "OpenSession", session_id=first_session_id, lease_token="",
             max_positions=8, lifetime_ms=30000, idle_lease_ms=10000))
         from steamboat_runtime.protocol.worker_pb2 import Response as WorkerResponse
         opened = WorkerResponse.FromString(raw)
         self.assertEqual((kind, method, opened.code), (wire.RESPONSE, "OpenSession", "OK"))
         step_task = asyncio.create_task(rpc("Step", req(
-            "Step", session_id="rpc-session", lease_token=opened.lease_token,
+            "Step", session_id=first_session_id, lease_token=opened.lease_token,
             sequence=0, start_position=0, token_count=1,
             tensor=encode_tensor(torch.zeros((1, 1, 64))))))
         self.assertTrue(await asyncio.to_thread(executor.started.wait, 1),
                         "actual WorkerHandler executor did not enter Step")
         cancel_kind, cancel_method, cancel_raw = await rpc(
-            "CancelSession", req("CancelSession", session_id="rpc-session",
+            "CancelSession", req("CancelSession", session_id=first_session_id,
                                   lease_token=opened.lease_token), lane=wire.CONTROL)
         cancelled = WorkerResponse.FromString(cancel_raw)
         self.assertEqual((cancel_kind, cancel_method, cancelled.code),
                          (wire.CONTROL_RESPONSE, "CancelSession", "OK"))
         status_kind, status_method, status_raw = await rpc(
-            "SessionStatus", req("SessionStatus", session_id="rpc-session",
+            "SessionStatus", req("SessionStatus", session_id=first_session_id,
                                  lease_token=opened.lease_token), lane=wire.CONTROL)
         status = WorkerResponse.FromString(status_raw)
         self.assertEqual((status_kind, status_method, status.code),
@@ -329,12 +360,13 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         # release the bridge authorization or cache capture ahead of the thread.
         executor.started.clear()
         executor.release.clear()
+        second_session_id = new_id("ses")
         _, _, second_open_raw = await rpc("OpenSession", req(
-            "OpenSession", session_id="lost-session", lease_token="",
+            "OpenSession", session_id=second_session_id, lease_token="",
             max_positions=8, lifetime_ms=30000, idle_lease_ms=10000))
         second_open = WorkerResponse.FromString(second_open_raw)
         lost_step_task = asyncio.create_task(rpc("Step", req(
-            "Step", session_id="lost-session", lease_token=second_open.lease_token,
+            "Step", session_id=second_session_id, lease_token=second_open.lease_token,
             sequence=0, start_position=0, token_count=1,
             tensor=encode_tensor(torch.zeros((1, 1, 64))))))
         self.assertTrue(await asyncio.to_thread(executor.started.wait, 1))
@@ -357,6 +389,11 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
         await asyncio.gather(service_task, relay_task, return_exceptions=True)
 
+    async def _cancel_task(self, task):
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
     def test_capture_reservations_are_mandatory_and_cover_all_admissions(self):
         from steamboat_connector.channel_rpc import WorkerChannelRpc
         minimum_data = _DATA_LIMIT * _DATA_CAPTURE_BYTES
@@ -376,6 +413,50 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
                 stream=self.fx.worker_client_stream, bridge=bridge,
                 data_capture_reservation_bytes=minimum_data,
                 control_capture_reservation_bytes=minimum_control - 1)
+
+    async def test_retention_follows_pending_descendants_and_sticks_on_close_fault(self):
+        from types import SimpleNamespace
+        from steamboat_connector.channel_rpc import WorkerChannelRpc
+        from steamboat_runtime.protocol.secure_transport import SecureTaskPending
+
+        bridge = SimpleNamespace(authorizer_core=SimpleNamespace(
+            local_identity=SimpleNamespace(boot_id=self.fx.worker_boot_id)))
+        service = WorkerChannelRpc(
+            stream=self.fx.worker_client_stream, bridge=bridge,
+            data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
+            control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
+        release = asyncio.Event()
+
+        async def descendant():
+            await release.wait()
+
+        child = asyncio.create_task(descendant())
+
+        async def pending_owner():
+            raise SecureTaskPending((child,))
+
+        owner = asyncio.create_task(pending_owner())
+
+        class FaultingAuthorization:
+            def __init__(self): self.close_called = False
+            def close(self):
+                self.close_called = True
+                raise RuntimeError("injected uncertain authorization retirement")
+
+        authorization = FaultingAuthorization()
+        service._data_count = 1
+        service._data_bytes = _DATA_CAPTURE_BYTES
+        retirement = asyncio.create_task(service._release_after(
+            (owner,), authorization, False, _DATA_CAPTURE_BYTES))
+        await asyncio.sleep(0)
+        self.assertEqual(service._data_count, 1)
+        self.assertFalse(child.done())
+        release.set()
+        with self.assertRaisesRegex(RuntimeError, "uncertain authorization retirement"):
+            await retirement
+        self.assertTrue(authorization.close_called)
+        self.assertEqual(service._data_count, 1)
+        self.assertEqual(service._data_bytes, _DATA_CAPTURE_BYTES)
 
 
 if __name__ == "__main__":
