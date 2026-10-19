@@ -106,6 +106,7 @@ class CoordinatorChannelClient:
         self._pump_task = None
         self._closed = self._unavailable = self._close_complete = False
         self._unavailable_reason = None
+        self._unavailable_cause = None
         self._retained, self._active, self._retirement_tasks = set(), set(), set()
 
     async def execute(self, method, request, *, trusted_request_context):
@@ -286,8 +287,8 @@ class CoordinatorChannelClient:
                 await asyncio.sleep(_PUMP_INTERVAL)
         except asyncio.CancelledError:
             raise
-        except BaseException:
-            self._fence("coordinator gateway stream failed")
+        except BaseException as error:
+            self._fence("coordinator gateway stream failed", cause=error)
             for entry in tuple(self._pending.values()):
                 future = entry["future"]
                 if not future.done():
@@ -335,10 +336,11 @@ class CoordinatorChannelClient:
             raise ProtocolError("EXECUTION_FAILED", "coordinator HELLO generation changed")
         self.egress.assert_transport_live()
 
-    def _fence(self, reason):
+    def _fence(self, reason, *, cause=None):
         self._unavailable = True
         if self._unavailable_reason is None:
             self._unavailable_reason = reason
+            self._unavailable_cause = type(cause).__name__ if cause is not None else None
         self.stream.close()
         for entry in tuple(self._pending.values()):
             future = entry["future"]
@@ -371,6 +373,7 @@ class CoordinatorChannelClient:
         self._unavailable = True
         if self._unavailable_reason is None:
             self._unavailable_reason = "secure operation transferred pending task ownership"
+            self._unavailable_cause = "SecureTaskPending"
         for task in tasks:
             self._retained.add(task)
             task.add_done_callback(self._retained.discard)
@@ -424,7 +427,8 @@ class CoordinatorChannelClient:
         if failure_error is not None or close_error is not None:
             owner["state"] = "uncertain"
             owner["cleanup_error"] = close_error or failure_error
-            self._fence("outbound authorization cleanup is uncertain")
+            self._fence("outbound authorization cleanup is uncertain",
+                        cause=close_error or failure_error)
             raise ChannelClientOwnershipUncertain(
                 "authorization fail/close did not complete; capture remains owned") from (close_error or failure_error)
         owner["state"] = "closed"
