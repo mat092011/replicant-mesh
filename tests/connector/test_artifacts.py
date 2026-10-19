@@ -1572,6 +1572,7 @@ class AssignedModelIntegrationTests(unittest.TestCase):
         from steamboat_runtime.model import PipelineModel
         from steamboat_runtime.protocol.codec import decode_tensor, encode_tensor
         from steamboat_runtime.protocol.worker_pb2 import Request
+        from steamboat_security.clock import Clock
         import torch
 
         source = Path(os.environ["STEAMBOAT_ASSIGNED_TEST_SOURCE"])
@@ -1618,7 +1619,10 @@ class AssignedModelIntegrationTests(unittest.TestCase):
             "components": components, "files": file_entries,
         }
         catalog_bytes = _sign_document(catalog_payload, "catalog")
-        verifier = CatalogVerifier(_PUBLIC)
+        # This isolated numerical fixture assumes an accurate test clock. It
+        # does not establish an operator clock source for participant readiness.
+        verifier = CatalogVerifier(_PUBLIC,
+            clock=Clock(uncertainty_seconds=lambda: 0.0))
 
         class SourceRetriever:
             def iter_chunks(self, filename, *, deadline, max_chunk_bytes):
@@ -1726,30 +1730,32 @@ class AssignedModelIntegrationTests(unittest.TestCase):
                             positions[session_id] += len(token_values)
 
                         for handler in handlers:
-                            for session_id in reference_sessions:
+                            for closed_count, session_id in enumerate(reference_sessions, start=1):
                                 closed = await call("CloseSession", handler, session_id)
                                 self.assertEqual(closed.code, "OK", closed.message)
                                 self.assertTrue(closed.reclaimed)
                                 described = await call("Describe", handler, "")
-                                remaining = len(reference_sessions) - 1
+                                remaining = len(reference_sessions) - closed_count
                                 self.assertEqual(described.active_sessions, remaining)
                                 if remaining:
                                     self.assertGreater(described.allocated_cache_bytes, 0)
                                 else:
                                     self.assertEqual(described.allocated_cache_bytes, 0)
                     finally:
-                        await asyncio.gather(
+                        shutdowns = await asyncio.gather(
                             *(handler.shutdown() for handler in handlers),
                             return_exceptions=False)
+                        self.assertTrue(all(result is True for result in shutdowns))
 
                 exercise_started = True
                 asyncio.run(exercise())
             finally:
                 if handlers and not exercise_started:
                     async def shutdown_unstarted_handlers():
-                        await asyncio.gather(
+                        shutdowns = await asyncio.gather(
                             *(handler.shutdown() for handler in handlers),
                             return_exceptions=True)
+                        self.assertTrue(all(result is True for result in shutdowns))
                     asyncio.run(shutdown_unstarted_handlers())
                 for session in reference_sessions.values():
                     session.close()
