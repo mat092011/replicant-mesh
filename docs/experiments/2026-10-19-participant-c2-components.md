@@ -96,14 +96,72 @@ authority, missing post-compute assignment checks and the numerical fixture's
 interleaved cleanup expectations. Portable failures are preserved in the private
 journal; they are not represented as successful runs.
 
+## Later Linux component runs and retained failures
+
+The next inventories added signed channel policy, physical-pool locking and
+process supervision. They have **not passed** as complete inventories:
+
+| Run | Frozen source / files | Result | Test log SHA-256 |
+| --- | --- | --- | --- |
+| Component 3 | `d4735811227c17cb7e20c7dd09f0a52d60c270935b100eb6a1bb50d334a1cc4c` / 352 | 149 tests, 3 failures, zero skips/errors, 12.517 s | `f40f0368e8b75f97993fb169bf50844ffdb767feb7eeddb76d86db7ac140aa31` |
+| Component 4 | `25a0b44e4ae17a1b1b9eb95aed173de207605b0b896bf1b576eaf608a88e1772` / 353 | 158 tests, 1 failure, zero skips/errors, 13.269 s | `c8285de6ec0ef361b63621df0f25aff554fce5af1ba8daffd6519129a6872f76` |
+| Component 5 | `4efb8d6897f2723d21a6c8a00259e9662af56fc6dea4e4722f9ea5594ceeafe7` / 353 | 158 tests, 1 failure, zero skips/errors, 11.299 s | `c68050dab5b4c806b1fc522bd61d8c4d2208d3fa49f76bf4ef9e1e4583bd6704` |
+
+Every run used the same component-test resource/security limits stated above;
+each frozen image passed a comparison of all its source files with zero
+mismatches. Component 3 exposed a fixture-wide `os.write` mock intercepting real
+pipe writes and a configuration test reusing its purported fresh directory.
+After those corrections, component 4 exposed an undefined `real_popen` in the
+native ignored-TERM test. The parent corrected it and made the child explicitly
+signal that its TERM-ignore handler was installed before cancellation.
+
+That stronger component-5 control reached a real supervisor limitation:
+`request_stop` sent TERM but escalation depended on the eventual cleanup call.
+The final Stop arrived after its original cleanup deadline and did not confirm
+reclamation. Independent, bounded escalation is being implemented; this run is
+not a passing Stop gate. No hardware or clock cause is attributed. All task
+containers were inspected after exit and removed; none reported an OOM kill.
+
+## Consumer-only image component
+
+A separate pinned consumer image contains the six exact, hashed transport and
+cryptography wheels from existing project locks. It has no Torch, Transformers,
+safetensors or Hugging Face Hub distribution/module, and mounts no model or
+artifact volume. The gate actively rejects imports of those model packages.
+It imports the actual C1 secure client/authorizer and runs the new consumer
+adapter's contract controls, validation, channel-profile and policy tests.
+
+The first build failed because the parent added a COPY for a nonexistent
+`tests/__init__.py`. That Dockerfile copy was removed; the existing test namespace
+is used. The retained failed build log has SHA-256
+`2a6a5d9d6c65b2b5b172add39a842b43b0a2432d79e2e1b54e94e8286be353c6`.
+
+The corrected source was
+`303d517d6c72a20df99d5ff08f3ddbbd3e892881759ec88b0842e1231f41afdd`
+(361 repository files); the image was
+`sha256:86f055ead1404ef15f5ac2513af4ffb4ea1e5ce828c0b5606981a3a02ae7afb6`.
+All 92 source/test/script files copied into `/app` matched the frozen manifest.
+Its source-proof log SHA-256 is
+`fac64a41fded5f3b222b5889dc83819c155ef805cd4a5a5383f244f444b014f8`.
+The gate passed **55 tests, zero skips/errors/failures, 3.183 seconds**
+(3.395 seconds including dependency/import checks). Its test log SHA-256 is
+`b820df9d73abf78d982be1712892d9ae10c96d643398aeeebab109ffb9244893`.
+
+Read-back container limits were one CPU, 256 MiB RAM, 64 PIDs, 16 MiB temporary
+space, no network, read-only root, all capabilities dropped, no new privileges,
+and UID/GID 65534. The test process exited successfully and its container was
+removed. These are model-free client component results; its fake-peer tests do
+not establish actual C1 TLS streaming interoperability or a C2 gateway route.
+
 ## Remaining acceptance work
 
 The daemon still needs actual backend, assigned artifact ownership and readiness
-integration. The adapter's blocking file verification must be replaced in the
-executing path by a reviewed, supervisor-owned artifact pin and live in-memory
-authority guard. Prepared process-supervision, physical-pool lock and channel
-policy changes have separate pending review and Linux checks; their Windows
-mock/skip results are not included in these Docker claims.
+integration. The adapter's blocking file verification has a source-reviewed
+replacement using a lifetime artifact pin and live in-memory authority guard;
+its native and numerical checks and supervisor handoff remain pending. Process
+supervision still needs the corrections recorded above. Physical-pool locking
+and channel policy passed their cases within the failed inventories; those cases
+alone cannot establish a passing application or physical enforcement.
 
 C2 still requires actual shared CPU/RAM, disk/staging/log and traffic enforcement;
 authenticated enrollment and expiring loaded readiness; the trusted terminating
