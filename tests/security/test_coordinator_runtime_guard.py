@@ -78,7 +78,7 @@ def _adapter(guard=None):
     return SecureCoordinatorService(
         _Service(), authorizer=type("Authorizer", (), {"authorize": lambda *_a, **_k: None})(),
         authorization_watcher=watcher, request_context_factory=lambda *_a: None,
-        runtime_guard=guard)
+        max_generate_streams=2, runtime_guard=guard)
 
 
 class CoordinatorRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
