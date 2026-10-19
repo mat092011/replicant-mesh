@@ -422,4 +422,3 @@ class ChannelStreamTests(unittest.TestCase):
         self.assertTrue(server.closed)
         self.assertIsNotNone(server.failure)
         self.assertFalse(is_registered_worker_channel_stream(server))
-

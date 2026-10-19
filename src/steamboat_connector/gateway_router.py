@@ -460,4 +460,3 @@ class GatewayRouter:
                 self._live(entry[3], worker, entry[5], slot, method)
             del pending[key]
             return True
-

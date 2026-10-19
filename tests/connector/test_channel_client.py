@@ -585,4 +585,3 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
         self.client._pending[message_id]["future"].cancel()
         self.client._pending.clear()
         self.assertFalse(self.client.stream.closed)
-
