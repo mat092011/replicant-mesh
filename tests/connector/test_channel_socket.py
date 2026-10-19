@@ -50,6 +50,8 @@ class ChannelSocketTests(unittest.TestCase):
             self.send_error = None
             self.recv_error = None
             self.block_next_send = False
+            self.eagain_at_send_call = None
+            self.eagain_send_hits = 0
 
         def setblocking(self, value):
             self.sock.setblocking(value)
@@ -58,6 +60,9 @@ class ChannelSocketTests(unittest.TestCase):
             self.send_calls += 1
             if self.block_next_send:
                 self.block_next_send = False
+                raise BlockingIOError()
+            if self.send_calls == self.eagain_at_send_call:
+                self.eagain_send_hits += 1
                 raise BlockingIOError()
             if self.send_error is not None:
                 raise self.send_error
@@ -216,6 +221,36 @@ class ChannelSocketTests(unittest.TestCase):
                 break
         self.assertEqual(client.socket_byte_counts[0], server.socket_byte_counts[1])
         self.assertEqual(server.socket_byte_counts[0], client.socket_byte_counts[1])
+
+    def test_fourth_partial_send_eagain_counts_toward_pump_attempt_cap(self):
+        client_socket, server_socket = self._connected_pair()
+        client_tls, server_tls = self._owners()
+        client_wrapper = self.PartialSocket(client_socket)
+        server_wrapper = self.PartialSocket(server_socket)
+        client = ChannelSocket(client_wrapper, client_tls, self.budget,
+                              role="coordinator", boot_id=COORD_BOOT,
+                              test_socket=True)
+        server = ChannelSocket(server_wrapper, server_tls, self.budget,
+                              role="host", boot_id=HOST_BOOT,
+                              test_socket=True)
+        self.addCleanup(client.close)
+        self.addCleanup(server.close)
+        for _ in range(800):
+            client.pump()
+            server.pump()
+            if client.tls_handshake_complete and server.tls_handshake_complete:
+                break
+        self.assertTrue(client.tls_handshake_complete)
+        self.assertTrue(server.tls_handshake_complete)
+
+        before = server_wrapper.send_calls
+        server_wrapper.eagain_at_send_call = before + 4
+        server.offer_plaintext(b"x" * 1024)
+        server.pump()
+
+        self.assertEqual(server_wrapper.send_calls - before, 4)
+        self.assertEqual(server_wrapper.eagain_send_hits, 1)
+        self.assertGreater(server.pending_ciphertext_bytes, 0)
 
     def test_cleanup_ciphertext_keeps_cleanup_kind_after_data_quota_exhaustion(self):
         client_socket, server_socket = self._connected_pair()

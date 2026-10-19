@@ -194,26 +194,26 @@ class ChannelSocket:
                 self._collect_ciphertext()
                 self._drive_tls_read_and_write()
                 while self._pending_ciphertext and send_calls < MAX_IO_CALLS_PER_PUMP:
+                    send_calls += 1
                     if not self._send_once():
                         break
-                    send_calls += 1
                 # TLS decoding does not wait for writer readiness. Every input
                 # chunk is decoded before another bounded receive can accumulate.
                 self._drive_tls_read_and_write(write_allowed=False)
                 while (self._backpressure is None
                        and self._received_plaintext is None
                        and receive_calls < MAX_IO_CALLS_PER_PUMP):
+                    receive_calls += 1
                     if not self._receive_once():
                         break
-                    receive_calls += 1
                     self._drive_tls_read_and_write(write_allowed=False)
                 self._collect_ciphertext()
                 while (self._pending_ciphertext
                        and send_calls < MAX_IO_CALLS_PER_PUMP
                        and self._backpressure is None):
+                    send_calls += 1
                     if not self._send_once():
                         break
-                    send_calls += 1
             except ChannelBackpressure:
                 pass
             except ChannelSocketError:
