@@ -271,6 +271,8 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
                 self.last_cache = None
                 self.started = threading.Event()
                 self.release = threading.Event()
+                self.exited = threading.Event()
+                self.timeline = []
             def new_cache(self):
                 cache = Cache()
                 self.caches.append(cache)
@@ -278,10 +280,17 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
             def execute(self, hidden, cache, position):
                 self.last_cache = cache
                 cache.position += hidden.shape[1]
+                self.timeline.append(("compute-start", time.monotonic()))
                 self.started.set()
-                if not self.release.wait(10):
-                    raise RuntimeError("test did not release blocked compute")
-                return hidden + 1
+                try:
+                    if not self.release.wait(30):
+                        self.timeline.append(("compute-timeout", time.monotonic()))
+                        raise RuntimeError("test did not release blocked compute")
+                    self.timeline.append(("compute-release-observed", time.monotonic()))
+                    return hidden + 1
+                finally:
+                    self.timeline.append(("compute-exit", time.monotonic()))
+                    self.exited.set()
 
         authorizer = Authorizer(
             local_identity=LocalIdentity(
@@ -410,12 +419,18 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(executor.started.is_set())
         self.assertEqual(first_cache.position, 1)
         step_kind, step_method, step_raw = await step_task
+        executor.timeline.append(("cancelled-step-reply", time.monotonic()))
         step = WorkerResponse.FromString(step_raw)
         self.assertEqual((step_kind, step_method, step.code),
                          (wire.RESPONSE, "Step", "CANCELLED"))
+        self.assertFalse(executor.exited.is_set(),
+                         f"compute exited before cancellation reply: {executor.timeline!r}")
         self.assertGreater(self.bridge.status()["active_authorizations"], 0)
-        self.assertGreaterEqual(service._data_count, 1)
+        self.assertGreaterEqual(service._data_count, 1,
+                                 f"capture released before compute exit: {executor.timeline!r}")
         executor.release.set()
+        self.assertTrue(await asyncio.to_thread(executor.exited.wait, 1),
+                        f"executor did not observe test release: {executor.timeline!r}")
         deadline = time.monotonic() + 1.0
         while self.bridge.status()["active_authorizations"] and time.monotonic() < deadline:
             await asyncio.sleep(0.001)
