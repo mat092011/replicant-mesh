@@ -198,9 +198,16 @@ class ProcessRoleBackend:
             cancel_event is not None and cancel_event.is_set())
 
     def _forget_start_intent(self, role, intent):
-        with self._lock:
+        deadline = time.monotonic() + STOP_GRACE_MAX_SECONDS
+        if not self._acquire_until(self._lock, deadline):
+            return False
+        try:
             if self._start_intents.get(role) is intent and intent.group is None:
                 del self._start_intents[role]
+                return True
+            return False
+        finally:
+            self._lock.release()
 
     @staticmethod
     def _cancel_intent(intent, deadline=None, term_deadline=None):
@@ -381,9 +388,14 @@ class ProcessRoleBackend:
 
     @staticmethod
     def _mark_stopping(owned, deadline=None, term_deadline=None):
-        if owned.stop_deadline is None:
-            owned.stop_deadline = deadline
-            owned.term_deadline = term_deadline
+        # Cleanup caps are immutable once established, except that a later
+        # request may tighten them. Drain cutoffs must never be passed here.
+        if deadline is not None:
+            owned.stop_deadline = (deadline if owned.stop_deadline is None else
+                                   min(owned.stop_deadline, deadline))
+        if term_deadline is not None:
+            owned.term_deadline = (term_deadline if owned.term_deadline is None else
+                                   min(owned.term_deadline, term_deadline))
         owned.stopping = True
         owned.ready = False
 
@@ -491,9 +503,12 @@ class ProcessRoleBackend:
         if grace is None:
             return False
         started = time.monotonic()
-        deadline = owned.stop_deadline if owned.stop_deadline is not None else started + grace
-        term_deadline = owned.term_deadline if owned.term_deadline is not None else min(
-            deadline, started + grace * 0.5)
+        requested_deadline = started + grace
+        deadline = (requested_deadline if owned.stop_deadline is None else
+                    min(owned.stop_deadline, requested_deadline))
+        requested_term_deadline = min(deadline, started + grace * 0.5)
+        term_deadline = (requested_term_deadline if owned.term_deadline is None else
+                         min(owned.term_deadline, requested_term_deadline))
         self._mark_stopping(owned, deadline, term_deadline)
         return self._stop_many([(owned.role, owned)], deadline,
                                term_deadline).get(owned.role, False)
@@ -539,6 +554,11 @@ class ProcessRoleBackend:
                     elif intent.finished and intent.group is not None:
                         cleanup_intents.append((role, intent))
                         results[role] = False
+                    elif intent.finished and intent.group is None:
+                        # A previous cleanup removed the cgroup but could not
+                        # reacquire the ledger lock to forget its intent.
+                        del self._start_intents[role]
+                        results[role] = True
                     else:
                         results[role] = False
                     continue
@@ -573,15 +593,18 @@ class ProcessRoleBackend:
             # These dictionary lookups and event/set-flag writes are nonblocking;
             # ownership itself remains reconciled by stop() on the lifecycle queue.
             intent = self._start_intents.get(role)
+            now = time.monotonic()
             if intent is not None:
-                now = time.monotonic()
                 intent.final_stop_requested = True
                 self._cancel_intent(intent, now + STOP_GRACE_MAX_SECONDS,
                                     now + STOP_GRACE_MAX_SECONDS * 0.5)
             owned = self._owned.get(role)
             if owned is not None:
-                owned.stopping = True
-                owned.ready = False
+                deadline = (intent.cancel_deadline if intent is not None else
+                            now + STOP_GRACE_MAX_SECONDS)
+                term_deadline = (intent.term_deadline if intent is not None else
+                                 now + STOP_GRACE_MAX_SECONDS * 0.5)
+                self._mark_stopping(owned, deadline, term_deadline)
                 if owned.process is not None:
                     self._signal_tree(owned, signal.SIGTERM)
             results[role] = intent is not None or owned is not None
@@ -592,7 +615,9 @@ class ProcessRoleBackend:
             for role in roles:
                 intent = self._start_intents.get(role)
                 if intent is not None:
-                    self._cancel_intent(intent, deadline, deadline)
+                    now = time.monotonic()
+                    self._cancel_intent(intent, now + STOP_GRACE_MAX_SECONDS,
+                                        now + STOP_GRACE_MAX_SECONDS * 0.5)
             return {"drained": False, "reclaimed": False}
         try:
             live = [role for role in roles
@@ -600,14 +625,17 @@ class ProcessRoleBackend:
             for role in live:
                 intent = self._start_intents.get(role)
                 if intent is not None:
-                    self._cancel_intent(intent, deadline, deadline)
+                    now = time.monotonic()
+                    self._cancel_intent(
+                        intent, now + STOP_GRACE_MAX_SECONDS,
+                        now + STOP_GRACE_MAX_SECONDS * 0.5)
                 owned = self._owned.get(role)
                 if owned is not None:
                     owned.ready = False
-                    self._mark_stopping(
-                        owned,
-                        intent.cancel_deadline if intent is not None else deadline,
-                        intent.term_deadline if intent is not None else deadline)
+                    # Drain is an admission/runtime cutoff, not a process
+                    # termination deadline. A later stop establishes its own
+                    # bounded cleanup cap.
+                    owned.stopping = True
         finally:
             self._lock.release()
         remaining = max(0.0, deadline - self.clock())

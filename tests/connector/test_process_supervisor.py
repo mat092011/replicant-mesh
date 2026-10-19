@@ -15,7 +15,7 @@ from unittest import mock
 
 from steamboat_connector.process_supervisor import (ProcessRoleBackend,
                                                      ROLE_CONFIG_MAX_BYTES,
-                                                     READY_LINE_MAX)
+                                                     READY_LINE_MAX, _StartIntent)
 from steamboat_connector.resources import CgroupV2Controller, ResourceError
 
 
@@ -239,6 +239,82 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertEqual(owned.stop_deadline, first_deadline)
         self.assertLess(time.monotonic() - started, 0.2)
         self.assertIn("host", self.backend.status())
+
+    def test_request_stop_deadline_survives_delayed_final_stop(self):
+        holder, popen, _ = self._spawn_patch(kill_descendants=False)
+        with popen, mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg",
+                side_effect=lambda pid, sig: holder["process"].on_signal(
+                    sig), create=True), mock.patch(
+                "steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.3):
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            self.assertTrue(self.backend.request_stop(["host"])["host"])
+            owned = self.backend._owned["host"]
+            first_deadline = owned.stop_deadline
+            self.assertIsNotNone(first_deadline)
+            time.sleep(0.32)
+            started = time.monotonic()
+            self.assertTrue(self.backend.stop(["host"], 1.0)["host"])
+        self.assertEqual(owned.stop_deadline, first_deadline)
+        self.assertLess(time.monotonic() - started, 0.15)
+
+    def test_drain_cutoff_is_not_process_cleanup_deadline(self):
+        holder, popen, _ = self._spawn_patch()
+        with popen:
+            self.assertTrue(self.backend.start("host", sample_policy()))
+        owned = self.backend._owned["host"]
+        outcome = self.backend.drain(["host"], time.monotonic() + 300,
+                                     threading.Event())
+        self.assertEqual(outcome, {"drained": False, "reclaimed": False})
+        self.assertIsNone(owned.stop_deadline)
+        self.assertIsNone(owned.term_deadline)
+        with mock.patch("steamboat_connector.process_supervisor.os.killpg",
+                        side_effect=lambda pid, sig: holder["process"].on_signal(
+                            sig), create=True):
+            started = time.monotonic()
+            self.assertTrue(self.backend.stop(["host"], 0.05)["host"])
+        self.assertLess(time.monotonic() - started, 0.2)
+
+    def test_drain_during_start_sets_only_bounded_cleanup_cap(self):
+        attach_entered = threading.Event()
+        attach_release = threading.Event()
+        self.cgroup.attach_entered = attach_entered
+        self.cgroup.attach_release = attach_release
+        holder, popen, killpg = self._spawn_patch()
+        outcome = {}
+        with popen, killpg:
+            thread = threading.Thread(target=lambda: outcome.setdefault(
+                "started", self.backend.start("host", sample_policy())))
+            thread.start()
+            self.assertTrue(attach_entered.wait(1))
+            drain_cutoff = time.monotonic() + 300
+            self.backend.drain(["host"], drain_cutoff, threading.Event())
+            intent = self.backend._start_intents["host"]
+            self.assertLessEqual(intent.cancel_deadline, time.monotonic() + 15)
+            self.assertNotEqual(intent.cancel_deadline, drain_cutoff)
+            attach_release.set()
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(outcome["started"])
+        self.assertEqual(self.backend.status(), {})
+
+    def test_stop_finalizes_finished_intent_after_prior_group_cleanup(self):
+        intent = _StartIntent()
+        intent.finished = True
+        intent.group = None
+        self.backend._start_intents["host"] = intent
+        self.assertEqual(self.backend.stop(["host"], 0.1), {"host": True})
+        self.assertNotIn("host", self.backend._start_intents)
+
+    def test_forget_start_intent_is_bounded_and_stop_can_recover(self):
+        intent = _StartIntent()
+        intent.finished = True
+        intent.group = None
+        self.backend._start_intents["host"] = intent
+        with mock.patch.object(ProcessRoleBackend, "_acquire_until", return_value=False):
+            self.assertFalse(self.backend._forget_start_intent("host", intent))
+        self.assertIs(self.backend._start_intents["host"], intent)
+        self.assertEqual(self.backend.stop(["host"], 0.1), {"host": True})
 
     def test_multi_role_stop_signals_all_first_and_shares_one_deadline(self):
         holder = {}
@@ -485,10 +561,8 @@ class ProcessSupervisorTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux process groups")
     def test_linux_ignored_term_child_is_reaped_after_pipe_readiness_cancel(self):
         self.readiness_patch.stop()
-        cancelled = threading.Event()
         readiness_entered = threading.Event()
         original_read_ready = ProcessRoleBackend._read_ready
-        real_popen = subprocess.Popen
         real_killpg = os.killpg
         holder = {}
         outcome = {}
@@ -505,9 +579,9 @@ class ProcessSupervisorTests(unittest.TestCase):
             holder["process"] = process
             return process
 
-        def read_ready(process, timeout, cancelled_check=None):
+        def read_ready(process, timeout, cancelled=None):
             readiness_entered.set()
-            return original_read_ready(process, timeout, cancelled_check)
+            return original_read_ready(process, timeout, cancelled)
 
         def killpg(pid, sig):
             real_killpg(pid, sig)
@@ -523,12 +597,33 @@ class ProcessSupervisorTests(unittest.TestCase):
                 mock.patch.object(ProcessRoleBackend, "_read_ready",
                                   side_effect=read_ready):
             thread = threading.Thread(target=lambda: outcome.setdefault(
-                "started", self.backend.start("host", sample_policy(),
-                                              cancel_event=cancelled)))
+                "started", self.backend.start("host", sample_policy())))
             thread.start()
-            self.assertTrue(readiness_entered.wait(2))
-            cancelled.set()
-            thread.join(2)
+            owned = None
+            try:
+                self.assertTrue(readiness_entered.wait(2))
+                self.assertTrue(self.backend.request_stop(["host"])["host"])
+                owned = self.backend._owned["host"]
+                original_deadline = owned.stop_deadline
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+                self.assertFalse(outcome["started"])
+                time.sleep(0.45)
+                final_started = time.monotonic()
+                self.assertTrue(self.backend.stop(["host"], 1.0)["host"])
+                self.assertEqual(owned.stop_deadline, original_deadline)
+                self.assertLess(time.monotonic() - final_started, 0.2)
+            finally:
+                child = holder.get("process")
+                if child is not None and child.poll() is None:
+                    try:
+                        real_killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    child.wait(timeout=2)
+                thread.join(2)
+                if thread.is_alive():
+                    self.fail("readiness thread did not terminate during test cleanup")
         self.assertFalse(thread.is_alive())
         self.assertFalse(outcome["started"])
         self.assertIsNotNone(holder["process"].poll())
