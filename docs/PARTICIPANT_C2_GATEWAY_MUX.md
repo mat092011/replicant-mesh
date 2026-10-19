@@ -28,6 +28,12 @@ expiry, parse failure, and transport uncertainty stop the entire captured
 cohort. Pending capture accounting is retained after uncertain failure rather
 than reported as reclaimed.
 
+At most eight mux cohorts, including stopped cohorts with unresolved pending
+captures or uncertain stream closes, are retained process-wide. Those cohorts
+keep strong stream and request ownership; exhaustion rejects new cohorts rather
+than dropping unresolved owners. A global identity claim also prevents a
+captured coordinator or worker stream from being shared by a second mux.
+
 Heartbeat timing is centralized: the mux invokes the router liveness check
 once per monitor interval and requests a PING for every captured worker. The
 router's 30-second PING cadence and 60-second PONG deadline remain in effect;
