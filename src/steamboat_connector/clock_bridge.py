@@ -208,6 +208,7 @@ class OwnedClockBridge:
         self._terminal = False
         self._close_uncertain = False
         self._spawn_pending = False
+        self._spawn_issued = False
         self._handoff_pending = False
         self._child_may_exist = False
         # Reserve before opening descriptors, and never perform socket I/O
@@ -264,8 +265,10 @@ class OwnedClockBridge:
         If spawn outcome is unknown, retain this owner indefinitely.
         """
         with self._lock:
-            if self._terminal or self._stopping.is_set() or self._spawn_pending:
+            if (self._terminal or self._stopping.is_set() or self._spawn_pending
+                    or self._spawn_issued):
                 raise ClockBridgeError("clock bridge spawn lease is unavailable")
+            self._spawn_issued = True
             self._spawn_pending = True
             self._handoff_pending = True
             self._child_may_exist = True
@@ -725,10 +728,11 @@ class ChildClockBridge:
             self._closed = True
             self._snapshot = None
             sock, self._sock = self._sock, None
+            prior_uncertainty = self._close_uncertain
         if sock is None:
             with self._state_lock:
-                self._stop_state = "closed"
-            return True
+                self._stop_state = "uncertain" if prior_uncertainty else "closed"
+            return not prior_uncertainty
         error = None
         try:
             sock.shutdown(socket.SHUT_RDWR)
@@ -738,7 +742,7 @@ class ChildClockBridge:
             sock.close()
         except OSError as caught:
             error = error or caught
-        if error is not None:
+        if error is not None or prior_uncertainty:
             with self._state_lock:
                 self._close_uncertain = True
                 self._stop_state = "uncertain"

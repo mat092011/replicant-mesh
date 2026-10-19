@@ -27,7 +27,8 @@ _LINUX = sys.platform.startswith("linux") and hasattr(os, "fork")
 
 
 def _fork_clock_sample(owner, *, alter_metadata=None, stop_while_blocked=False,
-                       stop_after_cached_wall=False, send_rights_count=0):
+                       stop_after_cached_wall=False, send_rights_count=0,
+                       inject_received_close_error=False, expect_child_stop_uncertain=False):
     """Fork before the server thread starts; transfer closed handoff metadata."""
     owner.begin_spawn()
     metadata_read, metadata_write = os.pipe()
@@ -71,6 +72,20 @@ def _fork_clock_sample(owner, *, alter_metadata=None, stop_while_blocked=False,
                     os.write(result_write, result)
                     os._exit(0)
                 child = ChildClockBridge(metadata)
+                if inject_received_close_error:
+                    original_recv = bridge_module._recvmsg_checked
+
+                    def recv_with_ambiguous_rights_close(sock, payload_bytes):
+                        original_close = os.close
+
+                        def close_then_raise(fd):
+                            original_close(fd)
+                            raise OSError("ambiguous received descriptor close")
+
+                        with mock.patch.object(bridge_module.os, "close", side_effect=close_then_raise):
+                            return original_recv(sock, payload_bytes)
+
+                    bridge_module._recvmsg_checked = recv_with_ambiguous_rights_close
                 if stop_after_cached_wall:
                     child._wall()
                     child.stop()
@@ -85,11 +100,17 @@ def _fork_clock_sample(owner, *, alter_metadata=None, stop_while_blocked=False,
                     result = _RESULT.pack(b"O", sample.wall, sample.uncertainty)
             except BaseException as error:
                 result = _RESULT.pack(b"E", 0.0, 0.0)
-            os.write(result_write, result)
             try:
                 if "child" in locals():
-                    child.stop()
+                    first_stop = child.stop()
+                    second_stop = child.stop()
+                    if expect_child_stop_uncertain:
+                        result = _RESULT.pack(
+                            b"U" if (not first_stop and not second_stop
+                                     and child._sock is None and child._close_uncertain)
+                            else b"X", 0.0, 0.0)
             finally:
+                os.write(result_write, result)
                 os._exit(0)
         except BaseException:
             os._exit(71)
@@ -97,9 +118,21 @@ def _fork_clock_sample(owner, *, alter_metadata=None, stop_while_blocked=False,
     os.close(metadata_read)
     os.close(result_write)
     metadata = owner.bind_child(pid, os.getuid())
+    try:
+        owner.begin_spawn()
+    except ClockBridgeError:
+        pass
+    else:
+        raise AssertionError("spawn lease was reissued after PID bind")
     os.write(metadata_write, json.dumps(metadata, separators=(",", ":")).encode("ascii") + b"\n")
     os.close(metadata_write)
     owner.close_parent_child_copy()
+    try:
+        owner.begin_spawn()
+    except ClockBridgeError:
+        pass
+    else:
+        raise AssertionError("spawn lease was reissued after handoff close")
     if stop_while_blocked:
         if not owner._request_seen.wait(1.0):
             raise AssertionError("child clock request did not reach the parent")
@@ -308,6 +341,8 @@ class ClockBridgeTests(unittest.TestCase):
         finally:
             os.close(replacement)
         self.assertTrue(owner.cancel_spawn_without_child())
+        with self.assertRaises(ClockBridgeError):
+            owner.begin_spawn()
         self.assertTrue(owner.quiescent)
         self.assertEqual(active_clock_bridge_generations(), 0)
 
@@ -342,6 +377,27 @@ class ClockBridgeTests(unittest.TestCase):
             left.close()
             right.close()
             original_close(source)
+
+    def test_child_stop_preserves_received_fd_cleanup_uncertainty(self):
+        owner = self._owner()
+        source = os.open(os.devnull, os.O_RDONLY)
+        original_send = socket.socket.send
+
+        def send_reply_with_rights(sock, data, *args, **kwargs):
+            if data.startswith(bridge_module._REPLY_MAGIC):
+                return sock.sendmsg([data], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                    array.array("i", [source]).tobytes())])
+            return original_send(sock, data, *args, **kwargs)
+
+        try:
+            with mock.patch.object(socket.socket, "send", send_reply_with_rights):
+                payload, status = _fork_clock_sample(owner,
+                    inject_received_close_error=True, expect_child_stop_uncertain=True)
+        finally:
+            os.close(source)
+        tag, _, _ = _RESULT.unpack(payload)
+        self.assertEqual(status, 0)
+        self.assertEqual(tag, b"U")
 
     def test_received_descriptor_close_failure_sticks_owner_in_isolated_process(self):
         read_fd, write_fd = os.pipe()
