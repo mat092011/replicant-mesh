@@ -203,6 +203,8 @@ class GatewayService:
         self._stop_lock = threading.Lock()
         self._pump_lock = threading.Lock()
         self._listener_lock = threading.Lock()
+        self._listeners_close_started = set()
+        self._listeners_close_finished = set()
         self._listeners_closed = set()
         self._stuck = []
         self._resources_closed = False
@@ -244,15 +246,24 @@ class GatewayService:
     def _close_listener_once(self, listener):
         marker = id(listener)
         with self._listener_lock:
-            if marker in self._listeners_closed:
+            if marker in self._listeners_close_started:
                 return
-            self._listeners_closed.add(marker)
+            self._listeners_close_started.add(marker)
         try:
-            listener.close()
+            self._perform_listener_close(listener)
             if listener.fileno() != -1:
                 raise GatewayServiceError("listener close did not release its socket")
+            with self._listener_lock:
+                self._listeners_close_finished.add(marker)
+                self._listeners_closed.add(marker)
         except BaseException as error:
             self._stuck.append((listener, f"listener:{type(error).__name__}"))
+            with self._listener_lock:
+                self._listeners_close_finished.add(marker)
+
+    @staticmethod
+    def _perform_listener_close(listener):
+        listener.close()
 
     def _accept_ready(self, listener, purpose):
         if not self._accepting:
@@ -405,8 +416,17 @@ class GatewayService:
                     self._make_stream(pending)
                 if pending.stream is not None:
                     pending.stream.pump()
+                    # Stop may run while TLS/HELLO processing is inside the
+                    # stream pump. Do not publish a registration, create the
+                    # mux, or dispatch after that pump returns to a frozen service.
+                    if not self._accepting:
+                        return False
                     self._finish_hello(pending)
+                    if not self._accepting:
+                        return False
             if self.multiplexer is not None:
+                if not self._accepting:
+                    return False
                 self.multiplexer.pump_once()
             return True
         except BaseException as error:
@@ -441,6 +461,9 @@ class GatewayService:
         try:
             if self._resources_closed:
                 return
+            with self._listener_lock:
+                if {id(self.worker_listener), id(self.coordinator_listener)} - self._listeners_close_finished:
+                    return
             mux = self.multiplexer
             if mux is not None:
                 try:

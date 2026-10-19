@@ -40,15 +40,20 @@ connectivity only; neither establishes assigned-model loading or inference
 readiness.
 
 `stop()` freezes admission, closes each listener once and closes pending channel
-owners or the mux-owned cohort. Close outcomes that cannot be confirmed retain
-the service and its owners in a bounded process registry; they do not free a
-slot for a replacement generation. `run()` invokes the same stop path in its
-`finally` block. This layer does not start workers, issue enrollment, enable
-roles, enforce a shared physical compute pool, or complete CT-11/CT-13.
+owners or the mux-owned cohort. Finalization waits for pump quiescence and for
+both listener close calls to return. Close outcomes that cannot be confirmed
+retain the service and its owners in a bounded process registry; they do not
+free a slot for a replacement generation. A stream pump that returns after Stop
+cannot commit HELLO registrations or publish/dispatch the mux. `run()` invokes
+the same stop path in its `finally` block. This layer does not start workers,
+issue enrollment, enable roles, enforce a shared physical compute pool, or
+complete CT-11/CT-13.
 
 The focused test module builds real TLS and HELLO over TCP loopback and checks
 two exact worker boots, coordinator Open and Describe response routing,
-pre-allocation memory rejection, and pending-handshake expiry. Run it with the
+pre-allocation memory rejection, pending-handshake expiry, fixed-purpose and
+invited-boot rejection, plus deterministic Stop races during accept, TLS owner
+creation, listener close and the final HELLO stream pump. Run it with the
 repository's connector test command on the pinned Linux runtime; local Windows
 collection may be unavailable when the optional protobuf package is not
 installed. No Docker or full application run is claimed by this component.

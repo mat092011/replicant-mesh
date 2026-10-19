@@ -34,7 +34,7 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         # Import the fixture module, not its TestCase into this module's globals,
         # so unittest discovery does not duplicate any fixture test IDs.
         self.fixture = mux_fixtures.GatewayMuxActualStreamTests(
-            methodName="test_actual_two_hop_submit_uses_one_coordinator_pop_and_core_c1")
+            methodName="test_actual_two_hop_submit_uses_one_coordinator_pop_and_core_ingress")
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.fx = self.fixture.fx
@@ -53,7 +53,7 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         return listener
 
     def _close_test_listener(self, listener):
-        if (self.service is None
+        if listener.fileno() != -1 and (self.service is None
                 or id(listener) not in self.service._listeners_closed):
             listener.close()
 
@@ -195,10 +195,12 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         self._drive_handshakes_and_hello()
         self.addCleanup(service.stop)
         fx = self.fx
+        worker_streams = tuple(
+            item[3] for item in self.clients if type(item[2]) is WorkerHelloClient)
         coordinator_client = next(item[3] for item in self.clients
                                   if type(item[2]) is CoordinatorHelloClient)
         fx.coordinator_client_stream = coordinator_client
-        fx.worker_client_streams = tuple(item[1] for item in worker_clients)
+        fx.worker_client_streams = worker_streams
         fx.worker_ingresses = tuple(item[3] for item in worker_clients)
         self.assertTrue(service.route_connected)
         self.assertEqual(set(service._workers), {
@@ -213,8 +215,8 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         delivered = None
         while time.monotonic() < deadline and delivered is None:
             service.pump_once()
-            worker_clients[selected][1].pump()
-            delivered = worker_clients[selected][1].pop_message()
+            worker_streams[selected].pump()
+            delivered = worker_streams[selected].pop_message()
             time.sleep(0.001)
         self.assertIsNotNone(delivered)
         self.assertEqual((delivered.kind, delivered.message_id), (wire.DATA, message_id))
@@ -224,14 +226,14 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                             worker_boot_id=fx.worker_boot_id,
                             session_id=request.session_id,
                             lease_token="lease_service_0123456789", max_positions=64)
-        worker_clients[selected][1].enqueue(
+        worker_streams[selected].enqueue(
             kind=wire.RESPONSE, message_id=message_id,
             payload=wire.encode_bundle("OpenSession", wire.BUNDLE_RESPONSE,
                 fragment_kind=wire.RESPONSE, protobuf=serialize_message(response)))
         deadline = time.monotonic() + 2.0
         received = None
         while time.monotonic() < deadline and received is None:
-            worker_clients[selected][1].pump()
+            worker_streams[selected].pump()
             service.pump_once()
             coordinator_client.pump()
             received = coordinator_client.pop_message()
@@ -267,8 +269,8 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         while time.monotonic() < deadline and delivered_second is None:
             coordinator_client.pump()
             service.pump_once()
-            worker_clients[1][1].pump()
-            delivered_second = worker_clients[1][1].pop_message()
+            worker_streams[1].pump()
+            delivered_second = worker_streams[1].pop_message()
             time.sleep(0.001)
         self.assertIsNotNone(delivered_second)
         self.assertEqual(delivered_second.message_id, describe_id)
@@ -280,7 +282,7 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
             code="OK", protocol_version=PROTOCOL_VERSION,
             manifest_fingerprint=fx.model_id,
             worker_boot_id=fx.second_worker_boot_id)
-        worker_clients[1][1].enqueue(
+        worker_streams[1].enqueue(
             kind=wire.RESPONSE, message_id=describe_id,
             payload=wire.encode_bundle("Describe", wire.BUNDLE_RESPONSE,
                 fragment_kind=wire.RESPONSE,
@@ -288,7 +290,7 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         deadline = time.monotonic() + 2.0
         describe_received = None
         while time.monotonic() < deadline and describe_received is None:
-            worker_clients[1][1].pump()
+            worker_streams[1].pump()
             service.pump_once()
             coordinator_client.pump()
             describe_received = coordinator_client.pop_message()
@@ -425,6 +427,118 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
         self.assertTrue(service._resources_closed)
         self.assertTrue(accepted.close_complete)
         self.assertIsNone(accepted.owner)
+
+    def test_stop_does_not_finalize_while_listener_close_outcome_is_unknown(self):
+        service = self._service(expected=((self.fx.device_id, self.fx.worker_boot_id),))
+        listener = service.worker_listener
+        entered = __import__("threading").Event()
+        release = __import__("threading").Event()
+        errors = []
+
+        def blocked_close(exact_listener):
+            exact_listener.close()
+            entered.set()
+            if not release.wait(2.0):
+                raise TimeoutError("test did not release listener-close barrier")
+            raise OSError("injected post-close syscall uncertainty")
+
+        def stop():
+            try:
+                service.stop()
+            except BaseException as error:
+                errors.append(error)
+
+        thread = __import__("threading").Thread(target=stop, daemon=True)
+        with patch.object(GatewayService, "_perform_listener_close",
+                          staticmethod(blocked_close)):
+            thread.start()
+            self.assertTrue(entered.wait(1.0))
+            self.assertFalse(service._resources_closed)
+            self.assertIn(id(listener), service._listeners_close_started)
+            self.assertNotIn(id(listener), service._listeners_close_finished)
+            self.assertIs(service, __import__(
+                "steamboat_connector.gateway_service", fromlist=["_LISTENER_OWNERS"]
+            )._LISTENER_OWNERS[id(listener)][1])
+            # A concurrent pump-side finalizer cannot release listener claims
+            # while Stop still has an unresolved close outcome.
+            service.pump_once()
+            self.assertFalse(service._resources_closed)
+            release.set()
+            thread.join(2.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(service._resources_closed)
+        self.assertIn(service, __import__(
+            "steamboat_connector.gateway_service", fromlist=["_RETAINED_SERVICES"]
+        )._RETAINED_SERVICES)
+        self.assertIs(service, __import__(
+            "steamboat_connector.gateway_service", fromlist=["_LISTENER_OWNERS"]
+        )._LISTENER_OWNERS[id(listener)][1])
+
+    def test_stop_during_last_stream_pump_prevents_hello_commit_and_mux(self):
+        service = self._service(expected=((self.fx.device_id, self.fx.worker_boot_id),))
+        owner, driver, hello, _ingress = self._worker_client(self.fx.worker_boot_id)
+        deadline = time.monotonic() + 3.0
+        client_stream = None
+        while time.monotonic() < deadline:
+            service.pump_once()
+            if not owner.handshake_complete:
+                driver.pump()
+            pending = next((item for item in service._accepted
+                            if item.purpose == "worker"), None)
+            if (pending is not None and pending.stream is not None
+                    and owner.handshake_complete and not driver.pending_plaintext_bytes
+                    and not driver.pending_ciphertext_bytes
+                    and not owner.pending_encrypted_bytes):
+                client_stream = ChannelStream(
+                    driver, hello,
+                    writer_reservation_bytes=(writer_reservation_overhead_bytes()
+                        + wire.MAX_BUNDLE_BYTES
+                        + 8 * wire.MAX_CONTROL_BUNDLE_BYTES),
+                    decoded_byte_capacity=wire.MAX_BUNDLE_BYTES,
+                    tls_owner_reservation_bytes=TLS_OWNER_MIN_RESERVATION_BYTES)
+                self._client_cleanup[id(driver)]["stream"] = client_stream
+                break
+            time.sleep(0.001)
+        self.assertIsNotNone(client_stream, "real worker TLS stream did not bootstrap")
+        server_stream = pending.stream
+        entered = __import__("threading").Event()
+        release = __import__("threading").Event()
+        errors = []
+        original_pump = ChannelStream.pump
+
+        def blocked_pump(stream):
+            result = original_pump(stream)
+            if stream is server_stream and stream.transport_bootstrap_complete:
+                entered.set()
+                if not release.wait(2.0):
+                    raise TimeoutError("test did not release stream-pump barrier")
+            return result
+
+        def pump_service():
+            try:
+                service.pump_once()
+            except BaseException as error:
+                errors.append(error)
+
+        thread = __import__("threading").Thread(target=pump_service, daemon=True)
+        with patch.object(ChannelStream, "pump", new=blocked_pump):
+            thread.start()
+            client_deadline = time.monotonic() + 1.0
+            while time.monotonic() < client_deadline and not entered.is_set():
+                client_stream.pump()
+                time.sleep(0.001)
+            self.assertTrue(entered.wait(1.0), "server did not reach HELLO bootstrap barrier")
+            service.stop()
+            self.assertFalse(service._resources_closed)
+            release.set()
+            thread.join(2.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(service._resources_closed)
+        self.assertIsNone(service.multiplexer)
+        self.assertEqual(service._workers, {})
+        self.assertEqual(service.pending_channels, 1)
 
     def test_coordinator_tls_on_worker_listener_is_rejected_by_fixed_purpose(self):
         service = self._service(expected=((self.fx.device_id, self.fx.worker_boot_id),))
