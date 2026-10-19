@@ -173,7 +173,10 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_worker_dispatch_uses_real_c1_bridge_and_worker_handler(self):
         from steamboat_connector.channel_rpc import WorkerChannelRpc
-        from steamboat_runtime.secure_worker_runtime import SecureWorkerRuntimeBridge
+        from steamboat_runtime.secure_worker_runtime import (
+            RuntimeBindingError, SecureWorkerRuntimeBridge, _BoundAuthorization,
+            _Operation,
+        )
         from steamboat_runtime.worker_state import WorkerHandler
         from steamboat_runtime.protocol.worker_pb2 import Request
         from steamboat_security.authorization import Authorizer, LocalIdentity
@@ -192,6 +195,19 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
                                  boot_id=self.fx.worker_boot_id)
         self.bridge = SecureWorkerRuntimeBridge(authorizer, handler)
         await self.bridge.start()
+        with self.assertRaises(RuntimeBindingError):
+            await self.bridge.wait_for_authorized_reclamation(object())
+        unrelated_operation = _Operation(None, "Describe", None, None, ())
+        unrelated_authorization = _BoundAuthorization(self.bridge, unrelated_operation)
+        with self.assertRaises(RuntimeBindingError):
+            await self.bridge.wait_for_authorized_reclamation(unrelated_authorization)
+        foreign_handler = WorkerHandler(self.manifest, "worker-1", object(),
+                                        boot_id=self.fx.worker_boot_id)
+        foreign_bridge = SecureWorkerRuntimeBridge(authorizer, foreign_handler)
+        foreign_operation = _Operation(None, "Describe", None, None, ())
+        foreign_authorization = _BoundAuthorization(foreign_bridge, foreign_operation)
+        with self.assertRaises(RuntimeBindingError):
+            await self.bridge.wait_for_authorized_reclamation(foreign_authorization)
         service = WorkerChannelRpc(stream=self.fx.worker_client_stream,
                                    bridge=self.bridge,
                                    data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,

@@ -57,8 +57,12 @@ An occupied slot keeps its reservation until compute and
 authorization ownership are released, including after an awaiting RPC is
 canceled. Gateway relay request captures use the same independent caps.
 The worker follows nested pending-task descendants before attempting
-authorization retirement; if retirement raises, that slot and its charge stay
-occupied for the stream lifetime.
+authorization retirement. Before one authorization close, it also waits on the
+runtime bridge's exact-operation reclamation observer when that C1 session was
+invalidated, so a separate WorkerHandler compute task cannot outlive the RPC
+capture. If reclamation or authorization retirement is uncertain, that slot and
+its charge stay occupied for the stream lifetime. Valid open sessions are not
+waited on; successful Steps retain their cache as intended.
 
 These reservations are separate from ChannelStream receive/reassembly and
 writer queues and GatewayRouter worker-writer reservations. They bound the

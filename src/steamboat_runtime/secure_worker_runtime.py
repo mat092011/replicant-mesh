@@ -4,12 +4,14 @@ import asyncio
 from dataclasses import dataclass
 import math
 import threading
+import time
 import weakref
 
 
 WORKER_SERVICE = "steamboat.v1.Worker"
 MAX_SWEEP_INTERVAL_SECONDS = 5.0
 MAX_INFLIGHT_OPERATIONS = 32
+_OWNER_RECLAIM_POLL_SECONDS = 0.01
 _CAPTURE_UNSET = object()
 
 
@@ -355,6 +357,70 @@ class SecureWorkerRuntimeBridge:
             "pending_notices": self._pending_notice_count(),
             "fault": self._fault_reason,
         }
+
+    async def wait_for_authorized_reclamation(self, authorization):
+        """Wait until this authorization's invalidated session leaves WorkerHandler.
+
+        The exact live bridge authorization is required so unrelated callers
+        cannot use this observer to wait on or infer another session's state.
+        A valid session is not waited on: successful Steps intentionally retain
+        their cache. If a canceled computation cannot be confirmed reclaimed
+        within the worker's cancellation grace, the bridge fences and reports
+        uncertainty while its caller retains the authorization and capture.
+        """
+        if (type(authorization) is not _BoundAuthorization
+                or authorization._bridge is not self):
+            raise RuntimeBindingError(
+                "reclamation wait requires this bridge's exact bound authorization")
+        operation = authorization._operation
+        with self._lock:
+            if (operation.authorization is not authorization
+                    or operation.core_authorization is not authorization._core
+                    or self._operations.get(id(operation.request)) is not operation):
+                raise RuntimeBindingError(
+                    "reclamation wait authorization is not the current bridge operation")
+        self._assert_loop()
+        owner = operation.owner
+        if owner is None or not owner.invalidated:
+            return False
+        if not operation.dispatch_done:
+            raise RuntimeBindingError(
+                "reclamation wait requires completed handler dispatch")
+
+        grace = self._handler.limits["compute_cancel_grace_seconds"]
+        sweep = self._handler.limits["lease_check_interval_seconds"]
+        if (isinstance(grace, bool) or not isinstance(grace, (int, float))
+                or not math.isfinite(grace) or grace <= 0
+                or isinstance(sweep, bool) or not isinstance(sweep, (int, float))
+                or not math.isfinite(sweep) or sweep <= 0):
+            self._unconfirmed_cleanup = True
+            self._fence("worker reclamation bounds are invalid")
+            raise RuntimeBridgeUnavailable("worker reclamation bounds are invalid")
+        deadline = time.monotonic() + float(grace) + min(float(sweep), 5.0) + 1.0
+        while True:
+            if (self._closed or self.unavailable or self._unconfirmed_cleanup
+                    or self._handler.requires_restart):
+                raise RuntimeBridgeUnavailable(
+                    "worker session reclamation is unconfirmed")
+            self._process_notices()
+            with self._lock:
+                if (self._operations.get(id(operation.request)) is not operation
+                        or operation.authorization_closed):
+                    raise RuntimeBridgeUnavailable(
+                        "worker authorization retired before reclamation was confirmed")
+            if not owner.invalidated:
+                raise RuntimeBridgeUnavailable(
+                    "worker invalidated owner identity changed during reclamation")
+            if not self._handler_owns_session(owner):
+                self._reconcile()
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._unconfirmed_cleanup = True
+                self._fence("worker session reclamation deadline expired")
+                raise RuntimeBridgeUnavailable(
+                    "worker session reclamation deadline expired")
+            await asyncio.sleep(min(_OWNER_RECLAIM_POLL_SECONDS, remaining))
 
     def begin_drain(self, timeout_seconds=30):
         """Stop new session admission and set one immutable owner deadline."""

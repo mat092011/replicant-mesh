@@ -365,6 +365,7 @@ class WorkerChannelRpc:
                     lambda task, owner=capture_owner: self._release_finished(task, owner))
             if not transferred:
                 try:
+                    await self.bridge.wait_for_authorized_reclamation(authorization)
                     result = authorization.close()
                     if inspect.isawaitable(result):
                         await result
@@ -381,6 +382,8 @@ class WorkerChannelRpc:
         # successful authorization retirement before releasing the reservation.
         try:
             await _wait_owned_tasks(tasks)
+            await self.bridge.wait_for_authorized_reclamation(
+                capture_owner.authorization)
             result = capture_owner.authorization.close()
             if inspect.isawaitable(result):
                 await result
@@ -396,8 +399,10 @@ class WorkerChannelRpc:
         if not task.cancelled():
             if task.exception() is not None:
                 self._stuck_captures.add(capture_owner)
+                self.stop()
         else:
             self._stuck_captures.add(capture_owner)
+            self.stop()
 
     def _release(self, is_control, reservation):
         if is_control:
