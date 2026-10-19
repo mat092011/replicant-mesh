@@ -113,6 +113,29 @@ class PoolControllerLock:
         self._lock = None
         self._digest = None
         self._allocation = None
+        self._faulted = False
+
+    def _validate_lock_binding(self):
+        lock = self._lock
+        descriptor = None if lock is None else lock.descriptor
+        if self._faulted or descriptor is None:
+            raise PoolAllocationError("physical pool lock handle is unavailable or faulted")
+        try:
+            opened = os.fstat(descriptor)
+            directory = open_private_directory(self.operator_directory, uid=self.uid)
+            try:
+                current = os.stat(self.lock_path.name, dir_fd=directory,
+                                  follow_symlinks=False)
+            finally:
+                os.close(directory)
+        except (OSError, StorageError, ValueError) as error:
+            raise PoolAllocationError("physical pool lock pathname cannot be verified") from error
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_uid != self.uid
+                or stat.S_IMODE(opened.st_mode) != 0o600 or opened.st_nlink != 1
+                or not stat.S_ISREG(current.st_mode) or current.st_uid != self.uid
+                or stat.S_IMODE(current.st_mode) != 0o600 or current.st_nlink != 1
+                or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)):
+            raise PoolAllocationError("physical pool lock file was replaced or is not private")
 
     @staticmethod
     def _check_policy(policy, allocation):
@@ -129,6 +152,8 @@ class PoolControllerLock:
         return normalized
 
     def acquire(self, policy):
+        if self._faulted:
+            raise PoolAllocationError("controller lock is faulted and unavailable")
         if self._lock is not None:
             raise PoolAllocationError("this controller already holds the pool lock")
         lock = None
@@ -137,17 +162,24 @@ class PoolControllerLock:
             directory = open_private_directory(self.operator_directory, uid=self.uid)
             os.close(directory)
             lock = FileLock(self.lock_path, uid=self.uid, timeout=0).acquire()
+            # Retain the exact acquired object before any validation can fail.
+            self._lock = lock
+            self._validate_lock_binding()
             raw = _read_allocation(self.allocation_path, self.uid)
             allocation = _validate_allocation(raw, self.physical_host_id, self.uid)
             self._check_policy(policy, allocation)
             digest = hashlib.sha256(json_bytes(allocation, maximum_bytes=ALLOCATION_MAX_BYTES)).digest()
             self._allocation = allocation
             self._digest = digest
-            self._lock = lock
             return self
         except Exception as error:
-            if lock is not None:
-                lock.release()
+            if lock is not None and self._lock is lock:
+                try:
+                    self._release_locked()
+                except PoolAllocationError as release_error:
+                    raise PoolAllocationError(
+                        "acquisition failed and lock rollback also failed; controller is faulted"
+                    ) from release_error
             if isinstance(error, PoolAllocationError):
                 raise
             if isinstance(error, StorageError):
@@ -156,8 +188,7 @@ class PoolControllerLock:
 
     def assert_current(self, policy):
         """Fail closed if the allocation file or active policy changed under lock."""
-        if self._lock is None or self._lock.descriptor is None:
-            raise PoolAllocationError("physical pool lock is not held")
+        self._validate_lock_binding()
         raw = _read_allocation(self.allocation_path, self.uid)
         allocation = _validate_allocation(raw, self.physical_host_id, self.uid)
         digest = hashlib.sha256(json_bytes(allocation, maximum_bytes=ALLOCATION_MAX_BYTES)).digest()
@@ -172,11 +203,28 @@ class PoolControllerLock:
 
     def release(self):
         """Release after trusted cleanup has independently proved reclamation."""
-        lock, self._lock = self._lock, None
+        if self._faulted:
+            raise PoolAllocationError("lock release previously failed; do not retry its descriptor")
+        self._release_locked()
+
+    def _release_locked(self):
+        lock = self._lock
+        if lock is None:
+            return
+        try:
+            lock.release()
+            if lock.descriptor is not None:
+                raise OSError("lock release returned with its descriptor still registered")
+        except Exception as error:
+            # FileLock.release unlocks before close; after any error the fd may
+            # already be unlocked, closed, or reused. Never retry it blindly.
+            self._faulted = True
+            raise PoolAllocationError(
+                "pool lock release failed; controller is faulted and handle retained"
+            ) from error
+        self._lock = None
         self._digest = None
         self._allocation = None
-        if lock is not None:
-            lock.release()
 
     def __enter__(self):
         if self._lock is None:

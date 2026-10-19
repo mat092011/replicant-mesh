@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from steamboat_connector.pool_controller import (
     PoolAllocationError, PoolControllerLock, _validate_allocation,
@@ -153,6 +154,34 @@ class PoolControllerLinuxTests(unittest.TestCase):
                 child.join()
             controller.release()
 
+    def test_lock_hardlink_and_replacement_fail_closed_with_original_handle_retained(self):
+        controller = PoolControllerLock(self.directory, HOST_ID).acquire(_policy())
+        original = controller._lock
+        alias = self.directory / "controller-lock-alias"
+        os.link(controller.lock_path, alias)
+        with self.assertRaises(PoolAllocationError):
+            controller.assert_current(_policy())
+        self.assertIs(controller._lock, original)
+        alias.unlink()
+        controller.lock_path.rename(self.directory / "displaced-lock")
+        controller.lock_path.write_bytes(b"")
+        controller.lock_path.chmod(0o600)
+        with self.assertRaises(PoolAllocationError):
+            controller.assert_current(_policy())
+        self.assertIs(controller._lock, original)
+        controller.release()
+
+    def test_preexisting_hardlinked_lock_file_is_rejected_after_flock(self):
+        probe = self.directory / "probe.lock"
+        probe.write_bytes(b"")
+        os.chmod(probe, 0o600)
+        controller = PoolControllerLock(self.directory, HOST_ID)
+        os.link(probe, controller.lock_path)
+        with self.assertRaises(PoolAllocationError):
+            controller.acquire(_policy())
+        self.assertIsNone(controller._lock)
+        self.assertFalse(controller._faulted)
+
 
 class PoolControllerValidationTests(unittest.TestCase):
     def test_physical_host_identity_and_cgroup_path_are_strict(self):
@@ -162,6 +191,79 @@ class PoolControllerValidationTests(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(PoolAllocationError):
                 uid = os.getuid() if hasattr(os, "getuid") else 0
                 _validate_allocation(_allocation(uid) | values, HOST_ID, uid)
+
+
+class PoolControllerReleaseFaultTests(unittest.TestCase):
+    class FaultingLock:
+        def __init__(self, *, unlock_before_failure):
+            self.descriptor = 42
+            self.calls = 0
+            self.unlock_before_failure = unlock_before_failure
+
+        def release(self):
+            self.calls += 1
+            if self.unlock_before_failure:
+                # Model FileLock.release having unlocked but failed during close.
+                raise OSError("simulated close failure after unlock")
+            raise OSError("simulated failure before unlock")
+
+    @staticmethod
+    def _controller(lock):
+        controller = object.__new__(PoolControllerLock)
+        controller._lock = lock
+        controller._digest = b"captured"
+        controller._allocation = _allocation(0)
+        controller._faulted = False
+        return controller
+
+    def test_unlock_and_close_failures_latch_fault_and_are_never_retried(self):
+        for unlocked in (False, True):
+            with self.subTest(unlocked=unlocked):
+                lock = self.FaultingLock(unlock_before_failure=unlocked)
+                controller = self._controller(lock)
+                with self.assertRaises(PoolAllocationError):
+                    controller.release()
+                self.assertTrue(controller._faulted)
+                self.assertIs(controller._lock, lock)
+                with self.assertRaises(PoolAllocationError):
+                    controller.assert_current(_policy())
+                with self.assertRaises(PoolAllocationError):
+                    controller.release()
+                with self.assertRaises(PoolAllocationError):
+                    controller.acquire(_policy())
+                self.assertEqual(lock.calls, 1)
+
+    def test_acquire_rollback_failure_retains_lock_and_faults_controller(self):
+        lock = self.FaultingLock(unlock_before_failure=True)
+        controller = None
+
+        def fake_file_lock(*args, **kwargs):
+            return type("Acquired", (), {
+                "descriptor": 99,
+                "acquire": lambda instance: instance,
+                "release": lock.release,
+            })()
+
+        with mock.patch("steamboat_connector.pool_controller.sys.platform", "linux"), \
+                mock.patch("steamboat_connector.pool_controller.open_private_directory",
+                           return_value=99), mock.patch(
+                "steamboat_connector.pool_controller.os.close"), mock.patch(
+                "steamboat_connector.pool_controller.FileLock", side_effect=fake_file_lock), \
+                mock.patch.object(PoolControllerLock, "_validate_lock_binding"), mock.patch(
+                "steamboat_connector.pool_controller._read_allocation",
+                return_value=_allocation(1)), mock.patch(
+                "steamboat_connector.pool_controller._validate_allocation",
+                return_value=_allocation(1)), mock.patch.object(
+                PoolControllerLock, "_check_policy",
+                side_effect=PoolAllocationError("policy rejected")):
+            controller = PoolControllerLock("/operator", HOST_ID, uid=1)
+            with self.assertRaises(PoolAllocationError):
+                controller.acquire(_policy())
+        self.assertTrue(controller._faulted)
+        self.assertIsNotNone(controller._lock)
+        with self.assertRaises(PoolAllocationError):
+            controller.release()
+        self.assertEqual(lock.calls, 1)
 
 
 if __name__ == "__main__":

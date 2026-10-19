@@ -30,11 +30,25 @@ controller instance or refuse a second controller.
 
 Call `assert_current(policy)` before enablement and whenever the current
 allocation must be revalidated. If the allocation changes or the policy exceeds
-it, validation fails while the lock remains held. Trusted cleanup may call
-`release()` only after the process supervisor and resource ledger independently
-confirm that owned cgroups and reservations have been reclaimed. Releasing this
-file lock is not evidence of reclamation and does not release resource-ledger
-reservations by itself.
+it, validation fails while the lock remains held. The lock file itself is also
+checked after acquisition and on each assertion: it must stay a private,
+single-link regular file at the same pathname and inode as the retained flock
+descriptor. Replacement or hard-linking makes validation fail closed while the
+original descriptor remains retained.
+
+Trusted cleanup may call `release()` only after the process supervisor and
+resource ledger independently confirm that owned cgroups and reservations have
+been reclaimed. Releasing this file lock is not evidence of reclamation and does
+not release resource-ledger reservations by itself. A release error permanently
+faults that controller object: because unlock may have succeeded before close
+failed, the descriptor is retained for diagnosis and is never blindly retried.
+The controller rejects later assertions and acquisitions in that state.
+
+Do not use the context manager around a live execution runtime. `__exit__`
+releases the pool lock unconditionally, so it is unsuitable while an owned
+cgroup or reservation may still exist. Keep the controller object alive through
+supervised cleanup and release it only after reclamation is independently
+confirmed.
 
 Tests using temporary directories establish file validation and local
 cross-process lock behavior only. Production acceptance still requires testing
