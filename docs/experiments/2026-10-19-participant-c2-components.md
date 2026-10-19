@@ -884,3 +884,69 @@ Host assembly, fixed-role worker/coordinator startup and readiness, shared
 physical resource enforcement, complete deployed multi-device routing, and
 the CT-11/CT-13 split-host numerical/lifecycle run remain pending. C2.1–C2.6
 remain open; C3 and research statuses are unchanged.
+
+## Component 33: host runtime assembly and updated bounded inventory
+
+The focused host assembly check passed 8 tests with zero skips in 6.001
+seconds. Its frozen source head was
+`1ca5f3f42e3cf130e4a41287134d29e315f315f1` (one-file overlay source digest
+`9822bd408011bf18ebdfdbb6c82961d69760011e4176a0874fd10d7e5782a3c1`); the
+test log SHA-256 is
+`e4390f532afd5d637d17f6aab767a2f8dc53fced3cbb753b1e7668c7baa7d986`. The
+fixtures exercised an actual signed C2 host binding, inherited artifact pins,
+offline assigned-stage loading, and a signed C1 Describe operation through
+the guarded bridge. Forced hidden states were compared against the local
+PipelineModel reference for that same assigned stage at `atol=1e-6, rtol=0`
+through the direct handler. This did not test RPC numerical behavior.
+
+Other cases used validly re-signed catalog, catalog-key and assignment
+variants; rejected a projected single-owner view from a larger signed group;
+used a private, consistently re-signed artifact manifest capped at one queued
+stage call; verified weak references to resident model objects cleared after
+confirmed close while caller-owned pins stayed open; and verified that a false
+bridge-stop result retains owners. Focused native attempts before the passing
+run are retained: native1 ran 5 cases (4 passed, 1 error; log SHA-256
+`8ddf74c32795ef831e6a7e16c1d1aeed8bea509ec2ed97552449714c9ab0e054`); native2
+ran 8 (5 passed, 1 failed, 1 error, 1 skipped; log SHA-256
+`834b83e6413834a6de3ce51b5cd93fd49354f0e32b6cae07d6fc36372af30c8e`). These
+were fixture/assertion corrections; only native3 is the focused pass above.
+
+The combined component-33 run was not green. It ran 911 unique tests: 910
+passed and one failed, with zero skips, in 58.646 seconds. It covered all
+connector tests, 27 selected security modules, and two runtime modules; it is
+not the full repository or the full C1 regression. Frozen head was
+`6baece6c792f4c2d3b09fa8ca6b4cc09bcb05dbc` with 471 source files and digest
+`477fc64a8b25d158cfa73c3fd72de2775486377b26b05698087d7ab2f4f3c943`. The
+pinned image was
+`sha256:f96b53369b97c8b2d43d02096405d24fe27c3efff46d40a50dad7f3e80a12770`.
+The source proof reported 471 verified files and no mismatches (log SHA-256
+`806d095cd31c6b2bbc6c1519d1140cf53f95d834d4658cd65f95aa0061681cd1`). The
+test log SHA-256 is
+`326e8a8fc4376437372393040bd38763a77a242a464f77c3aec16cfac048a037`. The
+container retained the component configuration: Linux/amd64, 2 CPUs, 6 GiB
+memory, 256 PIDs, no network, read-only root, all capabilities dropped,
+no-new-privileges, init, offline read-only artifacts, and the 15-second stop
+bound. It was not OOM-killed. The run exited nonzero due to the one test
+failure.
+
+That failure was in
+`test_production_hard_expiry_bridge_path_maps_to_cancelled_and_reclaims`.
+Its test-only AST-extracted bridge probe omitted the production bridge's new
+`_check_runtime_guard` method and `_runtime_invalidated` state, so its source
+probe raised an unexpected fence assertion. The test was corrected to extract
+the actual production method and initialize the legacy no-guard state. The
+unchanged hard-expiry, cancellation and cache-reclamation assertions then
+passed in a separate focused native run: 12 tests, zero skips, 0.339 seconds;
+source head `baa915a0a20bac43e622bde3864372565729de91`, digest
+`c246535e6444887f7cbd21070133f21746cb35d19dc4827e9ab9fb966f7ec744`, log
+SHA-256 `66893295ef85ea364a579e2cdccc8f0efd40473889b9a0b02c61f1103a3f3529`.
+This is a focused test-only correction and does not retroactively change the
+combined run's result. The combined component has not yet been rerun with the
+corrected test.
+
+The focused host result demonstrates local assembly and a guarded C1 control
+operation under these test fixtures. It does not establish fixed-role process
+startup or READY, three-role execution, deployed gateway or WAN behavior,
+aggregate physical-resource enforcement, or CT-11/CT-13 split-host numerical
+and lifecycle acceptance. C2.1–C2.6 and the C2 exit gate remain open; C3 and
+research gate statuses are unchanged.

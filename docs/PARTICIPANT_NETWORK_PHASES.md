@@ -282,6 +282,25 @@ cohort client, runtime guard/RPC cleanup and component-32 checks on ZimaBlade;
 the report retains earlier fixture failures and scopes. These checks do not
 close a C2 task or phase gate.
 
+**Component 33 update, 2026-10-19:** the focused host-assembly run passed 8
+tests, zero skips, in 6.001 seconds against source head
+`1ca5f3f42e3cf130e4a41287134d29e315f315f1` (digest
+`9822bd408011bf18ebdfdbb6c82961d69760011e4176a0874fd10d7e5782a3c1`). It
+covered signed C2 host binding, inherited pins, an offline assigned stage and
+a real C1 Describe over the guarded bridge. Forced-hidden-state comparisons
+were made through the direct handler against its assigned local stage
+reference (`atol=1e-6`, `rtol=0`), not through RPC. Component 33's combined
+911-test run had 910 passes and one failure, with no skips, on a 471-file
+snapshot; the failure came from an outdated AST test probe, not a passing
+combined result. The corrected probe later passed 12 focused tests, but the
+combined inventory has not been rerun. The bounded run covers connectors, 27
+selected security modules and two runtime modules; it is not full C1 or the
+whole repository. Host assembly evidence does not establish fixed-role
+readiness, shared physical resource enforcement or deployed multi-device
+routing. C2.1–C2.6 and the C2 exit gate remain open, and C3 has not advanced.
+Hashes, retained attempts and limits are in the
+[component record](experiments/2026-10-19-participant-c2-components.md).
+
 ## C3 — Validate one GPU execution path
 
 **Outcome:** one explicitly supported GPU/backend/precision combination preserves

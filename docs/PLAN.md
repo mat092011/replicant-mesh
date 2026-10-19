@@ -979,3 +979,42 @@ native evidence also covers the cohort client, runtime guard/RPC cleanup, and
 the component-32 suite on ZimaBlade. The component report records these runs
 and the earlier fixture failures. None establishes fixed-role readiness or
 closes a C2 gate.
+
+**C2 component update, 2026-10-19:** component 33's focused host-assembly
+native run passed 8 tests with no skips in 6.001 seconds (source head
+`1ca5f3f42e3cf130e4a41287134d29e315f315f1`, digest
+`9822bd408011bf18ebdfdbb6c82961d69760011e4176a0874fd10d7e5782a3c1`, log
+SHA-256 `e4390f532afd5d637d17f6aab767a2f8dc53fced3cbb753b1e7668c7baa7d986`).
+It exercised signed C2 host binding, inherited artifact pins, an offline
+assigned stage, and a real signed C1 Describe operation through the guarded
+bridge. Forced hidden states were compared against the assigned stage's local
+PipelineModel reference at `atol=1e-6, rtol=0` through the direct handler;
+this was not RPC numerical validation. Additional controls used validly
+re-signed catalog/key/assignment variants, a projected single-owner view of a
+larger signed group, a private re-signed manifest with queue limit one, and
+weak references proving confirmed close released model references while the
+caller-owned pins remained open. An uncertain bridge stop retained owners.
+
+The updated bounded component-33 inventory did not pass: 911 unique tests ran,
+with 910 passes and one failure, no skips, in 58.646 seconds. Its scope was all
+connector tests, 27 selected security modules, and two runtime modules, not the
+full repository or full C1 regression. The 471-file frozen source snapshot at
+`6baece6c792f4c2d3b09fa8ca6b4cc09bcb05dbc` had digest
+`477fc64a8b25d158cfa73c3fd72de2775486377b26b05698087d7ab2f4f3c943`; all 471
+baked files matched the proof. The pinned image was
+`sha256:f96b53369b97c8b2d43d02096405d24fe27c3efff46d40a50dad7f3e80a12770`.
+The one failure was in an AST-extracted test probe that had not been updated to
+include the production bridge's new runtime-guard method and state. The
+test-only probe correction passed its separate 12-test native run (zero skips,
+0.339 seconds; source head `baa915a0a20bac43e622bde3864372565729de91`, digest
+`c246535e6444887f7cbd21070133f21746cb35d19dc4827e9ab9fb966f7ec744`; log
+SHA-256 `66893295ef85ea364a579e2cdccc8f0efd40473889b9a0b02c61f1103a3f3529`).
+That focused pass does not change the combined result; component 33 has not
+been rerun with the corrected probe. The full run kept its existing 2 CPU,
+6 GiB RAM, 256 PID, 15-second stop, no-network, read-only-root, dropped
+capabilities, no-new-privileges, init and temporary-filesystem bounds. These
+remain component results only: fixed-role startup/readiness, shared physical
+resource enforcement, deployed multi-device routing and CT-11/CT-13 remain
+unproven. C2.1–C2.6 and the C2 exit gate remain open; C3 and research statuses
+are unchanged. See the [component evidence record](experiments/2026-10-19-participant-c2-components.md)
+for the retained failed attempts and hashes.
