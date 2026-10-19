@@ -20,7 +20,8 @@ from .root_c2_group_scope import (MAX_SCOPE_BYTES, C2HostGroupScope,
 from .root_transition_launch import (RoleLaunchSpec, canonical_role_launch_digest,
     parse_role_launch_spec, role_launch_document)
 from .root_transition_storage import (MAX_ARTIFACT_BYTES, MAX_ARTIFACT_TOTAL_BYTES,
-    MAX_ARTIFACTS, RootGenerationSelector, root_generation_selector_document,
+    MAX_ARTIFACTS, MAX_POLICY_BYTES, RootGenerationSelector,
+    _authenticate_policy_snapshot, root_generation_selector_document,
     parse_root_generation_selector)
 from .snapshot import SnapshotStore, canonical_policy_digest
 
@@ -133,14 +134,17 @@ def _validate_grants(view, specs, groups, sample):
                 or record.certificate_sha256 != spec.certificate_sha256
                 or record.public_key_sha256 != spec.public_key_sha256):
             raise CredentialError("C2 launch credential differs from active signed policy")
-    for grant in view.active_grants(sample):
+    for grant in view.grants:
+        if (sample.latest_wall >= grant.not_after
+                or sample.monotonic >= view.grant_deadlines[grant.identity]):
+            continue
         target_identity = (grant.target_account_id, grant.target_device_id, grant.target_role)
         target = spec_by_identity.get(target_identity)
-        if target is None:
-            continue
         actor = spec_by_identity.get((grant.account_id, grant.device_id, grant.role))
-        if actor is None:
-            raise CredentialError("C2 selected target has an active grant from an undeclared actor")
+        if target is None and actor is None:
+            continue
+        if actor is None or target is None:
+            raise CredentialError("C2 selected cohort has an active grant outside its declared roles")
         if (grant.actor_boot_id is not None and grant.actor_boot_id != actor.boot_id
                 or grant.actor_serial != actor.serial
                 or grant.actor_public_key_sha256 != actor.public_key_sha256
@@ -173,7 +177,7 @@ def _validate_grants(view, specs, groups, sample):
 
 
 def validate_c2_selected_cohort(selector, bundle, active_policy, *, clock: Clock) -> C2SelectedCohort:
-    """Validate bytes supplied by RootGenerationStore.read_selected callback.
+    """Parse and validate bytes supplied to a read_selected validation callback.
 
     Caller must use this only as that store's callback; this does not verify disk
     provenance independently or authorize a process to start.
@@ -219,6 +223,17 @@ def validate_c2_selected_cohort(selector, bundle, active_policy, *, clock: Clock
         raise CredentialError("C2 manifest policy revision is invalid")
     old_specs = _closed_specs(manifest["old_launch_specs"], "old launch specs")
     new_specs = _closed_specs(manifest["new_launch_specs"], "new launch specs")
+    if {x.identity for x in old_specs} != {x.identity for x in new_specs}:
+        raise CredentialError("C2 old and new launch plans must cover identical role identities")
+    old_generations = {x.generation_sha256 for x in old_specs}
+    if len(old_generations) != 1 or selector.generation_sha256 in old_generations:
+        raise CredentialError("C2 old launch roles must share a generation distinct from selected")
+    old_by_identity = {x.identity: x for x in old_specs}
+    for spec in new_specs:
+        before = old_by_identity[spec.identity]
+        if (spec.credential_epoch != before.credential_epoch + 1
+                or spec.admission_epoch != before.admission_epoch + 1):
+            raise CredentialError("C2 launch credential and admission epochs must advance by one")
     for label, specs, artifact, digest_name in (
             ("old", old_specs, "old_launch_specs.json", "old_launch_digest"),
             ("new", new_specs, "new_launch_specs.json", "new_launch_digest")):
@@ -233,6 +248,9 @@ def validate_c2_selected_cohort(selector, bundle, active_policy, *, clock: Clock
     new_groups = _groups(manifest["new_host_group_scopes"], "new host groups")
     _bind_groups(old_groups, old_specs, old_specs[0].generation_sha256)
     new_map = _bind_groups(new_groups, new_specs, selector.generation_sha256)
+    new_host_ids = {x.identity for x in new_specs if x.role == "host"}
+    if set(new_map) != new_host_ids:
+        raise CredentialError("C2 selected cohort must scope every declared host role")
     old_boot_list = [x.boot_id for x in old_specs] + [
         c.worker_boot_id for g in old_groups for c in g.components]
     if len(old_boot_list) != len(set(old_boot_list)):
@@ -255,17 +273,17 @@ def validate_c2_selected_cohort(selector, bundle, active_policy, *, clock: Clock
         if (manifest["new_ca_sha256"] != certificate_sha256(ca)
                 or manifest["new_snapshot_key_sha256"] != public_key_sha256(signer)):
             raise CredentialError("C2 selected authority pins differ from manifest")
-        baseline_store = SnapshotStore(
-            verification_key_pem=bundle["snapshot_signer_public.pem"],
-            ca_certificate_pem=bundle["ca_certificate.pem"], clock=clock)
-        baseline_view = baseline_store.install(bundle["policy_snapshot.json"])
-        payload = json.loads(bundle["policy_snapshot.json"].decode("utf-8"))["payload"]
+        payload, _baseline_credentials, _baseline_grants = _authenticate_policy_snapshot(
+            bundle["policy_snapshot.json"], ca_pem=bundle["ca_certificate.pem"],
+            signer_pem=bundle["snapshot_signer_public.pem"], sample=sample)
         if (manifest["policy_revision"] != payload["revision"]
                 or manifest["policy_digest"] != canonical_policy_digest(payload)
-                or manifest["policy_payload_sha256"] != hashlib.sha256(canonical_json(payload)).hexdigest()
-                or baseline_view.revision != manifest["policy_revision"]
-                or baseline_view.policy_digest != manifest["policy_digest"]):
+                or manifest["policy_payload_sha256"] != hashlib.sha256(canonical_json(payload)).hexdigest()):
             raise CredentialError("C2 baseline policy pins differ from manifest")
+        if (type(active_policy) is not bytes or not 1 <= len(active_policy) <= MAX_POLICY_BYTES
+                or hashlib.sha256(active_policy).hexdigest() !=
+                   selector.active_policy_snapshot_sha256):
+            raise CredentialError("C2 active policy bytes differ from selector hash")
         if selector.policy_revision < manifest["policy_revision"]:
             raise CredentialError("C2 selected policy revision predates its baseline")
         current_store = SnapshotStore(
@@ -274,15 +292,36 @@ def validate_c2_selected_cohort(selector, bundle, active_policy, *, clock: Clock
             minimum_revision=selector.policy_revision,
             minimum_policy_digest=selector.policy_digest)
         current_store.install(active_policy)
+        sample = clock.sample()
         view = current_store.current(sample=sample)
         if view.revision != selector.policy_revision or view.policy_digest != selector.policy_digest:
             raise CredentialError("C2 active policy is not the selected current head")
     except CredentialError:
         raise
-    except (KeyError, UnicodeError, ValueError, TypeError, SnapshotError) as error:
+    except (KeyError, UnicodeError, ValueError, TypeError, SnapshotError, StorageError) as error:
         raise CredentialError("C2 selected policy or authority validation failed") from error
     _validate_grants(view, new_specs, new_map, sample)
     return C2SelectedCohort(old_specs, new_specs, old_groups, new_groups,
         selector.generation_sha256, hashlib.sha256(selector_bytes).hexdigest(),
         selector.activation_manifest_sha256, selector.policy_revision,
         selector.policy_digest, selector.active_policy_snapshot_sha256)
+
+
+def make_c2_selected_validation_callback(*, clock: Clock, capture: dict):
+    """Create a RootGenerationStore callback that captures the validated view.
+
+    ``read_selected`` requires callbacks to return ``None``. The returned
+    function therefore stores the inert result under ``capture['cohort']`` and
+    returns exactly ``None`` after validation succeeds.
+    """
+    if type(clock) is not Clock or type(capture) is not dict or capture:
+        raise TypeError("C2 callback requires an exact Clock and empty result dict")
+
+    def validate(selector, bundle, active_policy):
+        capture.clear()
+        cohort = validate_c2_selected_cohort(selector, dict(bundle), active_policy,
+                                             clock=clock)
+        capture["cohort"] = cohort
+        return None
+
+    return validate
