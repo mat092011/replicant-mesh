@@ -53,6 +53,14 @@ _CHANNELS = weakref.WeakSet()
 _GUARDS = weakref.WeakSet()
 
 
+def is_owned_gateway_coordinator_tls(value):
+    """Return true only for an owner minted by the fixed coordinator TLS factory."""
+    if type(value) is not OwnedGatewayCoordinatorTLS:
+        return False
+    with _MINT_LOCK:
+        return value in _OWNERS and value._token is _TOKEN
+
+
 def is_authenticated_coordinator_channel(value):
     if type(value) is not AuthenticatedCoordinatorChannel:
         return False
@@ -647,11 +655,25 @@ class OwnedGatewayCoordinatorTLS:
 
     def _authenticate_peer_locked(self):
         try:
+            # Admission is bound to the policy snapshot captured when this TLS
+            # owner was created. A policy installed during the handshake must
+            # retire the flight instead of authorizing its old gateway pin under
+            # a newer route set.
+            captured = self._policy_view
+            current, _ = self.policy_store.current_with_sample()
+            if (captured is None or current.revision != captured.revision
+                    or current.policy_digest != captured.policy_digest):
+                raise GatewayCoordinatorTLSError(
+                    "channel policy changed during coordinator TLS handshake")
             der = self.__ssl.getpeercert(binary_form=True)
             if type(der) is not bytes or not der:
                 raise GatewayCoordinatorTLSError("TLS peer did not present a client certificate")
             pem = _pem_from_der(der)
             policy, sample = self.policy_store.current_with_sample()
+            if (policy.revision != captured.revision
+                    or policy.policy_digest != captured.policy_digest):
+                raise GatewayCoordinatorTLSError(
+                    "channel policy changed during coordinator TLS handshake")
             snapshot = self.snapshot_store.current(sample=sample)
             actor = _verify_pinned_credential(self.snapshot_store, pem, snapshot, sample)
             if (actor.role != "personal_coordinator"
@@ -698,7 +720,6 @@ class OwnedGatewayCoordinatorTLS:
             self._actor_pem = pem
             self._actor = actor
             self._actor_certificate = cert
-            self._policy_view = policy
             self._snapshot_view = snapshot
             self._deadline = deadline
             channel = AuthenticatedCoordinatorChannel(

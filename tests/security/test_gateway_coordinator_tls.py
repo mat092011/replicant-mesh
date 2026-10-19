@@ -279,6 +279,50 @@ class GatewayCoordinatorTLSOwnerTests(unittest.TestCase):
         with self.assertRaises(GatewayCoordinatorTLSError):
             guard.assert_live()
 
+    def _assert_policy_change_during_real_tls_flight_rejected(self, *, replace_pin):
+        server = self._new_server()
+        client = self._new_client()
+        try:
+            first = client.take_encrypted()
+            self.assertTrue(first)
+            server.feed_encrypted(first)
+            payload = dict(self.fixture.policy_payload)
+            payload["revision"] += 1
+            if replace_pin:
+                # Keep the policy structurally valid while changing the pinned
+                # gateway certificate identity under the in-flight handshake.
+                payload["gateways"] = [dict(payload["gateways"][0])]
+                payload["gateways"][0]["certificate_sha256"] = "a" * 64
+                payload["gateways"][0]["public_key_sha256"] = "b" * 64
+            self.fixture.policy_store.install(egress_tests.sign_channel_policy(
+                payload, egress_tests._private_pem(self.fixture.policy_key)))
+            rejected = False
+            for _ in range(40):
+                try:
+                    outgoing = server.take_encrypted()
+                    if outgoing:
+                        client.feed_encrypted(outgoing)
+                    outgoing = client.take_encrypted()
+                    if outgoing:
+                        server.feed_encrypted(outgoing)
+                except (GatewayCoordinatorTLSError, OwnedWorkerTLSError):
+                    rejected = True
+                    break
+                if server.handshake_complete:
+                    break
+            self.assertTrue(rejected)
+            self.assertFalse(server.handshake_complete)
+            self.assertTrue(server.poll_unavailable())
+        finally:
+            server.close()
+            client.close()
+
+    def test_policy_revision_change_during_actual_tls_flight_is_rejected(self):
+        self._assert_policy_change_during_real_tls_flight_rejected(replace_pin=False)
+
+    def test_replacement_gateway_pin_during_actual_tls_flight_is_rejected(self):
+        self._assert_policy_change_during_real_tls_flight_rejected(replace_pin=True)
+
     def test_snapshot_revocation_retires_channel_and_existing_guard(self):
         channel = self.server.authenticated_channel
         guard = channel.authorize_route(
