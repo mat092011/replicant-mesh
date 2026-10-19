@@ -12,7 +12,9 @@ from .storage import (FileLock, StorageError, atomic_write_json,
 
 
 class ResourceError(Exception):
-    pass
+    def __init__(self, message, *, retained_group=None):
+        super().__init__(message)
+        self.retained_group = retained_group
 
 
 def _empty_ledger():
@@ -313,6 +315,9 @@ class CgroupV2Controller:
             raise ResourceError("only an execution role may receive a cgroup")
         if not isinstance(group_name, str) or not re.fullmatch(r"participant-[a-z0-9-]{1,40}", group_name):
             raise ResourceError("cgroup group name is not an approved identifier")
+        reservation = policy["reservations"].get(role)
+        if reservation is None:
+            raise ResourceError("role reservation is required before cgroup creation")
         parent, reason = self._locate()
         if parent is None:
             raise ResourceError(reason)
@@ -337,23 +342,25 @@ class CgroupV2Controller:
         try:
             group.mkdir(mode=0o700)
         except FileExistsError:
-            if group.is_symlink() or not group.is_dir():
-                raise ResourceError("unsafe existing cgroup path")
+            raise ResourceError("cgroup group name already exists; refusing to reuse it")
         except OSError as error:
             raise ResourceError("delegated cgroup cannot create a role group") from error
-        reservation = policy["reservations"].get(role)
-        if reservation is None:
-            raise ResourceError("role reservation is required before cgroup creation")
-        values = {"memory.max": str(sum(reservation[field] for field in MEMORY_FIELDS)),
-                  "cpu.max": self.cpu_max_value(reservation["cpu_quota_millis"])}
         try:
+            values = {"memory.max": str(sum(reservation[field] for field in MEMORY_FIELDS)),
+                      "cpu.max": self.cpu_max_value(reservation["cpu_quota_millis"])}
             for filename, value in values.items():
                 (group / filename).write_text(value, encoding="ascii")
                 observed = (group / filename).read_text(encoding="ascii").strip()
                 if observed != value:
                     raise ResourceError(f"cgroup did not enforce {filename}")
-        except (OSError, ValueError) as error:
-            raise ResourceError("delegated cgroup limit write/readback failed") from error
+        except Exception as error:
+            retained_group = None
+            try:
+                group.rmdir()
+            except OSError:
+                retained_group = group
+            raise ResourceError("delegated cgroup limit write/readback failed",
+                                retained_group=retained_group) from error
         return group
 
     @staticmethod

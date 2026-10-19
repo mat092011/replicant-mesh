@@ -41,11 +41,18 @@ class _OwnedProcess:
     stopping: bool = False
     stop_lock: object = field(default_factory=threading.Lock)
     reclaimed: bool = False
+    stop_deadline: float = None
+    term_deadline: float = None
 
 
 @dataclass
 class _StartIntent:
     cancelled: threading.Event = field(default_factory=threading.Event)
+    cancel_deadline: float = None
+    term_deadline: float = None
+    group: Path = None
+    finished: bool = False
+    final_stop_requested: bool = False
 
 
 class ProcessRoleBackend:
@@ -110,7 +117,7 @@ class ProcessRoleBackend:
         return document["config"]
 
     @staticmethod
-    def _read_ready(process, timeout):
+    def _read_ready(process, timeout, cancelled=None):
         stream = process.stdout
         if stream is None:
             return False
@@ -121,8 +128,12 @@ class ProcessRoleBackend:
             selector.register(stream, selectors.EVENT_READ)
             while len(data) <= READY_LINE_MAX:
                 remaining = deadline - time.monotonic()
-                if remaining <= 0 or not selector.select(remaining):
+                if cancelled is not None and cancelled():
                     return False
+                if remaining <= 0:
+                    return False
+                if not selector.select(min(remaining, 0.05 if cancelled else remaining)):
+                    continue
                 chunk = os.read(stream.fileno(), READY_LINE_MAX + 1 - len(data))
                 if not chunk:
                     return False
@@ -188,8 +199,18 @@ class ProcessRoleBackend:
 
     def _forget_start_intent(self, role, intent):
         with self._lock:
-            if self._start_intents.get(role) is intent:
+            if self._start_intents.get(role) is intent and intent.group is None:
                 del self._start_intents[role]
+
+    @staticmethod
+    def _cancel_intent(intent, deadline=None, term_deadline=None):
+        if not intent.cancelled.is_set():
+            now = time.monotonic()
+            intent.cancel_deadline = deadline if deadline is not None else (
+                now + STOP_GRACE_MAX_SECONDS)
+            intent.term_deadline = term_deadline if term_deadline is not None else (
+                now + STOP_GRACE_MAX_SECONDS * 0.5)
+        intent.cancelled.set()
 
     def start(self, role, policy, *, cancel_event=None):
         if (cancel_event is not None
@@ -231,6 +252,7 @@ class ProcessRoleBackend:
                 return False
             group = self.cgroup.create_group(
                 f"participant-{role}-{uuid.uuid4().hex[:12]}", policy, role)
+            intent.group = Path(group)
             if self._cancelled(intent, cancel_event):
                 return False
             read_fd, write_fd = os.pipe()
@@ -260,22 +282,29 @@ class ProcessRoleBackend:
                     owned = None
                     raise
                 owned.process = process
+                if intent.cancelled.is_set() or (
+                        cancel_event is not None and cancel_event.is_set()):
+                    self._cancel_intent(intent)
+                    self._mark_stopping(owned, intent.cancel_deadline,
+                                        intent.term_deadline)
             os.close(read_fd)
             read_fd = -1
-            if self._cancelled(intent, cancel_event):
-                self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
-                return False
             self.cgroup.attach_child(group, process)
             with self._lock:
                 cancelled = self._cancelled(intent, cancel_event) or owned.stopping
                 if not cancelled and os.write(write_fd, b"R") != 1:
                     raise OSError("startup gate release failed")
             if cancelled:
-                self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
+                self._cancel_intent(intent)
+                if not intent.final_stop_requested:
+                    self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
                 return False
             os.close(write_fd)
             write_fd = -1
-            ready = self._read_ready(process, READY_TIMEOUT_SECONDS)
+            ready = self._read_ready(
+                process, READY_TIMEOUT_SECONDS,
+                cancelled=lambda: self._cancelled(intent, cancel_event)
+                or owned.stopping)
             with self._lock:
                 current = self._owned.get(role)
                 cancelled_before_ready = (current is not owned or owned.stopping
@@ -284,19 +313,24 @@ class ProcessRoleBackend:
                     owned.starting = False
                     owned.ready = bool(ready and process.poll() is None)
             if cancelled_before_ready:
-                intent.cancelled.set()
-                self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
+                self._cancel_intent(intent)
+                if not intent.final_stop_requested:
+                    self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
                 return False
             if not owned.ready:
-                intent.cancelled.set()
+                self._cancel_intent(intent)
                 self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
                 return False
             return True
-        except Exception:
-            intent.cancelled.set()
-            if owned is not None:
+        except Exception as error:
+            self._cancel_intent(intent)
+            if group is None:
+                group = getattr(error, "retained_group", None)
+                if group is not None:
+                    intent.group = Path(group)
+            if owned is not None and not intent.final_stop_requested:
                 self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
-            elif process is not None:
+            elif owned is None and process is not None:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except OSError:
@@ -317,17 +351,41 @@ class ProcessRoleBackend:
                     os.close(write_fd)
                 except OSError:
                     pass
+            intent.finished = True
+            if owned is not None:
+                # Published process ownership now carries the cgroup path,
+                # whether it was reclaimed or remains live/uncertain.
+                intent.group = None
+            elif group is not None and owned is None:
+                if self._remove_empty_group(group):
+                    intent.group = None
             self._forget_start_intent(role, intent)
-            if group is not None and owned is None:
-                self._remove_empty_group(group)
+
+    def _remove_empty_group(self, group):
+        # False means populated/unknown state or failed disposal; callers must
+        # retain ownership and the resource reservation in either case.
+        if not self._events_populated(group):
+            return False
+        remover = getattr(self.cgroup, "remove_empty_group", None)
+        try:
+            if callable(remover):
+                return remover(group) is True
+            Path(group).rmdir()
+            return not Path(group).exists()
+        except OSError:
+            return False
 
     @staticmethod
-    def _remove_empty_group(group):
-        if not ProcessRoleBackend._events_populated(group):
-            try:
-                Path(group).rmdir()
-            except OSError:
-                pass
+    def _acquire_until(lock, deadline):
+        return lock.acquire(timeout=max(0.0, deadline - time.monotonic()))
+
+    @staticmethod
+    def _mark_stopping(owned, deadline=None, term_deadline=None):
+        if owned.stop_deadline is None:
+            owned.stop_deadline = deadline
+            owned.term_deadline = term_deadline
+        owned.stopping = True
+        owned.ready = False
 
     @staticmethod
     def _bounded_grace(grace_seconds):
@@ -342,29 +400,49 @@ class ProcessRoleBackend:
         results = {}
         acquired = []
         for role, owned in entries:
-            remaining = max(0.0, deadline - time.monotonic())
-            if not owned.stop_lock.acquire(timeout=remaining):
+            stop_deadline = owned.stop_deadline if owned.stop_deadline is not None else deadline
+            if not self._acquire_until(owned.stop_lock, min(deadline, stop_deadline)):
                 results[role] = False
                 continue
             acquired.append((role, owned))
 
         try:
             active = []
-            with self._lock:
+            if not self._acquire_until(self._lock, deadline):
+                for role, owned in acquired:
+                    intent = self._start_intents.get(role)
+                    if intent is not None:
+                        self._cancel_intent(intent, deadline, term_deadline)
+                    current = self._owned.get(role)
+                    if current is owned:
+                        owned.stopping = True
+                        owned.ready = False
+                        if owned.process is not None:
+                            self._signal_tree(owned, signal.SIGTERM)
+                    results[role] = False
+                return results
+            try:
                 for role, owned in acquired:
                     if self._owned.get(role) is not owned:
                         results[role] = owned.reclaimed
                         continue
-                    owned.stopping = True
-                    owned.ready = False
+                    stop_deadline = owned.stop_deadline
+                    if stop_deadline is None:
+                        self._mark_stopping(owned, deadline, term_deadline)
+                    else:
+                        self._mark_stopping(owned)
                     active.append((role, owned))
+            finally:
+                self._lock.release()
 
             # Signal every independent process before waiting on any one of them.
             if send_term:
                 for _, owned in active:
                     self._signal_tree(owned, signal.SIGTERM)
             for _, owned in active:
-                remaining = max(0.0, term_deadline - time.monotonic())
+                own_term_deadline = (owned.term_deadline if owned.term_deadline is not None
+                                     else term_deadline)
+                remaining = max(0.0, min(deadline, own_term_deadline) - time.monotonic())
                 try:
                     owned.process.wait(timeout=remaining)
                 except (subprocess.TimeoutExpired, TimeoutError, OSError):
@@ -377,20 +455,32 @@ class ProcessRoleBackend:
                     self._signal_tree(owned, signal.SIGKILL)
 
             for role, owned in active:
-                empty = self._wait_empty(owned, deadline)
-                remaining = max(0.0, deadline - time.monotonic())
+                own_deadline = min(deadline, owned.stop_deadline or deadline)
+                empty = self._wait_empty(owned, own_deadline)
+                remaining = max(0.0, own_deadline - time.monotonic())
                 try:
                     owned.process.wait(timeout=remaining)
                 except (subprocess.TimeoutExpired, TimeoutError, OSError):
                     empty = False
                 reclaimed = empty and owned.process.poll() is not None
                 if reclaimed:
-                    with self._lock:
-                        if self._owned.get(role) is owned:
-                            del self._owned[role]
-                        owned.reclaimed = True
-                    self._remove_empty_group(owned.group)
-                results[role] = reclaimed
+                    if not self._acquire_until(self._lock, own_deadline):
+                        reclaimed = False
+                    else:
+                        try:
+                            if self._owned.get(role) is not owned:
+                                reclaimed = owned.reclaimed
+                            elif not self._remove_empty_group(owned.group):
+                                reclaimed = False
+                            else:
+                                del self._owned[role]
+                                owned.reclaimed = True
+                        finally:
+                            self._lock.release()
+                if reclaimed:
+                    results[role] = True
+                else:
+                    results[role] = False
             return results
         finally:
             for _, owned in acquired:
@@ -401,8 +491,12 @@ class ProcessRoleBackend:
         if grace is None:
             return False
         started = time.monotonic()
-        return self._stop_many([(owned.role, owned)], started + grace,
-                               started + grace * 0.5).get(owned.role, False)
+        deadline = owned.stop_deadline if owned.stop_deadline is not None else started + grace
+        term_deadline = owned.term_deadline if owned.term_deadline is not None else min(
+            deadline, started + grace * 0.5)
+        self._mark_stopping(owned, deadline, term_deadline)
+        return self._stop_many([(owned.role, owned)], deadline,
+                               term_deadline).get(owned.role, False)
 
     def stop(self, roles, grace_seconds):
         grace = self._bounded_grace(grace_seconds)
@@ -413,22 +507,57 @@ class ProcessRoleBackend:
         term_deadline = started + grace * 0.5
         results = {}
         entries = []
-        with self._lock:
+        cleanup_intents = []
+        if not self._acquire_until(self._lock, deadline):
+            # Popen or another ownership transition may be in progress. Cancel
+            # intents without waiting; retain reservations until that transition
+            # publishes and the caller can perform final bounded reclamation.
+            for role in roles:
+                intent = self._start_intents.get(role)
+                if intent is not None:
+                    self._cancel_intent(intent, deadline, term_deadline)
+                owned = self._owned.get(role)
+                if owned is not None:
+                    self._mark_stopping(owned, deadline, term_deadline)
+                    if owned.process is not None:
+                        self._signal_tree(owned, signal.SIGTERM)
+                results[role] = False
+            return results
+        try:
             for role in roles:
                 if role not in ROLE_MODULES:
                     results[role] = False
                     continue
                 intent = self._start_intents.get(role)
                 if intent is not None:
-                    intent.cancelled.set()
+                    self._cancel_intent(intent, deadline, term_deadline)
                 owned = self._owned.get(role)
                 if owned is None:
                     # A launch intent may still be in cgroup creation or Popen.
-                    results[role] = intent is None
+                    if intent is None:
+                        results[role] = True
+                    elif intent.finished and intent.group is not None:
+                        cleanup_intents.append((role, intent))
+                        results[role] = False
+                    else:
+                        results[role] = False
                     continue
-                owned.stopping = True
-                owned.ready = False
+                self._mark_stopping(owned, deadline, term_deadline)
                 entries.append((role, owned))
+        finally:
+            self._lock.release()
+
+        for role, intent in cleanup_intents:
+            if self._remove_empty_group(intent.group):
+                intent.group = None
+                if self._acquire_until(self._lock, deadline):
+                    try:
+                        if (self._start_intents.get(role) is intent
+                                and intent.finished and intent.group is None):
+                            del self._start_intents[role]
+                            results[role] = True
+                    finally:
+                        self._lock.release()
 
         stopped = self._stop_many(entries, deadline, term_deadline)
         results.update(stopped)
@@ -445,20 +574,42 @@ class ProcessRoleBackend:
             # ownership itself remains reconciled by stop() on the lifecycle queue.
             intent = self._start_intents.get(role)
             if intent is not None:
-                intent.cancelled.set()
+                now = time.monotonic()
+                intent.final_stop_requested = True
+                self._cancel_intent(intent, now + STOP_GRACE_MAX_SECONDS,
+                                    now + STOP_GRACE_MAX_SECONDS * 0.5)
             owned = self._owned.get(role)
-            if owned is not None and owned.process is not None:
+            if owned is not None:
                 owned.stopping = True
                 owned.ready = False
-                self._signal_tree(owned, signal.SIGTERM)
+                if owned.process is not None:
+                    self._signal_tree(owned, signal.SIGTERM)
             results[role] = intent is not None or owned is not None
         return results
 
     def drain(self, roles, deadline, cancel_event):
-        with self._lock:
-            live = [role for role in roles if role in self._owned]
+        if not self._acquire_until(self._lock, deadline):
+            for role in roles:
+                intent = self._start_intents.get(role)
+                if intent is not None:
+                    self._cancel_intent(intent, deadline, deadline)
+            return {"drained": False, "reclaimed": False}
+        try:
+            live = [role for role in roles
+                    if role in self._owned or role in self._start_intents]
             for role in live:
-                self._owned[role].ready = False
+                intent = self._start_intents.get(role)
+                if intent is not None:
+                    self._cancel_intent(intent, deadline, deadline)
+                owned = self._owned.get(role)
+                if owned is not None:
+                    owned.ready = False
+                    self._mark_stopping(
+                        owned,
+                        intent.cancel_deadline if intent is not None else deadline,
+                        intent.term_deadline if intent is not None else deadline)
+        finally:
+            self._lock.release()
         remaining = max(0.0, deadline - self.clock())
         if cancel_event.wait(min(remaining, 0.01)):
             return {"drained": False, "reclaimed": False}
@@ -470,8 +621,20 @@ class ProcessRoleBackend:
 
     def status(self):
         with self._lock:
-            return {role: {"owned": True, "ready": item.ready,
-                           "starting": item.starting, "stopping": item.stopping,
-                           "pid": item.process.pid,
-                           "cgroup_populated": not self._events_populated(item.group)}
-                    for role, item in sorted(self._owned.items())}
+            result = {role: {"owned": True, "ready": item.ready,
+                            "starting": item.starting, "stopping": item.stopping,
+                            "pid": item.process.pid if item.process is not None else None,
+                            "cgroup_populated": not self._events_populated(item.group)}
+                      for role, item in sorted(self._owned.items())}
+            for role, intent in sorted(self._start_intents.items()):
+                if role in result:
+                    continue
+                result[role] = {
+                    "owned": True, "ready": False,
+                    "starting": not intent.finished,
+                    "stopping": intent.cancelled.is_set(), "pid": None,
+                    "cgroup_populated": (None if intent.group is None else
+                                         not self._events_populated(intent.group)),
+                    "cleanup_pending": intent.group is not None,
+                }
+            return result
