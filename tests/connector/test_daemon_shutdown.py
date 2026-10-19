@@ -48,12 +48,15 @@ class DaemonShutdownTests(unittest.TestCase):
 
             FakeServer.__init__ = retain_instance
             thread = threading.Thread(target=lambda: result.append(daemon.run_daemon()))
-            thread.start()
-            thread.join(1.1)
-            self.assertTrue(thread.is_alive())
-            self.assertGreaterEqual(instances[0].close_calls, 2)
-            allow_cleanup.set()
-            thread.join(1)
+            try:
+                thread.start()
+                thread.join(1.1)
+                self.assertTrue(thread.is_alive())
+                self.assertGreaterEqual(instances[0].close_calls, 2)
+            finally:
+                allow_cleanup.set()
+                if thread.ident is not None:
+                    thread.join(2)
         self.assertFalse(thread.is_alive())
         self.assertEqual(result, [0])
 
