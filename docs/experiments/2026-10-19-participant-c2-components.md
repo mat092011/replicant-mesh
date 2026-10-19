@@ -1249,7 +1249,7 @@ SHA-256 `962f7638f2fe031c05e8d3875a2a5f6c147462bb4b26165d02c07a01e08a4b5f`.
 It covered actual assigned-head finish health, cancelled awaiter/held-CPU
 invalidation, child-lease lock-thread bounded close, and strict signed key,
 assignment and root checks. This is not a full coordinator role, listener,
-route or READY test. Full coordinator runtime-close boundedness and fixed-role
-integration remain under review. Neither coordinator-root probe nor the
+route or READY test. The host runtime-close follow-up and full fixed-role
+integration remain pending. Neither coordinator-root probe nor the
 host-service pass closes a C2 gate. C2.1–C2.6 remain open; C3 and research
 statuses are unchanged.
