@@ -8,7 +8,9 @@ queue, or activate/replace resource policy v1.
 
 Version 2 deliberately models one physical route once, even when it has three
 worker component caches and a co-located coordinator. The membership limit is
-four selected members per route, eight live routes and 32 live member leases.
+four configured selected-member descriptors, four members per route, eight
+live routes and 32 live member leases. The descriptor limit is separate from
+the aggregate live-member limit.
 The v2 storage profile leaves the C1 route epoch fixed at 1; the profile
 version is a separate discriminator and does not alter C1 session binding.
 Policy v1 accounting remains summed: its worker and coordinator component cache
@@ -62,7 +64,10 @@ uncertain state write leaves that fence for operator or supervisor recovery; a
 new object cannot bypass it. After a confirmed state commit, fence cleanup has
 its own result flag. If unlink or its directory fsync fails, the reservation or
 release remains committed and correctly charged; cleanup is reported as
-unconfirmed. If the marker reappears after a crash, opens fail closed. Operations
+unconfirmed. Idempotent reserve/release calls re-check marker absence and fsync
+the ledger directory before reporting cleanup confirmed; a failed check keeps
+the committed result but reports cleanup unconfirmed. If the marker reappears
+after a crash, opens fail closed. Operations
 use both a thread lock and the shared file lock. Filesystem locking does not establish that a directory is shared by
 the intended physical host; that remains an operator provisioning fact.
 

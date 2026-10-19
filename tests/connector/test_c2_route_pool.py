@@ -19,6 +19,14 @@ def member(i, component="worker-1", role="host"):
     return {"selected_root_generation":f"{i:064x}","parent_boot_id":f"{i+100:032x}","account_id":new_id("acct"),"device_id":new_id("dev"),"role":role,"component":component,"worker_boot_id":f"{i+200:032x}","assignment_id":new_id("asg") if role=="host" else None,"credential_serial":f"{i+1:x}","credential_key_hash":f"{i:064x}","credential_certificate_hash":f"{i:064x}","credential_epoch":1,"admission_epoch":1}
 
 class C2ProjectionTests(unittest.TestCase):
+    def test_fifth_selected_member_rejected_by_constructor_and_reconfiguration(self):
+        members=[member(i, f"worker-{i}") for i in (1,2,3,4,5)]
+        with self.assertRaisesRegex(RoutePoolError,"1..4"):
+            C2RoutePool("unused",physical_host_id="f"*64,pool_id="pool",allowed_members=members)
+        ledger=C2RoutePool.__new__(C2RoutePool)
+        with self.assertRaisesRegex(RoutePoolError,"1..4"):
+            ledger._configure("unused","f"*64,"pool",members,None)
+
     def test_verified_selected_scope_projection(self):
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ec
@@ -92,19 +100,19 @@ class C2RoutePoolTests(unittest.TestCase):
     def test_coordinator_counts_once_and_release_is_exact_and_terminal(self):
         with tempfile.TemporaryDirectory() as d:
             ms=[member(i, f"worker-{i}") for i in (1,2,3)] + [member(4,"coordinator","personal_coordinator")]
-            newcomer=member(5,"worker-3")
-            l=self.create(Path(d)/"state",ms+[newcomer]); r=route(1)
+            l=self.create(Path(d)/"state",ms); r=route(1)
             r.update(coordinator_account_id=ms[3]["account_id"],tenant_account_id=ms[3]["account_id"],coordinator_device_id=ms[3]["device_id"],coordinator_boot_id=ms[3]["worker_boot_id"],coordinator_serial=ms[3]["credential_serial"],coordinator_key_hash=ms[3]["credential_key_hash"],coordinator_credential_epoch=ms[3]["credential_epoch"])
-            leases=[l.reserve(r,m) for m in ms]
+            leases=[l.reserve(r,m) for m in ms[:3]]
             self.assertEqual(l.reserve(r,ms[1]).receipt,leases[1].receipt)
             self.assertEqual(len(l.snapshot()["routes"]),1)
-            self.assertEqual(sum(len(x["members"]) for x in l.snapshot()["routes"].values()),4)
+            self.assertEqual(sum(len(x["members"]) for x in l.snapshot()["routes"].values()),3)
             with self.assertRaises(RoutePoolError): l.release(leases[0].receipt, actual_reclamation_confirmed=None)
             self.assertTrue(l.release(leases[0].receipt, actual_reclamation_confirmed=True).released)
             self.assertFalse(l.release(leases[0].receipt, actual_reclamation_confirmed=True).released)
             self.assertEqual(l.reserve(r,ms[1]).receipt,leases[1].receipt)
             with self.assertRaises(RoutePoolError): l.reserve(r,ms[0])
-            with self.assertRaises(RoutePoolError): l.reserve(r,newcomer)
+            with self.assertRaisesRegex(RoutePoolError,"closing"):
+                l.reserve(r,ms[3])
 
     def test_changed_member_identity_cannot_borrow_receipt(self):
         with tempfile.TemporaryDirectory() as d:
@@ -185,6 +193,33 @@ class C2RoutePoolTests(unittest.TestCase):
             self.assertFalse(result.fence_cleanup_confirmed)
             self.assertEqual(len(other.snapshot()["routes"]),1)
             self.assertEqual(sum(len(x["members"]) for x in other.snapshot()["routes"].values()),1)
+            # Duplicate reserve reports the same committed receipt, and cleanup
+            # confirmation remains false until a directory fsync succeeds.
+            original_fsync=mod.os.fsync
+            with mock.patch.object(mod.os,"fsync",side_effect=OSError("retry cleanup fsync failure")):
+                retry=l.reserve(rt,m)
+            self.assertEqual(retry.receipt,result.receipt)
+            self.assertFalse(retry.fence_cleanup_confirmed)
+            retry=l.reserve(rt,m)
+            self.assertEqual(retry.receipt,result.receipt)
+            self.assertTrue(retry.fence_cleanup_confirmed)
+            original_fsync=mod.os.fsync; calls={"n":0}
+            def fail_release_cleanup(fd):
+                calls["n"]+=1
+                if calls["n"]==5: raise OSError("injected release cleanup fsync failure")
+                return original_fsync(fd)
+            with mock.patch.object(mod.os,"fsync",side_effect=fail_release_cleanup):
+                released=l.release(result.receipt,actual_reclamation_confirmed=True)
+            self.assertTrue(released.released)
+            self.assertFalse(released.fence_cleanup_confirmed)
+            with mock.patch.object(mod.os,"fsync",side_effect=OSError("retry release cleanup fsync failure")):
+                repeated=l.release(result.receipt,actual_reclamation_confirmed=True)
+            self.assertFalse(repeated.released)
+            self.assertFalse(repeated.fence_cleanup_confirmed)
+            repeated=l.release(result.receipt,actual_reclamation_confirmed=True)
+            self.assertFalse(repeated.released)
+            self.assertTrue(repeated.fence_cleanup_confirmed)
+            self.assertEqual(sum(not x["released"] for rr in other.snapshot()["routes"].values() for x in rr["members"].values()),0)
             # If a pending marker reappears after a crash, all opens fail closed.
             pending=path/"c2-route-pool-v2.pending"
             pending.write_text('{"version":2,"profile":"physical_pool_route_membership_v2","config_digest":"'+'f'*64+'","transaction_id":"'+'a'*64+'"}')

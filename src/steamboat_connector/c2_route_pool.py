@@ -20,6 +20,7 @@ VERSION = 2
 PROFILE = "physical_pool_route_membership_v2"
 MAX_ROUTES = 8
 MAX_MEMBERS = 32
+MAX_SELECTED_MEMBERS = 4
 MAX_MEMBERS_PER_ROUTE = 4
 MAX_ROUTE_RECORDS = 32
 MAX_MEMBER_RECORDS = 128
@@ -125,25 +126,7 @@ def project_host_scope_member(scope, component):
 class C2RoutePool:
     """Durable, bounded route membership; caller must provision a private directory."""
     def __init__(self, directory, *, physical_host_id, pool_id, allowed_members, uid=None):
-        self.directory = Path(os.path.abspath(os.fspath(directory)))
-        self.uid = os.getuid() if uid is None else uid
-        if type(self.uid) is not int or self.uid < 0: raise RoutePoolError("invalid uid")
-        if type(physical_host_id) is not str or not _HEX64.fullmatch(physical_host_id): raise RoutePoolError("invalid physical host id")
-        if type(pool_id) is not str or not pool_id or len(pool_id) > 128: raise RoutePoolError("invalid pool id")
-        if type(allowed_members) is not list or not 1 <= len(allowed_members) <= MAX_MEMBERS: raise RoutePoolError("allowlist must contain 1..32 exact members")
-        members = []
-        for item in allowed_members:
-            _validate_member(item); members.append(dict(item))
-        keys = [json_bytes(x) for x in members]
-        if len(keys) != len(set(keys)): raise RoutePoolError("duplicate allowlist member")
-        self.allowed = {hashlib.sha256(x).hexdigest() for x in keys}
-        self.config_digest = hashlib.sha256(json_bytes({"physical_host_id": physical_host_id, "pool_id": pool_id, "allowed_members": members, "max_routes": MAX_ROUTES})).hexdigest()
-        self.path = self.directory / "c2-route-pool-v2.json"
-        self.lock_path = self.directory / "c2-route-pool-v2.lock"
-        self.marker_path = self.directory / "c2-route-pool-v2.provisioned"
-        self.pending_path = self.directory / "c2-route-pool-v2.pending"
-        self._thread = threading.RLock()
-        self._faulted = False
+        self._configure(directory, physical_host_id, pool_id, allowed_members, uid)
         try:
             fd = open_private_directory(self.directory, uid=self.uid); os.close(fd)
             with self._locked():
@@ -185,13 +168,13 @@ class C2RoutePool:
 
     def _configure(self, directory, physical_host_id, pool_id, allowed_members, uid):
         self.directory=Path(os.path.abspath(os.fspath(directory)))
-        self.uid=os.getuid() if uid is None else uid
-        if type(self.uid) is not int or self.uid < 0: raise RoutePoolError("invalid uid")
         if type(physical_host_id) is not str or not _HEX64.fullmatch(physical_host_id): raise RoutePoolError("invalid physical host id")
         if type(pool_id) is not str or not pool_id or len(pool_id)>128: raise RoutePoolError("invalid pool id")
-        if type(allowed_members) is not list or not 1<=len(allowed_members)<=MAX_MEMBERS: raise RoutePoolError("allowlist must contain 1..32 exact members")
+        if type(allowed_members) is not list or not 1<=len(allowed_members)<=MAX_SELECTED_MEMBERS: raise RoutePoolError("allowlist must contain 1..4 exact selected members")
         members=[]
         for item in allowed_members: _validate_member(item); members.append(dict(item))
+        self.uid=os.getuid() if uid is None else uid
+        if type(self.uid) is not int or self.uid < 0: raise RoutePoolError("invalid uid")
         keys=[json_bytes(x) for x in members]
         if len(keys)!=len(set(keys)): raise RoutePoolError("duplicate allowlist member")
         self.allowed={hashlib.sha256(x).hexdigest() for x in keys}
@@ -236,6 +219,19 @@ class C2RoutePool:
             except FileNotFoundError: return
             raise RoutePoolError("durable pending transaction exists; operator recovery required")
         finally: os.close(fd)
+    def _confirm_fence_cleanup_unlocked(self):
+        """Confirm the pending name is absent and that absence is directory-durable."""
+        try:
+            fd=open_private_directory(self.directory,uid=self.uid)
+            try:
+                try: os.stat(self.pending_path.name,dir_fd=fd,follow_symlinks=False)
+                except FileNotFoundError: pass
+                else: return False
+                os.fsync(fd)
+            finally: os.close(fd)
+            return True
+        except Exception:
+            return False
     def _read(self):
         self._healthy(); self._check_named_file(self.path)
         return strict_json_loads(read_private_file(self.path, maximum_size=MAX_FILE_BYTES, uid=self.uid), maximum_bytes=MAX_FILE_BYTES)
@@ -330,7 +326,8 @@ class C2RoutePool:
                 if memberkey in rec["members"]:
                     existing=rec["members"][memberkey]
                     if existing["released"]: raise RoutePoolError("released member cannot rejoin route")
-                    return ReservationResult({"version":VERSION,"profile":PROFILE,"route_key":routekey,"member_key":memberkey,"token":existing["token"]},True)
+                    cleanup=self._confirm_fence_cleanup_unlocked()
+                    return ReservationResult({"version":VERSION,"profile":PROFILE,"route_key":routekey,"member_key":memberkey,"token":existing["token"]},cleanup)
                 if rec["closed"]: raise RoutePoolError("route is closing; late joins are refused")
             else:
                 for old in s["routes"].values():
@@ -364,7 +361,7 @@ class C2RoutePool:
             ent=None if rec is None else rec["members"].get(receipt["member_key"])
             expected=None if ent is None else {"version":VERSION,"profile":PROFILE,"route_key":receipt["route_key"],"member_key":receipt["member_key"],"token":ent["token"]}
             if ent is None or expected != receipt: raise RoutePoolError("receipt is stale or does not identify this exact reservation")
-            if ent["released"]: return ReleaseResult(False,True)
+            if ent["released"]: return ReleaseResult(False,self._confirm_fence_cleanup_unlocked())
             ent["released"]=True
             rec["closed"]=True
             cleanup=self._commit(s)
