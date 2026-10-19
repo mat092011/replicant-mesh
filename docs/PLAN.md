@@ -1098,7 +1098,13 @@ zero skips in 7.384 seconds at head
 `15c2ffc76a29e6d1a809c6f662c30af5d46410a0` (492 files; digest
 `f7bb9c2d3c33f74dc2c547d55a2dc2ef7da41cea6970b64c664309435066fe04`). It
 covers selected-head checks and child-lease bounded close, not a full
-coordinator role, listener, route or READY. These focused runs do not close a
-C2 gate. C2.1–C2.6 remain open; C3 is unchanged. See the
+coordinator role, listener, route or READY. A separate host runtime-close suite
+then passed 10 causal tests (zero skips, 7.449 seconds) at head
+`4112877e6b67a0723cf80cb825df55af0b181ec4` (digest
+`6e596d8e4d6e8be7112835604aec51d747794aa2c25083ecaf8d4fd56c13d45d`, log
+SHA-256 `585659c03159656accd59cafebd6192f28a3999bb8085a2fef8076f24d906fd0`).
+It covers lock contention and retained child-lease completion, not complete
+process cleanup or physical resource enforcement. These focused runs do not
+close a C2 gate. C2.1–C2.6 remain open; C3 is unchanged. See the
 [component record](experiments/2026-10-19-participant-c2-components.md) for
 exact run identities, the retained setup failure and scope limitations.

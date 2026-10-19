@@ -1249,7 +1249,29 @@ SHA-256 `962f7638f2fe031c05e8d3875a2a5f6c147462bb4b26165d02c07a01e08a4b5f`.
 It covered actual assigned-head finish health, cancelled awaiter/held-CPU
 invalidation, child-lease lock-thread bounded close, and strict signed key,
 assignment and root checks. This is not a full coordinator role, listener,
-route or READY test. The host runtime-close follow-up and full fixed-role
-integration remain pending. Neither coordinator-root probe nor the
-host-service pass closes a C2 gate. C2.1–C2.6 remain open; C3 and research
-statuses are unchanged.
+route or READY test. A separate host runtime-close follow-up is recorded
+below. Full fixed-role integration remains pending. Neither coordinator-root
+probe nor host-service checks close a C2 gate. C2.1–C2.6 remain open; C3 and
+research statuses are unchanged.
+
+## Host runtime-close focused causal controls
+
+The focused host runtime-close suite passed 10 unique tests with zero skips,
+failures or errors in 7.449 seconds (2026-10-19 21:56:17.820–21:56:27.680
+UTC). Frozen head was `4112877e6b67a0723cf80cb825df55af0b181ec4`, source digest
+`6e596d8e4d6e8be7112835604aec51d747794aa2c25083ecaf8d4fd56c13d45d`; the
+log SHA-256 is
+`585659c03159656accd59cafebd6192f28a3999bb8085a2fef8076f24d906fd0`. It used
+the same pinned image and original bounded settings as the host-service run,
+including the offline read-only artifact volume.
+
+These 10 tests include the previous 8 host-runtime checks plus two causal
+async-close controls: actual lock contention during close and a real child
+binding lock held by another thread. They verify bounded error/heartbeat
+behavior and that the same retained lease task completes only after lock
+release, with sticky faults and no retry of an uncertain exit. The signed
+assigned-stage/direct-handler comparison and C1 Describe evidence remain as
+previously recorded. This does not establish a complete process, deployed
+route, RPC numerical equivalence or physical quota enforcement. Production
+source was main-reviewed; the focused result is component evidence only and
+does not close a C2 gate. C2.1–C2.6 remain open; C3 is unchanged.
