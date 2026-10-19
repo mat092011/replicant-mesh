@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import math
+import re
 import secrets
 import threading
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ MAX_LIVE_SESSIONS = 8
 TOMBSTONE_SECONDS = 30
 MAX_SESSION_SECONDS = 300
 MAX_SESSION_CALLBACKS = 16
+_INGRESS_HASH = re.compile(r"^[0-9a-f]{64}$")
+_INGRESS_GENERATION = re.compile(r"^[0-9a-f]{32}$")
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,7 @@ class _Record:
     hard_expiry_monotonic: float
     pending_deadline_monotonic: float
     lease_digest: bytes | None = None
+    ingress_identity: tuple[str, str, str] | None = None
     tombstone_deadline: float | None = None
     invalid_reason: str | None = None
     reclaimed: bool = False
@@ -56,12 +60,31 @@ class SessionClaim:
     key: tuple[str, str, str]
     owner: tuple
     is_new: bool
+    ingress_identity: tuple[str, str, str] | None = None
 
 
 def _credential_identity(credential):
     return (credential.account_id, credential.device_id, credential.role,
             credential.serial, credential.public_key_sha256,
             credential.certificate_sha256, credential.credential_epoch)
+
+
+def _validate_ingress_identity(value):
+    """Accept direct ingress or one fixed, immutable gateway stream identity."""
+    if value is None:
+        return None
+    if (type(value) is not tuple or len(value) != 3
+            or type(value[0]) is not str or value[0] != "gateway-v1"
+            or type(value[1]) is not str or not _INGRESS_HASH.fullmatch(value[1])
+            or type(value[2]) is not str
+            or not _INGRESS_GENERATION.fullmatch(value[2])):
+        raise SessionError("session ingress identity is malformed")
+    return value
+
+
+def _claim_matches(record, claim):
+    return (record.owner == claim.owner
+            and record.ingress_identity == claim.ingress_identity)
 
 
 def _owner_tuple(binding, actor, local, grant, model_id, parameters):
@@ -179,7 +202,9 @@ class SessionBindings:
     def claim(self, binding, *, actor, local, grant, model_id: str,
               lifetime_ms: int, max_positions: int, idle_lease_ms: int,
               hard_expiry_monotonic: float | None = None,
-              requested_expiry_monotonic: float | None = None) -> SessionClaim:
+              requested_expiry_monotonic: float | None = None,
+              ingress_identity=None) -> SessionClaim:
+        ingress_identity = _validate_ingress_identity(ingress_identity)
         if type(lifetime_ms) is not int or not 1 <= lifetime_ms <= 300_000:
             raise SessionError("OpenSession lifetime is outside the 300-second bound")
         if type(max_positions) is not int or not 1 <= max_positions <= 1152:
@@ -211,14 +236,15 @@ class SessionBindings:
                 raise SessionError("session cleanup notification is unhealthy")
             existing = self._records.get(key)
             if existing is not None:
-                if not hmac.compare_digest(repr(existing.owner).encode(), repr(owner).encode()):
+                if (not hmac.compare_digest(repr(existing.owner).encode(), repr(owner).encode())
+                        or existing.ingress_identity != ingress_identity):
                     raise SessionError("session operation is not authorized")
                 if existing.state != "open":
                     raise SessionError("session operation is not authorized")
                 if sample.monotonic >= existing.hard_expiry_monotonic:
                     self._invalidate_locked(existing, "session-hard-expiry")
                     raise SessionError("session operation is not authorized")
-                return SessionClaim(key, owner, False)
+                return SessionClaim(key, owner, False, ingress_identity)
             fields = dict(owner[0])
             namespace = _request_route_namespace(fields)
             for record in self._records.values():
@@ -252,9 +278,10 @@ class SessionBindings:
                              requested_expiry_monotonic=requested_expiry,
                              hard_expiry_monotonic=hard_expiry,
                              pending_deadline_monotonic=min(
-                                 sample.monotonic + self.pending_seconds, hard_expiry))
+                                 sample.monotonic + self.pending_seconds, hard_expiry),
+                             ingress_identity=ingress_identity)
             self._records[key] = record
-            return SessionClaim(key, owner, True)
+            return SessionClaim(key, owner, True, ingress_identity)
 
     def _lease_digest(self, lease: str) -> bytes:
         return hmac.digest(self._lease_key, lease.encode("ascii"), "sha256")
@@ -266,7 +293,7 @@ class SessionBindings:
         sample = self.clock.sample()
         with self._lock:
             record = self._records.get(claim.key)
-            if record is None or record.owner != claim.owner:
+            if record is None or not _claim_matches(record, claim):
                 raise SessionError("OpenSession owner claim was lost")
             if claim.is_new:
                 if (record.state != "pending"
@@ -286,7 +313,8 @@ class SessionBindings:
     def fail_open(self, claim: SessionClaim, *, cache_may_exist: bool):
         with self._lock:
             record = self._records.get(claim.key)
-            if record is None or not claim.is_new or record.owner != claim.owner:
+            if (record is None or not claim.is_new
+                    or not _claim_matches(record, claim)):
                 return
             if record.state != "pending":
                 return
@@ -296,7 +324,9 @@ class SessionBindings:
                 self._records.pop(claim.key, None)
 
     def check(self, binding, *, actor, local, grant, model_id: str,
-              session_id: str, worker_boot_id: str, lease_token: str):
+              session_id: str, worker_boot_id: str, lease_token: str,
+              ingress_identity=None):
+        ingress_identity = _validate_ingress_identity(ingress_identity)
         sample = self.clock.sample()
         key = (binding["target_device_id"], worker_boot_id, session_id)
         with self._lock:
@@ -306,7 +336,9 @@ class SessionBindings:
             record = self._records.get(key)
             expected_owner = (_expected_owner(record, binding, actor, local, grant, model_id)
                               if record is not None else None)
-            if record is None or record.state != "open" or record.owner != expected_owner:
+            if (record is None or record.state != "open"
+                    or record.owner != expected_owner
+                    or record.ingress_identity != ingress_identity):
                 raise SessionError("session operation is not authorized")
             if sample.monotonic >= record.hard_expiry_monotonic:
                 self._invalidate_locked(record, "session-hard-expiry")
@@ -326,7 +358,7 @@ class SessionBindings:
         with self._lock:
             self._prune_locked(sample.monotonic)
             record = self._records.get(claim.key)
-            if (record is None or record.owner != claim.owner
+            if (record is None or not _claim_matches(record, claim)
                     or record.state not in (("pending", "open") if claim.is_new else ("open",))):
                 raise SessionError("session owner claim is not live")
             limit = record.pending_deadline_monotonic if record.state == "pending" else record.hard_expiry_monotonic
@@ -343,7 +375,8 @@ class SessionBindings:
             record = self._records.get(key)
             if record is None:
                 raise SessionError("session owner record disappeared")
-            if claim is not None and (record.key != claim.key or record.owner != claim.owner):
+            if claim is not None and (record.key != claim.key
+                                      or not _claim_matches(record, claim)):
                 raise SessionError("session owner claim changed")
             if record.state == "pending":
                 if claim is None or not claim.is_new:
@@ -360,14 +393,16 @@ class SessionBindings:
             return deadline
 
     def assert_terminal(self, binding, *, actor, local, grant, model_id: str,
-                        key: tuple[str, str, str]):
+                        key: tuple[str, str, str], ingress_identity=None):
         """Validate only the immutable owner of its own completed terminal RPC."""
+        ingress_identity = _validate_ingress_identity(ingress_identity)
         sample = self.clock.sample()
         with self._lock:
             self._prune_locked(sample.monotonic)
             record = self._records.get(key)
             if (self._callback_faulted or record is None
                     or record.state not in ("terminating", "tombstone")
+                    or record.ingress_identity != ingress_identity
                     or record.owner != _expected_owner(record, binding, actor, local,
                                                        grant, model_id)):
                 raise SessionError("terminal response no longer matches its session owner")
@@ -414,6 +449,28 @@ class SessionBindings:
             record = self._records.get(key)
             if record is not None:
                 self._invalidate_locked(record, reason)
+
+    def invalidate_ingress(self, ingress_identity, reason="gateway-stream-lost") -> int:
+        """Invalidate live sessions bound to one lost authenticated stream.
+
+        Invalidation only notifies trusted runtime cleanup; it never claims
+        cache reclamation or frees a live owner slot.
+        """
+        ingress_identity = _validate_ingress_identity(ingress_identity)
+        if ingress_identity is None:
+            raise SessionError("direct ingress cannot be invalidated as a gateway stream")
+        if (type(reason) is not str or not 1 <= len(reason) <= 64
+                or not reason.isascii()
+                or any(ord(char) < 0x20 or ord(char) > 0x7e for char in reason)):
+            raise SessionError("session invalidation reason is malformed")
+        count = 0
+        with self._lock:
+            for record in self._records.values():
+                if (record.ingress_identity == ingress_identity
+                        and record.state in ("pending", "open")):
+                    self._invalidate_locked(record, reason)
+                    count += 1
+        return count
 
     def invalidate_all(self, reason: str):
         with self._lock:
