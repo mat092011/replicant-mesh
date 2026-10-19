@@ -28,8 +28,7 @@ from .ids import validate_id
 
 _CHANNEL_URI = "urn:steamboat:channel:v1:"
 _GATEWAY_ID = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$", re.ASCII)
-_SERIAL = re.compile(r"^[0-9a-f]{1,40}$", re.ASCII)
-_EPOCH = re.compile(r"^[1-9][0-9]{0,9}$", re.ASCII)
+_SERIAL = re.compile(r"^(?:[1-9a-f][0-9a-f]{0,39})$", re.ASCII)
 _EKUS = {
     "worker_stream": frozenset({"client"}),
     "gateway": frozenset({"client", "server"}),
@@ -128,6 +127,28 @@ def _endpoint_sans(dns_names, ip_addresses):
     if len(set(dns)) != len(dns) or len(set(ips)) != len(ips):
         raise CredentialError("duplicate endpoint SANs are forbidden")
     return tuple(sorted(dns)), tuple(sorted(ips))
+
+
+def make_channel_csr(private_key_pem, *, kind, identity, dns_names=(),
+                     ip_addresses=()):
+    """Create a P-256 CSR with exactly this channel profile's subject and SAN.
+
+    The URI SAN is the authoritative channel identity. The short subject CN
+    identifies only the profile. A CSR does not establish enrollment or policy.
+    """
+    key = _key(private_key_pem)
+    uri = _identity_uri(kind, identity)
+    dns_names, ip_addresses = _endpoint_sans(dns_names, ip_addresses)
+    names = [x509.UniformResourceIdentifier(uri)]
+    names.extend(x509.DNSName(name) for name in dns_names)
+    names.extend(x509.IPAddress(ipaddress.ip_address(address))
+                 for address in ip_addresses)
+    csr = (x509.CertificateSigningRequestBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,
+                                                    _common_name(kind))]))
+        .add_extension(x509.SubjectAlternativeName(names), critical=False)
+        .sign(key, hashes.SHA256()))
+    return csr.public_bytes(serialization.Encoding.PEM)
 
 
 def _check_clock(uncertainty_seconds):
@@ -232,7 +253,7 @@ def verify_channel_certificate(cert_pem, ca_pem, *, kind, expected_identity, now
     eku_names = frozenset("client" if oid == ExtendedKeyUsageOID.CLIENT_AUTH else
                           "server" if oid == ExtendedKeyUsageOID.SERVER_AUTH else "unknown"
                           for oid in eku_ext.value)
-    if eku_names != _EKUS[kind]:
+    if len(eku_ext.value) != len(eku_names) or eku_names != _EKUS[kind]:
         raise CredentialError("channel EKU does not match profile")
     if not isinstance(cert.public_key(), ec.EllipticCurvePublicKey) or not isinstance(
             cert.public_key().curve, ec.SECP256R1):

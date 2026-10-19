@@ -1,15 +1,16 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import unittest
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.x509.oid import (ExtendedKeyUsageOID, ExtensionOID, NameOID,
+                                   ObjectIdentifier)
 
 from steamboat_security.certificates import (generate_ca, generate_private_key_pem,
     issue_leaf, make_csr)
 from steamboat_security.channel_certificates import (
-    issue_channel_certificate, verify_channel_certificate)
+    issue_channel_certificate, make_channel_csr, verify_channel_certificate)
 from steamboat_security.errors import CredentialError
 
 
@@ -25,23 +26,28 @@ GATEWAY = "gw-eu-1"
 
 def _channel_csr(kind, identity, *, dns=(), ips=()):
     key_pem = generate_private_key_pem()
-    key = serialization.load_pem_private_key(key_pem, password=None)
-    if kind == "worker_stream":
-        uri = ("urn:steamboat:channel:v1:worker_stream:"
-               f"{identity['account_id']}:{identity['device_id']}:"
-               f"{identity['host_serial']}:{identity['credential_epoch']}")
-    else:
-        uri = f"urn:steamboat:channel:v1:gateway:{identity}"
-    names = [x509.UniformResourceIdentifier(uri)]
-    names.extend(x509.DNSName(name.lower()) for name in dns)
-    import ipaddress
-    names.extend(x509.IPAddress(ipaddress.ip_address(value)) for value in ips)
-    csr = (x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,
-            "channel-worker-stream" if kind == "worker_stream" else "channel-gateway")]))
-        .add_extension(x509.SubjectAlternativeName(names), critical=False)
-        .sign(key, hashes.SHA256()))
-    return key_pem, csr.public_bytes(serialization.Encoding.PEM)
+    return key_pem, make_channel_csr(key_pem, kind=kind, identity=identity,
+                                     dns_names=dns, ip_addresses=ips)
+
+
+def _resign(certificate_pem, ca_key_pem, *, replacements=None,
+            extra_extensions=(), not_before=None, not_after=None, subject=None):
+    cert = x509.load_pem_x509_certificate(certificate_pem)
+    signer = serialization.load_pem_private_key(ca_key_pem, password=None)
+    replacements = replacements or {}
+    builder = (x509.CertificateBuilder()
+        .subject_name(subject if subject is not None else cert.subject)
+        .issuer_name(cert.issuer).public_key(cert.public_key())
+        .serial_number(cert.serial_number)
+        .not_valid_before((not_before or cert.not_valid_before_utc).replace(tzinfo=None))
+        .not_valid_after((not_after or cert.not_valid_after_utc).replace(tzinfo=None)))
+    for extension in cert.extensions:
+        value, critical = replacements.get(extension.oid,
+            (extension.value, extension.critical))
+        builder = builder.add_extension(value, critical)
+    for oid, value, critical in extra_extensions:
+        builder = builder.add_extension(x509.UnrecognizedExtension(oid, value), critical)
+    return builder.sign(signer, hashes.SHA256()).public_bytes(serialization.Encoding.PEM)
 
 
 class ChannelCertificateTests(unittest.TestCase):
@@ -102,6 +108,58 @@ class ChannelCertificateTests(unittest.TestCase):
             self.verify(cert[:-20] + b"A" * 20)
         with self.assertRaises(CredentialError):
             self.verify(cert + cert)
+        with self.assertRaises(CredentialError):
+            self.verify(cert + b"unrecognized trailing content")
+
+    def test_wrong_ca_rejected(self):
+        cert = self.issue()
+        other_ca, _other_key = generate_ca(now=NOW)
+        with self.assertRaises(CredentialError):
+            verify_channel_certificate(cert, other_ca, kind="worker_stream",
+                expected_identity=WORKER, now=NOW)
+
+    def test_signed_leaves_with_wrong_profile_fields_rejected(self):
+        cert = self.issue()
+        parsed = x509.load_pem_x509_certificate(cert)
+        eku = parsed.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        ski = parsed.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
+        san = parsed.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        wrong_uri = x509.SubjectAlternativeName([
+            x509.UniformResourceIdentifier("urn:steamboat:channel:v1:gateway:other")])
+        invalid = [
+            ("unknown extension", _resign(cert, self.ca_key,
+                extra_extensions=((ObjectIdentifier("1.3.6.1.4.1.55555.1"), b"\\x05\\x00", False),))),
+            ("repeated EKU", _resign(cert, self.ca_key, replacements={
+                ExtensionOID.EXTENDED_KEY_USAGE: (x509.ExtendedKeyUsage(
+                    [ExtendedKeyUsageOID.CLIENT_AUTH, ExtendedKeyUsageOID.CLIENT_AUTH]), True)})),
+            ("wrong KU", _resign(cert, self.ca_key, replacements={
+                ExtensionOID.KEY_USAGE: (x509.KeyUsage(digital_signature=True,
+                    content_commitment=False, key_encipherment=True, data_encipherment=False,
+                    key_agreement=False, key_cert_sign=False, crl_sign=False,
+                    encipher_only=None, decipher_only=None), True)})),
+            ("wrong SKI", _resign(cert, self.ca_key, replacements={
+                ExtensionOID.SUBJECT_KEY_IDENTIFIER: (x509.SubjectKeyIdentifier(
+                    b"x" * len(ski.digest)), False)})),
+            ("too-long validity", _resign(cert, self.ca_key, not_after=
+                parsed.not_valid_after_utc + timedelta(seconds=1))),
+            ("wrong SAN URI", _resign(cert, self.ca_key, replacements={
+                ExtensionOID.SUBJECT_ALTERNATIVE_NAME: (wrong_uri, False)})),
+            ("wrong subject", _resign(cert, self.ca_key, subject=x509.Name([
+                x509.NameAttribute(NameOID.COMMON_NAME, "wrong-profile")]))),
+        ]
+        for label, candidate in invalid:
+            with self.subTest(label=label), self.assertRaises(CredentialError):
+                self.verify(candidate)
+
+    def test_make_channel_csr_rejects_non_p256_key_and_noncanonical_identity(self):
+        rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        rsa_pem = rsa_key.private_bytes(serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        with self.assertRaises(CredentialError):
+            make_channel_csr(rsa_pem, kind="worker_stream", identity=WORKER)
+        with self.assertRaises(CredentialError):
+            make_channel_csr(generate_private_key_pem(), kind="worker_stream",
+                identity={**WORKER, "host_serial": "0ab12"})
 
     def test_endpoint_mismatch_and_wildcard_rejected(self):
         cert = self.issue(dns=("worker.example",))
@@ -132,6 +190,19 @@ class ChannelCertificateTests(unittest.TestCase):
             issue_channel_certificate(self.ca_pem, self.ca_key, csr,
                 kind="worker_stream", identity=WORKER, now=NOW,
                 dns_names=("node.example", "node.example"))
+        valid = self.issue(dns=("node.example",))
+        parsed = x509.load_pem_x509_certificate(valid)
+        san = parsed.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        duplicated = x509.SubjectAlternativeName([
+            x509.UniformResourceIdentifier(
+                "urn:steamboat:channel:v1:worker_stream:"
+                f"{WORKER['account_id']}:{WORKER['device_id']}:ab12cd34:7"),
+            x509.DNSName("node.example"), x509.DNSName("node.example")])
+        self.assertNotEqual(san, duplicated)
+        signed_duplicate = _resign(valid, self.ca_key, replacements={
+            ExtensionOID.SUBJECT_ALTERNATIVE_NAME: (duplicated, False)})
+        with self.assertRaises(CredentialError):
+            self.verify(signed_duplicate)
 
 
 if __name__ == "__main__":
