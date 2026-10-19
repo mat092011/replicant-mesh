@@ -119,18 +119,17 @@ class GatewayRouter:
             if current is not None and current.live:
                 if current.identity == identity:
                     raise GatewayRouterError("worker generation is already registered")
+            replacing_bytes = (current.reservation_bytes
+                               if current is not None else 0)
+            if (self._reserved_bytes - replacing_bytes
+                    + stream.reservation_bound_bytes > self._reservation):
+                raise GatewayRouterError("aggregate worker stream reservation is exhausted")
+            if current is None and len(self._workers) >= MAX_WORKERS:
+                raise GatewayRouterError("worker registry is full")
             if current is not None:
-                replacing_bytes = current.reservation_bytes
-                if (self._reserved_bytes - replacing_bytes
-                        + stream.reservation_bound_bytes > self._reservation):
-                    raise GatewayRouterError("aggregate worker stream reservation is exhausted")
                 # Same device/boot replacement retires only the replaced stream.
                 current.stream.close()
                 self._drop_slot_locked(key, current)
-            elif stream.reservation_bound_bytes > self._reservation:
-                raise GatewayRouterError("aggregate worker stream reservation is exhausted")
-            if len(self._workers) >= MAX_WORKERS:
-                raise GatewayRouterError("worker registry is full")
             self._workers[key] = slot
             self._writer_owners.add(writer)
             self._reserved_bytes += stream.reservation_bound_bytes

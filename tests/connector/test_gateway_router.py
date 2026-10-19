@@ -35,6 +35,7 @@ class GatewayRouterRegistrationTests(unittest.TestCase):
     def setUp(self):
         self.fixture = GatewayRouterTwoHopTests(
             methodName="test_submit_binds_real_two_hops_hello_generation_and_core_c1")
+        self.addCleanup(self.fixture.doCleanups)
         self.fixture.setUp()
         self.router = GatewayRouter(
             gateway_id=self.fixture.router.gateway_id,
@@ -44,9 +45,6 @@ class GatewayRouterRegistrationTests(unittest.TestCase):
             communication_reservation_bytes=self.fixture.worker_server_stream.reservation_bound_bytes)
         self.stream = self.fixture.worker_server_stream
         self.cap = self.stream.registration
-
-    def tearDown(self):
-        self.fixture.doCleanups()
 
     def test_registry_accepts_only_owner_minted_live_hello_and_removes_exact_slot(self):
         identity = self.router.register_worker(self.stream)
@@ -67,6 +65,62 @@ class GatewayRouterRegistrationTests(unittest.TestCase):
         self.assertEqual(slot.writer.accounting.next_fragment_sequence, 2)
         self.assertTrue(self.router.remove_worker(cap))
         self.assertTrue(slot.writer.accounting.retired)
+
+    def test_distinct_live_streams_are_admitted_against_aggregate_reservation(self):
+        second_client, second_stream = self.fixture._new_worker_stream(
+            worker_boot_id=self.fixture.second_worker_boot_id,
+            channel_pem=self.fixture.second_worker_channel_pem,
+            channel_key=self.fixture.second_worker_channel_key)
+        self.addCleanup(second_client.close)
+        reservation = self.stream.reservation_bound_bytes
+        self.assertEqual(second_stream.reservation_bound_bytes, reservation)
+        self.router.register_worker(self.stream)
+        first_slot = self.router._workers[(self.cap.identity[1], self.cap.identity[2])]
+        first_generation = first_slot.identity[3]
+        first_writer = first_slot.writer
+
+        # The router capacity is exactly one stream. A second, distinct live
+        # TLS/HELLO capability must be refused without disturbing either owner.
+        with self.assertRaisesRegex(GatewayRouterError, "aggregate worker stream"):
+            self.router.register_worker(second_stream)
+        self.assertEqual(self.router._reserved_bytes, reservation)
+        self.assertEqual(first_slot.identity[3], first_generation)
+        self.assertIs(self.router._workers[(self.cap.identity[1], self.cap.identity[2])],
+                      first_slot)
+        self.assertFalse(first_writer.accounting.retired)
+        self.assertFalse(self.stream.closed)
+        self.assertFalse(second_stream.closed)
+        self.assertEqual(second_stream.writer.accounting.next_fragment_sequence, 2)
+
+        exact_fit = GatewayRouter(
+            gateway_id=self.fixture.router.gateway_id,
+            gateway_certificate_pem=self.fixture.base.gateway_cert,
+            gateway_private_key_pem=self.fixture.base.gateway_key,
+            clock=self.fixture.base.clock,
+            communication_reservation_bytes=2 * reservation)
+        exact_fit.register_worker(self.stream)
+        exact_fit.register_worker(second_stream)
+        self.assertEqual(exact_fit._reserved_bytes, 2 * reservation)
+        self.assertEqual(len(exact_fit._workers), 2)
+        self.assertTrue(exact_fit.remove_worker(self.cap))
+        self.assertEqual(exact_fit._reserved_bytes, reservation)
+        self.assertEqual(len(exact_fit._workers), 1)
+        self.assertFalse(second_stream.closed)
+        self.assertTrue(is_registered_worker_channel_stream(second_stream))
+        self.assertFalse(exact_fit.remove_worker(self.cap))
+
+    def test_replacement_releases_only_the_replaced_stream_reservation(self):
+        self.router.register_worker(self.stream)
+        old_reserved = self.router._reserved_bytes
+        replacement_client, replacement_stream = self.fixture._new_worker_stream()
+        self.addCleanup(replacement_client.close)
+        self.router.register_worker(replacement_stream)
+        self.assertEqual(self.router._reserved_bytes, old_reserved)
+        self.assertTrue(self.stream.closed)
+        self.assertFalse(replacement_stream.closed)
+        self.assertIs(self.router._slot(self.fixture.device_id,
+                                         self.fixture.worker_boot_id).stream,
+                      replacement_stream)
 
     def test_heartbeat_codec_is_fixed_and_rejects_noncanonical_payloads(self):
         encoded = encode_heartbeat(PING, 7)
@@ -211,6 +265,17 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             kind="worker_stream", identity=worker_identity,
             now=datetime.fromtimestamp(now, timezone.utc), lifetime_seconds=800)
         worker_channel_cert = x509.load_pem_x509_certificate(self.worker_channel_pem)
+        self.second_worker_boot_id = "e" * 32
+        second_channel_key = generate_private_key_pem()
+        second_channel_csr = make_channel_csr(
+            second_channel_key, kind="worker_stream", identity=worker_identity)
+        self.second_worker_channel_pem = issue_channel_certificate(
+            self.base.gateway_ca, self.base.gateway_ca_key, second_channel_csr,
+            kind="worker_stream", identity=worker_identity,
+            now=datetime.fromtimestamp(now, timezone.utc), lifetime_seconds=800)
+        self.second_worker_channel_key = second_channel_key
+        second_channel_cert = x509.load_pem_x509_certificate(
+            self.second_worker_channel_pem)
         policy = json.loads(json.dumps(self.base.policy_payload))
         policy["revision"] += 1
         policy["workers"][0].update(
@@ -218,6 +283,16 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             channel_certificate_sha256=certificate_sha256(worker_channel_cert),
             channel_public_key_sha256=public_key_sha256(worker_channel_cert.public_key()),
         )
+        second_worker_policy = dict(policy["workers"][0])
+        second_worker_policy.update(
+            worker_boot_id=self.second_worker_boot_id,
+            channel_serial=serial_hex(second_channel_cert.serial_number),
+            channel_certificate_sha256=certificate_sha256(second_channel_cert),
+            channel_public_key_sha256=public_key_sha256(second_channel_cert.public_key()),
+        )
+        policy["workers"].append(second_worker_policy)
+        policy["workers"].sort(key=lambda item: (item["device_id"],
+                                                  item["worker_boot_id"]))
         policy["routes"][0]["methods"] = sorted(WORKER_METHODS)
         self.base.policy_store.install(sign_channel_policy(
             policy, egress_tests._private_pem(self.base.policy_key)))
@@ -373,10 +448,14 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             time.sleep(0.001)
         self.fail("worker route message was not delivered within one second")
 
-    def _new_worker_stream(self):
+    def _new_worker_stream(self, *, worker_boot_id=None, channel_pem=None,
+                           channel_key=None):
+        worker_boot_id = worker_boot_id or self.worker_boot_id
+        channel_pem = channel_pem or self.worker_channel_pem
+        channel_key = channel_key or self.worker_channel_key
         client_tls = OwnedWorkerTLS.connect(
-            worker_certificate_pem=self.worker_channel_pem,
-            worker_private_key_pem=self.worker_channel_key,
+            worker_certificate_pem=channel_pem,
+            worker_private_key_pem=channel_key,
             gateway_ca_pem=self.base.gateway_ca,
             endpoint_host="worker.gateway.example", endpoint_port=443,
             clock=self.base.clock)
@@ -392,7 +471,7 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
         verifier = GatewayDelegationVerifier(
             self.base.policy_store, clock=self.base.clock,
             gateway_ca_pem=self.base.gateway_ca, participant_ca_pem=self.fx.ca_pem,
-            local_identity=LocalIdentity(self.host["certificate"], self.worker_boot_id,
+            local_identity=LocalIdentity(self.host["certificate"], worker_boot_id,
                                          self.model_id, self.assignment_id),
             endpoint_host="worker.gateway.example", endpoint_port=443)
         ingress = GatewayWorkerIngress.from_tls(

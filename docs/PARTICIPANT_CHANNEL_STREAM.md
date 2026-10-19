@@ -46,11 +46,12 @@ response fragments use data classification. Incoming cleanup mode is explicit
 and irreversible. It first latches the decoder into control-only mode, then
 meters socket receives as cleanup. The decoder rejects DATA/RESPONSE as soon as
 the complete fragment header identifies that lane, before copying or
-reassembling its payload. A TLS read can already have delivered one bounded
-record (at most 16 KiB) before its decrypted header is available for
-classification; those bytes may therefore already be charged as cleanup. Once
-the header is rejected, the whole stream retires and performs no further socket
-reads. Entering cleanup mode with a partial header, frame, or message also
+reassembling its payload. Before its decrypted header is available for
+classification, the driver may already have read and charged TCP payload that
+decrypts to as much as the bounded 16 KiB plaintext chunk, plus TLS record
+overhead. Thus the charged encrypted payload can exceed 16 KiB. Once the header
+is rejected, the whole stream retires and performs no further socket reads.
+Entering cleanup mode with a partial header, frame, or message also
 retires the stream, because its classification is incomplete. The fixed framed
 caller must validate operation-specific cleanup semantics; this component does
 not claim that a caller-provided kind proves cleanup intent.
