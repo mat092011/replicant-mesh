@@ -224,26 +224,28 @@ class GatewayWorkerIngress:
 
     def poll_unavailable(self):
         """Bounded liveness poll for an integration-owned <=5s monitor loop."""
-        try:
-            with self._state.lock:
+        with self._state.lock:
+            try:
                 _view, _worker, _gateway, sample = self._policy_and_worker()
                 if sample.monotonic - self._state.last_heartbeat >= HEARTBEAT_TIMEOUT_SECONDS:
                     raise GatewayIngressError("gateway heartbeat timed out")
                 if sample.monotonic >= self._state.deadline:
                     raise GatewayIngressError("gateway ingress expired")
                 return False
-        except Exception as error:
-            self.close("gateway-heartbeat-timeout" if "heartbeat" in str(error)
-                       else "gateway-policy-changed" if "policy" in str(error)
-                       else "gateway-clock-fault")
-            return True
+            except Exception as error:
+                self._close_locked("gateway-heartbeat-timeout" if "heartbeat" in str(error)
+                                   else "gateway-policy-changed" if "policy" in str(error)
+                                   else "gateway-clock-fault")
+                return True
 
     def heartbeat(self, generation: str, sequence: int):
         with self._state.lock:
             self._consume_locked(generation, sequence)
             try:
                 _view, _worker, _gateway, sample = self._policy_and_worker()
-                if sample.monotonic >= self._state.deadline:
+                if (sample.monotonic >= self._state.deadline
+                        or sample.monotonic - self._state.last_heartbeat
+                        >= HEARTBEAT_TIMEOUT_SECONDS):
                     raise GatewayIngressError("gateway ingress expired")
                 self._state.last_heartbeat = sample.monotonic
                 return True
@@ -264,8 +266,13 @@ class GatewayWorkerIngress:
 
     def verify_operation(self, envelope, metadata, raw_request_bytes, frame_sequence):
         with self._state.lock:
-            self._consume_locked(self.stream_generation, frame_sequence)
             try:
+                _view, _worker, _gateway, sample = self._policy_and_worker()
+                if (sample.monotonic >= self._state.deadline
+                        or sample.monotonic - self._state.last_heartbeat
+                        >= HEARTBEAT_TIMEOUT_SECONDS):
+                    raise GatewayIngressError("gateway ingress is unavailable")
+                self._consume_locked(self.stream_generation, frame_sequence)
                 delegation = self.verifier.verify(
                     envelope, gateway_peer_certificate_pem=self.gateway_certificate_pem,
                     metadata=metadata, request_bytes=raw_request_bytes,
@@ -273,6 +280,11 @@ class GatewayWorkerIngress:
                     expected_frame_sequence=frame_sequence)
                 if delegation.ingress_identity != self.ingress_identity:
                     raise GatewayIngressError("delegation escaped its TLS generation")
+                _view, _worker, _gateway, sample = self._policy_and_worker()
+                if (sample.monotonic >= self._state.deadline
+                        or sample.monotonic - self._state.last_heartbeat
+                        >= HEARTBEAT_TIMEOUT_SECONDS):
+                    raise GatewayIngressError("gateway ingress expired during verification")
                 guard = GatewayOperationGuard(delegation, self.ingress_identity,
                                               self, self._guard_token)
                 self._guards.add(guard)
@@ -295,8 +307,8 @@ class GatewayWorkerIngress:
     def _assert_guard_live(self, guard):
         if type(guard) is not GatewayOperationGuard or guard._owner is not self:
             raise GatewayIngressError("gateway operation guard is not owned by this ingress")
-        try:
-            with self._state.lock:
+        with self._state.lock:
+            try:
                 if (guard not in self._guards or guard._token is not self._guard_token
                         or self._state.closed):
                     raise GatewayIngressError("gateway operation guard is retired")
@@ -308,10 +320,10 @@ class GatewayWorkerIngress:
                     raise GatewayIngressError("gateway operation guard has expired")
                 guard.delegation.assert_live(self.verifier)
                 return True
-        except Exception as error:
-            self.close("gateway-policy-changed" if "policy" in str(error)
-                       else "gateway-clock-fault")
-            raise GatewayIngressError("gateway operation is no longer live") from error
+            except Exception as error:
+                self._close_locked("gateway-policy-changed" if "policy" in str(error)
+                                   else "gateway-clock-fault")
+                raise GatewayIngressError("gateway operation is no longer live") from error
 
     def _verify_live_pins(self, view, worker, gateway, sample):
         channel = verify_channel_certificate(

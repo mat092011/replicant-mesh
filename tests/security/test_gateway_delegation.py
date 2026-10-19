@@ -295,6 +295,12 @@ class GatewayDelegationTests(unittest.TestCase):
         self.clock._uncertainty = broken_clock
         with self.assertRaises(SecurityError):
             verified.assert_live(self.verifier)
+        self.assertLess(verified.deadline_monotonic, prior_deadline)
+        self.assertEqual(verified.deadline_monotonic, float("-inf"))
+        self.clock._uncertainty = lambda: 0.0
+        self.clock.revalidate_after_resume(trusted_clock=True)
+        with self.assertRaises(SecurityError):
+            verified.assert_live(self.verifier)
 
     def test_concurrent_clock_fault_wins_over_inflight_liveness_success(self):
         verified = self.verify()
@@ -342,12 +348,6 @@ class GatewayDelegationTests(unittest.TestCase):
             return verified.assert_live(verifier)
         except Exception:
             return False
-        self.assertLess(verified.deadline_monotonic, prior_deadline)
-        self.assertEqual(verified.deadline_monotonic, float("-inf"))
-        self.clock._uncertainty = lambda: 0.0
-        self.clock.revalidate_after_resume(trusted_clock=True)
-        with self.assertRaises(SecurityError):
-            verified.assert_live(self.verifier)
 
     def test_public_deadline_tracks_monotonic_tightening_and_stays_tight(self):
         verified = self.verify()

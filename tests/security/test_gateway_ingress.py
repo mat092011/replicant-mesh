@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ssl
+import threading
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -143,6 +144,76 @@ class GatewayIngressTests(unittest.TestCase):
         self.assertTrue(self.ingress.poll_unavailable())
         with self.assertRaises(GatewayIngressError):
             self.ingress.heartbeat(self.ingress.stream_generation, 1)
+
+    def test_late_heartbeat_cannot_revive_timed_out_stream_before_poll(self):
+        self.fixture.mono += 60.001
+        self.fixture.wall += 60.001
+        with self.assertRaises(GatewayIngressError):
+            self.ingress.heartbeat(self.ingress.stream_generation, 1)
+        self.assertTrue(self.ingress._state.closed)
+        self.assertTrue(self.ingress.poll_unavailable())
+
+    def test_operation_after_heartbeat_timeout_mints_no_guard(self):
+        self.fixture.mono += 60.001
+        self.fixture.wall += 60.001
+        envelope = self.fixture.make_delegation(changes={
+            "policy_revision": self.ingress.policy_revision,
+            "policy_digest": self.ingress.policy_digest,
+            "stream_generation": self.ingress.stream_generation,
+            "frame_sequence": 1,
+        })
+        with self.assertRaises(GatewayIngressError):
+            self.ingress.verify_operation(
+                envelope, self.fixture.metadata, self.fixture.request, 1)
+        self.assertTrue(self.ingress._state.closed)
+        self.assertEqual(len(self.ingress._guards), 0)
+
+    def test_operation_after_policy_refresh_mints_no_guard(self):
+        replacement = dict(self.fixture.payload)
+        replacement["revision"] = 3
+        self.fixture.policy_store.install(sign_channel_policy(
+            replacement, delegation_tests.private_pem(self.fixture.operator_key)))
+        envelope = self.fixture.make_delegation(changes={
+            "policy_revision": self.ingress.policy_revision,
+            "policy_digest": self.ingress.policy_digest,
+            "stream_generation": self.ingress.stream_generation,
+            "frame_sequence": 1,
+        })
+        with self.assertRaises(GatewayIngressError):
+            self.ingress.verify_operation(
+                envelope, self.fixture.metadata, self.fixture.request, 1)
+        self.assertTrue(self.ingress._state.closed)
+        self.assertEqual(len(self.ingress._guards), 0)
+
+    def test_liveness_fault_retires_before_clock_revalidation_can_resume(self):
+        entered = threading.Event()
+        release = threading.Event()
+        original = self.ingress._policy_and_worker
+
+        def blocked_failure():
+            entered.set()
+            self.assertTrue(release.wait(2))
+            raise GatewayIngressError("policy changed during liveness check")
+
+        self.ingress._policy_and_worker = blocked_failure
+        result = []
+        thread = threading.Thread(
+            target=lambda: result.append(self.ingress.poll_unavailable()))
+        thread.start()
+        self.assertTrue(entered.wait(2))
+        self.fixture.clock._uncertainty = lambda: (_ for _ in ()).throw(
+            RuntimeError("clock source unavailable"))
+        with self.assertRaises(Exception):
+            self.fixture.clock.sample()
+        self.fixture.clock._uncertainty = lambda: 0.0
+        self.fixture.clock.revalidate_after_resume(trusted_clock=True)
+        release.set()
+        thread.join(2)
+        self.ingress._policy_and_worker = original
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result, [True])
+        self.assertTrue(self.ingress._state.closed)
+        self.assertTrue(self.ingress.poll_unavailable())
 
     def test_operation_guard_is_owned_and_tracks_ingress_liveness(self):
         envelope = self.fixture.make_delegation(changes={
