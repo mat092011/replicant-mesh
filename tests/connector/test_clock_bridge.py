@@ -230,7 +230,7 @@ class ClockBridgeTests(unittest.TestCase):
             if owner._child_pid is not None and not owner._child_reaped:
                 owner.confirm_child_reaped(owner._child_pid)
             thread = owner._server_thread
-            if thread is not None:
+            if thread is not None and thread.ident is not None:
                 thread.join(1.0)
             _ = owner.quiescent
 
