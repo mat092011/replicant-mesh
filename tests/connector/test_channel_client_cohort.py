@@ -13,12 +13,12 @@ from steamboat_runtime.protocol.wire import Request, Response, serialize_message
 from steamboat_security.outbound import OutboundAuthorizer, OutboundTarget
 from steamboat_security.gateway_egress import GatewayEgressError
 from steamboat_security.snapshot import sign_snapshot
-from tests.connector.test_channel_client import CoordinatorChannelClientTests
+from tests.connector import test_channel_client as channel_client_tests
 from tests.connector import test_gateway_router as router_fixture
 from tests.security import test_identity_core as identity_tests
 
 
-class CoordinatorChannelCohortTests(CoordinatorChannelClientTests):
+class CoordinatorChannelCohortTests(channel_client_tests.CoordinatorChannelClientTests):
     def setUp(self):
         self._fixture_patches = []
         original_sign = router_fixture.sign_channel_policy
@@ -131,7 +131,7 @@ class CoordinatorChannelCohortTests(CoordinatorChannelClientTests):
         third_proxy = self.client.bind_target(third_view)
         fourth_target = OutboundTarget.from_record(
             service="steamboat.v1.Worker", record=self.fx.host_record,
-            boot_id="g" * 32, model_id=self.fx.model_id,
+            boot_id="1" * 32, model_id=self.fx.model_id,
             assignment_id=self.fx.assignment_id)
         fourth_authorizer = OutboundAuthorizer(
             local_identity=self.fx.base.adapter.local_identity,
@@ -167,14 +167,15 @@ class CoordinatorChannelCohortTests(CoordinatorChannelClientTests):
         first = await self._server_request(primary_call, description="primary target")
         second = await self._server_request(secondary_call, description="secondary target")
         third = await self._server_request(third_call, description="third target")
-        decoded = [wire.decode_bundle(item.payload, fragment_kind=item.kind)
+        decoded = [(item.message_id,
+                    wire.decode_bundle(item.payload, fragment_kind=item.kind))
                    for item in (first, second, third)]
         requests = []
-        for bundle in decoded:
+        for message_id, bundle in decoded:
             request = Request()
             request.ParseFromString(bundle.protobuf)
-            requests.append((bundle, request.worker_boot_id))
-        self.assertEqual({boot for _bundle, boot in requests}, {
+            requests.append((message_id, bundle, request.worker_boot_id))
+        self.assertEqual({boot for _message_id, _bundle, boot in requests}, {
             self.fx.worker_boot_id, self.fx.second_worker_boot_id, "f" * 32})
         self.assertEqual(self.client._data_count, 3)
         self.assertEqual(len(self.client._owners), 3)
@@ -182,12 +183,12 @@ class CoordinatorChannelCohortTests(CoordinatorChannelClientTests):
 
         # Deliver replies in reverse request order; the shared ID map must
         # correlate each response with its target-specific authorization.
-        for bundle, boot in reversed(requests):
+        for message_id, _bundle, boot in reversed(requests):
             response = Response(protocol_version=1,
                 manifest_fingerprint=self.fx.model_id,
                 worker_boot_id=boot, code="OK")
             self.fx.coordinator_server_stream.enqueue(
-                kind=wire.RESPONSE, message_id=bundle.message_id,
+                kind=wire.RESPONSE, message_id=message_id,
                 payload=wire.encode_bundle(
                     "Describe", wire.BUNDLE_RESPONSE,
                     fragment_kind=wire.RESPONSE,

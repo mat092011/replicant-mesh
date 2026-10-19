@@ -21,6 +21,9 @@ do not independently own or close the transport.
 The route guard uses the same C1 scope checks and live signed-policy/deadline
 checks as the primary route. The SDK proxy is only a transport adapter: it does
 not install enrollment or grants, select a worker, assert process ownership, or
-establish loaded-model readiness. The focused fixture exercises signed policy,
-C1 authorizers, TLS and HELLO with two worker boots and interleaved replies. It
-does not establish deployed routing or C2 acceptance.
+establish loaded-model readiness. The focused fixture exercises signed policy
+and C1 authorizers over the real coordinator TLS/HELLO SDK stream with three
+target boot IDs and interleaved manual replies. The third worker's
+channel-policy certificate fields are synthetic; this fixture does not connect
+three worker TLS endpoints or execute work on three workers. It does not
+establish deployed routing or C2 acceptance.

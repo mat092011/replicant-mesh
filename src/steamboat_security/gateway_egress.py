@@ -181,14 +181,15 @@ class GatewayCoordinatorEgress:
         self._gateway_verified = False
         if self._tls.handshake_complete:
             self._verify_gateway_peer()
-        self._initialized = True
         primary = GatewayEgressTargetView(
             _TARGET_TOKEN, self, authorizer, logical_host_certificate_pem)
         key = _target_key(authorizer)
         self._target_views[key] = primary
+        self._primary_view = primary
         with _GUARD_LOCK:
             _MINTED_EGRESS.add(self)
             _MINTED_TARGETS.add(primary)
+        self._initialized = True
 
     def __setattr__(self, name, value):
         if getattr(self, "_initialized", False) and name in {
@@ -197,7 +198,8 @@ class GatewayCoordinatorEgress:
                 "_gateway_policy", "_worker_policy", "_host_dns", "_host_ip",
                 "_gateway_ca_pem", "_tls", "_coordinator_identity",
                 "_configured_coordinator_certificate_pem",
-                "_configured_coordinator_certificate_der", "_target_views"}:
+                "_configured_coordinator_certificate_der", "_target_views",
+                "_primary_view"}:
             raise AttributeError("gateway egress authority and transport are immutable")
         object.__setattr__(self, name, value)
 
@@ -267,6 +269,7 @@ class GatewayCoordinatorEgress:
         """Run the live policy/profile check without taking queued ciphertext."""
         with self._lock:
             self._assert_transport_live_locked()
+            self._assert_primary_authority_locked()
             return self._gateway_verified
 
     @property
@@ -330,6 +333,8 @@ class GatewayCoordinatorEgress:
     def _assert_transport_live_locked(self):
         if self._closed or self._faulted or not is_owned_worker_tls(self._tls):
             raise GatewayEgressError("gateway egress generation is closed or faulted")
+        if getattr(self, "_initialized", False):
+            self._assert_primary_authority_locked()
         if not self._tls.handshake_complete:
             try:
                 pending_view = self.policy_store.current()
@@ -401,11 +406,25 @@ class GatewayCoordinatorEgress:
         return self._assert_guard_live_for(identity, deadline, None)
 
     def _assert_guard_target(self, identity, method, authorizer=None):
-        adapter = self.authorizer if authorizer is None else authorizer
-        if (identity[2][8:12] != _target_key(adapter)
-                or identity[3] != adapter.target.certificate_sha256
-                or method not in identity[2][12]):
-            raise GatewayEgressError("route guard target differs from its C1 authorizer")
+        with self._lock:
+            if authorizer is None:
+                self._assert_primary_authority_locked()
+                adapter = self.authorizer
+            else:
+                adapter = authorizer
+            if (identity[2][8:12] != _target_key(adapter)
+                    or identity[3] != adapter.target.certificate_sha256
+                    or method not in identity[2][12]):
+                raise GatewayEgressError("route guard target differs from its C1 authorizer")
+
+    def _assert_primary_authority_locked(self):
+        try:
+            self._primary_view._assert_authority_live_locked()
+        except Exception as error:
+            self._fault_locked()
+            if isinstance(error, GatewayEgressError):
+                raise
+            raise GatewayEgressError("primary target authority changed") from error
 
     def _assert_guard_live_for(self, identity, deadline, target_view):
         with self._lock:
@@ -417,6 +436,8 @@ class GatewayCoordinatorEgress:
                 raise GatewayEgressError("gateway target view is no longer owned")
             if target_view is not None:
                 target_view._assert_authority_live_locked()
+            else:
+                self._assert_primary_authority_locked()
             if identity[0] is not self._generation or identity[1] != self._view.policy_digest:
                 self._fault_locked()
                 raise GatewayEgressError("gateway route belongs to a stale generation")
@@ -434,7 +455,8 @@ class GatewayCoordinatorEgress:
     def mint_route_guard(self, *, method, trusted_request_context):
         """Authorize the exact coordinator/worker route for one C1 worker call."""
         return self._mint_route_guard_for(
-            self.authorizer, self.logical_host_certificate_pem, self,
+            self._primary_view.authorizer,
+            self._primary_view.logical_host_certificate_pem, self,
             method=method, trusted_request_context=trusted_request_context)
 
     def _mint_route_guard_for(self, adapter, logical_host_certificate_pem,
@@ -446,6 +468,8 @@ class GatewayCoordinatorEgress:
             self._assert_transport_live_locked()
             if type(guard_owner) is GatewayEgressTargetView:
                 guard_owner._assert_authority_live_locked()
+            else:
+                self._assert_primary_authority_locked()
             if not self._gateway_verified:
                 raise GatewayEgressError("gateway TLS channel is not authenticated")
             if method not in WORKER_METHODS:

@@ -1,6 +1,7 @@
 """C2 target views share one policy-pinned coordinator egress owner."""
 
 import unittest
+import copy
 
 from steamboat_security.authorization import LocalIdentity
 from steamboat_security.gateway_egress import (
@@ -84,6 +85,34 @@ class GatewayEgressCohortTests(unittest.TestCase):
                     trusted_request_context=self.fx.adapter.create_bootstrap_context())
         finally:
             self.fx.adapter.target = original
+
+    def test_primary_egress_pins_authority_before_root_mint(self):
+        original = self.fx.adapter.target
+        self.fx.adapter.target = copy.copy(original)
+        with self.assertRaises(GatewayEgressError):
+            self.fx.egress.mint_route_guard(
+                method="Describe",
+                trusted_request_context=self.fx.adapter.create_bootstrap_context())
+        self.assertTrue(self.fx.egress._faulted)
+
+    def test_primary_egress_pins_authority_after_mint_before_claim(self):
+        context = self.fx.adapter.create_bootstrap_context()
+        guard = self.fx.egress.mint_route_guard(
+            method="Describe", trusted_request_context=context)
+        self.fx.adapter.target = copy.copy(self.fx.adapter.target)
+        with self.assertRaises(GatewayEgressError):
+            guard._claim(self.fx.egress, "Describe", context)
+        self.assertTrue(self.fx.egress._faulted)
+
+    def test_primary_egress_pins_authority_after_claim_on_live_check(self):
+        context = self.fx.adapter.create_bootstrap_context()
+        guard = self.fx.egress.mint_route_guard(
+            method="Describe", trusted_request_context=context)
+        guard._claim(self.fx.egress, "Describe", context)
+        self.fx.adapter.target = copy.copy(self.fx.adapter.target)
+        with self.assertRaises(GatewayEgressError):
+            guard.assert_live()
+        self.assertTrue(self.fx.egress._faulted)
 
 
 if __name__ == "__main__":

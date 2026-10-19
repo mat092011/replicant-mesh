@@ -521,7 +521,7 @@ class CoordinatorChannelClient:
 class CoordinatorChannelTargetClient:
     """Sealed target-specific SDK surface sharing one coordinator client."""
 
-    __slots__ = ("_client", "_target_view", "_token")
+    __slots__ = ("_client", "_target_view", "_token", "__weakref__")
 
     def __init__(self, token, client, target_view):
         if token is not _CLIENT_TARGET_TOKEN:
