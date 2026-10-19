@@ -189,7 +189,10 @@ class ConsumerRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(run.closed, 1)
         self.assertTrue(stream_closed.is_set())
         self.assertTrue(authorizer.contexts[0].closed)
-        self.assertTrue(run._queue.empty())
+        queued = tuple(run._queue._queue)
+        self.assertEqual(len(queued), 2)
+        self.assertFalse(any(getattr(item, "type", None) == "token"
+                             for item in queued))
         with self.assertRaises(ConnectorError) as caught:
             await run.result
         self.assertEqual(caught.exception.code, "UNAVAILABLE")
@@ -200,7 +203,7 @@ class ConsumerRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
         transport = SecureConsumerTransport._for_tests(client, FakeAuthorizer())
         run = await transport.submit(self.submission(tokens=2))
         await asyncio.wait_for(run.closed, 1)
-        self.assertEqual(run._queue.qsize(), 3)
+        self.assertEqual(run._queue.qsize(), 4)
         transport.request_runtime_invalidation("owner stopped")
         with self.assertRaises(ConnectorError) as event_error:
             await run.__anext__()
@@ -209,6 +212,138 @@ class ConsumerRuntimeGuardTests(unittest.IsolatedAsyncioTestCase):
             await run.result
         self.assertEqual(result_error.exception.code, "UNAVAILABLE")
         self.assertTrue(run._queue.empty())
+        await run.aclose()
+
+    async def test_queued_event_guard_failure_keeps_driver_owned_until_cleanup(self):
+        second_started, never_release = asyncio.Event(), asyncio.Event()
+        close_started, allow_close = asyncio.Event(), asyncio.Event()
+
+        async def generation(_ids, _count):
+            try:
+                yield {"type": "token", "index": 0, "token_id": 9}
+                yield {"type": "token", "index": 1, "token_id": 10}
+                second_started.set()
+                await never_release.wait()
+            finally:
+                close_started.set()
+                await allow_close.wait()
+
+        client = FakeClient(generation=generation)
+        authorizer = FakeAuthorizer()
+        transport = SecureConsumerTransport._for_tests(client, authorizer)
+        run = await transport.submit(self.submission(tokens=3))
+        first = await asyncio.wait_for(run.__anext__(), 1)
+        self.assertEqual(first.token_id, 9)
+        await asyncio.wait_for(second_started.wait(), 1)
+        self.assertTrue(transport.request_runtime_invalidation("owner stopped"))
+        with self.assertRaises(ConnectorError) as caught:
+            await run.__anext__()
+        self.assertEqual(caught.exception.code, "UNAVAILABLE")
+        await asyncio.wait_for(close_started.wait(), 1)
+        self.assertEqual(transport.status()["active_runs"], 1)
+        allow_close.set()
+        await asyncio.wait_for(run.closed, 1)
+        self.assertTrue(authorizer.contexts[0].closed)
+        self.assertEqual(transport.status()["active_runs"], 1)
+        await run.aclose()
+        self.assertEqual(transport.status()["active_runs"], 0)
+
+    async def test_result_guard_executes_in_resuming_caller_task(self):
+        client = FakeClient()
+        transport = SecureConsumerTransport._for_tests(client, FakeAuthorizer())
+        run = await transport.submit(self.submission())
+        await asyncio.wait_for(run.closed, 1)
+        caller = asyncio.current_task()
+        seen = []
+        transport._runtime_guard = lambda: seen.append(asyncio.current_task())
+        result = await run.result
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(seen, [caller])
+
+    async def test_call_soon_invalidation_before_result_resume_withholds_result(self):
+        started, never_release = asyncio.Event(), asyncio.Event()
+
+        async def generation(_ids, _count):
+            yield {"type": "token", "index": 0, "token_id": 9}
+            started.set()
+            await never_release.wait()
+            yield {"type": "result", "status": "completed",
+                   "cleanup_complete": True, "token_ids": [9]}
+
+        client = FakeClient(generation=generation)
+        transport = SecureConsumerTransport._for_tests(client, FakeAuthorizer())
+        run = await transport.submit(self.submission())
+        self.assertEqual((await asyncio.wait_for(run.__anext__(), 1)).token_id, 9)
+        await asyncio.wait_for(started.wait(), 1)
+        result_awaitable = run.result
+        loop = asyncio.get_running_loop()
+        loop.call_soon(transport.request_runtime_invalidation, "owner stopped")
+        await asyncio.sleep(0)
+        with self.assertRaises(ConnectorError) as caught:
+            await result_awaitable
+        self.assertEqual(caught.exception.code, "UNAVAILABLE")
+        await asyncio.wait_for(run.closed, 1)
+        await run.aclose()
+
+    async def test_guard_failure_closes_unstarted_coroutine_argument(self):
+        transport = SecureConsumerTransport._for_tests(
+            FakeClient(), FakeAuthorizer(), runtime_guard=lambda: False)
+
+        async def unstarted():
+            return None
+
+        operation = unstarted()
+        with self.assertRaises(ConnectorError):
+            await transport._await_before(
+                operation, time.monotonic() + 1
+            )
+        self.assertIsNone(operation.cr_frame)
+
+    async def test_guard_failure_cancels_and_retains_existing_task(self):
+        child_gate = asyncio.Event()
+        child_started = asyncio.Event()
+        children = []
+        transport = SecureConsumerTransport._for_tests(
+            FakeClient(), FakeAuthorizer(), runtime_guard=lambda: False)
+
+        async def child_operation():
+            child = asyncio.create_task(child_gate.wait())
+            children.append(child)
+            child_started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                raise SecureTaskPending((child,), "child remains owned")
+
+        task = asyncio.create_task(child_operation())
+        await asyncio.wait_for(child_started.wait(), 1)
+        with self.assertRaises(SecureTaskPending):
+            await transport._await_before(task, time.monotonic() + 1)
+        self.assertIn(task, transport._pending_tasks)
+        child = children[0]
+        self.assertIn(child, transport._pending_tasks)
+        child_gate.set()
+        await asyncio.wait_for(child, 1)
+
+    async def test_rejected_duplicate_loops_do_not_accumulate_cancel_owners(self):
+        client = FakeClient()
+        transport = SecureConsumerTransport._for_tests(client, FakeAuthorizer())
+        submission = self.submission()
+        run = await transport.submit(submission)
+        owner_loop = asyncio.get_running_loop()
+
+        def rejected_from_new_loop():
+            async def attempt():
+                with self.assertRaises(ConnectorError) as caught:
+                    await transport.submit(submission)
+                self.assertEqual(caught.exception.code, "DUPLICATE")
+            asyncio.run(attempt())
+
+        await asyncio.gather(*(asyncio.to_thread(rejected_from_new_loop)
+                               for _ in range(12)))
+        self.assertEqual(transport._owner_loops, (owner_loop,))
+        transport.request_runtime_invalidation("test cleanup")
+        await asyncio.wait_for(run.closed, 1)
         await run.aclose()
 
     async def test_off_thread_invalidation_skips_contended_schedule_without_waiting(self):

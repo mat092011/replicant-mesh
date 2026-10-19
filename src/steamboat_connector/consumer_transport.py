@@ -129,7 +129,7 @@ class ConsumerRun:
 
     @property
     def result(self):
-        return asyncio.shield(self._result_after_guard())
+        return self._result_after_guard()
 
     async def _result_after_guard(self):
         result = await asyncio.shield(self._result)
@@ -179,7 +179,8 @@ class ConsumerRun:
             except ConnectorError:
                 self._event_slots.release()
                 self._discard_output()
-                self._transport._release(self.request_id, self)
+                # The driver still owns cleanup.  Its scheduled cancellation
+                # must finish before this run leaves the active-owner table.
                 raise
             self._event_slots.release()
             return item
@@ -472,8 +473,6 @@ class SecureConsumerTransport:
                 raise ConnectorError(
                     "UNAVAILABLE", "secure consumer transport is unavailable"
                 )
-            if loop not in self._owner_loops:
-                self._owner_loops = (*self._owner_loops, loop)
             if (
                 submission.request_id in self._active
                 or submission.request_id in self._recent_ids
@@ -492,6 +491,8 @@ class SecureConsumerTransport:
                 self._recent_ids.discard(old)
             run = ConsumerRun(self, submission, started, loop)
             self._active[submission.request_id] = run
+            if loop not in self._owner_loops:
+                self._owner_loops = (*self._owner_loops, loop)
             run._task = loop.create_task(
                 run._drive(), name="secure-consumer-" + submission.request_id
             )
@@ -664,7 +665,16 @@ class SecureConsumerTransport:
         )
 
     async def _await_before(self, awaitable, deadline, *, context=None):
-        self._check_runtime_guard()
+        try:
+            self._check_runtime_guard()
+        except BaseException:
+            if inspect.iscoroutine(awaitable):
+                awaitable.close()
+            elif asyncio.isfuture(awaitable):
+                await self._cancel_bounded(
+                    asyncio.ensure_future(awaitable), context=context
+                )
+            raise
         remaining = max(0.0, deadline - time.monotonic())
         if context is not None:
             remaining = min(remaining, self._context_remaining(context))
