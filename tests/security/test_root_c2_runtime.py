@@ -151,7 +151,8 @@ class C2RuntimeStoreIntegrationTests(unittest.TestCase):
         group_ttl = 300 if self._testMethodName in {
             "test_channel_wall_expiry_rejects_clock_drift_even_before_monotonic_deadline",
             "test_final_uncertainty_deadline_is_retained_across_clock_drift",
-            "test_final_uncertainty_retains_channel_monotonic_deadline"} else 60
+            "test_final_uncertainty_retains_channel_monotonic_deadline",
+            "test_selected_head_mismatch_retains_deadline_before_refresh"} else 60
         if self._testMethodName == "test_final_uncertainty_retains_group_policy_deadline":
             group_ttl = 70
         self._build(group_ttl=group_ttl)
