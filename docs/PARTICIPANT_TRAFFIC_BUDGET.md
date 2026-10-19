@@ -1,16 +1,15 @@
 # C2 aggregate traffic budget primitive
 
-Status: reusable accounting primitive only. It is not wired into a TLS socket,
-does not establish channel readiness, and does not prove that the caller
-measured the encrypted TCP payload boundary described in
-[the channel wire contract](PARTICIPANT_CHANNEL_WIRE.md). A later socket owner
-must count TLS handshake records and all ciphertext bytes, use a fresh
-allowance immediately before nonblocking I/O, and settle with the actual byte
-count.
+Status: reusable accounting primitive with an atomic fixed-socket transaction.
+It does not establish channel readiness or prove that higher layers classify
+messages correctly. `run_socket_io` is wired below the TLS BIO pump and meters
+the encrypted TCP payload boundary described in
+[the channel wire contract](PARTICIPANT_CHANNEL_WIRE.md).
 
 `TrafficBudget` stores one canonical JSON ledger capped at 64 KiB and one
-short-held `FileLock`. The parent directory must already be private and owned
-by the current UID; the state file is written atomically with mode 0600. Linux
+`FileLock` held across each ledger transaction. The parent directory must
+already be private and owned by the current UID; the state file is written
+atomically with mode 0600. Linux
 is required for the production file lock. The operator must pass the same
 allocation ID, ledger path, current UID, physical monotonic clock identity and
 policy to every consumer, host and coordinator process. A private file copied
@@ -37,14 +36,23 @@ integer byte-nanosecond units, and only elapsed monotonic nanoseconds refill
 them. A backward clock, changed Linux clock identity, unreadable or malformed
 ledger, or ambiguous commit/lock-release failure latches the owner unavailable.
 
-Before an immediate send or bounded receive, the caller binds its role to a
-32-character lowercase worker boot ID and reserves at most 16 KiB. At most 16
-allowances may remain open or uncertain. Reservation atomically subtracts
-directional tokens and charges the full maximum against role and global
-cumulative budgets before an allowance object is returned. Allowances expire
-after 100 ms and must be checked just before I/O. The socket integration must
-enforce this timing; the primitive cannot stop a caller from using a retained
-allowance later.
+The public allowance API remains available for non-socket accounting callers.
+For socket I/O, `run_socket_io` acquires the local owner lock and nonblocking
+ledger lock before reserving. It chooses the largest positive allowance up to
+16 KiB that fits current global and role rate tokens and remaining cumulative
+quotas, durably writes the reservation, checks the owner liveness guard and
+100 ms deadline, makes exactly one nonblocking send or receive, then durably
+settles the actual result while retaining the same locks. A 1 KiB remainder
+therefore permits a 1 KiB receive. Busy locks, rate limits and full allowance
+slots return bounded backpressure without performing I/O or charging bytes;
+cumulative quota denial is explicit.
+
+`run_socket_io` accepts only a genuine internally minted TLS owner and one
+fixed send/receive operation. It invokes only that owner's non-consuming
+`assert_transport_live()` guard under the ledger lock; no TLS BIO, application
+dispatch, await, or general callback runs there. Production requires the exact
+connected TCP socket and the same `Clock` instance on the budget and TLS owner.
+Explicit in-memory tests may use separate fixture clocks and socket wrappers.
 
 Settlement records actual bytes separately from conservatively charged bytes.
 Only a known outcome settled before expiry refunds unused bytes. Unknown
@@ -83,8 +91,7 @@ explicit test-only backend. It can exercise shared in-process synchronization,
 but it provides no cross-process guarantee. The Linux file-backed
 cross-process test is skipped on platforms without Linux flock semantics.
 
-Integration still needs to ensure every network-owning process uses this exact
-ledger and policy, bind all role generations from accepted supervisor state,
-and stop the channel if traffic cannot be charged or the receive allowance is
-exceeded. This primitive is not a socket service, scheduler, fairness guarantee
-or readiness signal.
+Each process must still use the intended shared ledger and accepted supervisor
+role binding. A hard cumulative quota with queued TLS ciphertext retires the
+whole stream; pending ciphertext is never dropped on a live stream. This is not
+a scheduler, fairness guarantee or readiness signal.

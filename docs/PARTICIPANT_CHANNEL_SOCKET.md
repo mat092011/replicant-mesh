@@ -11,13 +11,26 @@ Each genuine TLS owner exposes a non-consuming `assert_transport_live()` check.
 The pump calls it before readiness, reads, writes, and every socket operation,
 including flushes of already queued ciphertext. It drives handshake deadline
 checks on idle pumps. Handshake bytes use the data/startup allowance.
-Each nonblocking socket operation reserves and checks at most 16 KiB immediately
-before I/O, then settles the exact returned TCP payload byte count. EAGAIN and
-interruption settle zero. If a syscall result is unknown, the ledger records
-zero observed bytes and the full allowance as uncertain; `io_outcome_uncertain`
-distinguishes that case from a later metering commit failure. Known positive I/O
-updates the socket counter before ledger settlement. Quota denial is reported as bounded
-backpressure; the component never creates or resets a traffic allocation.
+Every nonblocking send/receive now runs through the budget's fixed
+`run_socket_io` transaction: local owner lock, nonblocking ledger lock, adaptive
+reservation and durable write, owner clock/deadline/policy guard, one socket
+call, exact settlement and durable write. The locks remain held across that
+sequence, so another role or process cannot spend the same rate/quota or strand
+an allowance between operations. The API accepts no arbitrary callback or TLS
+engine work. Production requires the budget and TLS owner to share the exact
+same Clock instance. The lock order is driver, budget owner, ledger flock, TLS
+owner, then its policy/Clock dependencies; TLS owner liveness code does not
+call back into the budget.
+
+The reservation adapts to remaining tokens and cumulative quota up to 16 KiB,
+including smaller reads. EAGAIN and interruption settle zero; unknown syscall
+results charge the full reservation with zero observed bytes. Known positive
+I/O updates the socket counter before settlement. `io_outcome_uncertain` marks
+unknown transfer, while `metering_uncertain` marks a durable-accounting failure.
+Busy ledger locks, rate limits and slot exhaustion are bounded backpressure for
+at most 30 monotonic seconds, checked on each subsequent pump/tick. Cumulative
+quota exhaustion with queued TLS ciphertext retires the entire connection.
+The component never creates or resets a traffic allocation.
 
 The pump retains at most one 16 KiB ciphertext chunk and one 16 KiB plaintext
 chunk in each direction. It performs no more than four socket operations per
@@ -48,13 +61,16 @@ Focused local command:
 ```powershell
 $env:PYTHONPATH = "src"
 python -m unittest tests.connector.test_channel_socket
+python -m unittest tests.connector.test_traffic_budget
 ```
 
 The tests use actual loopback TCP connections and real owner-created TLS
 engines. They cover partial sends, EAGAIN, queued ciphertext after policy
 revocation, a stalled handshake deadline, a blocked writer while six large
 inbound records and a final control marker are decoded, cleanup ciphertext that
-exceeds 16 KiB after its data quota is exhausted, unknown I/O outcomes, and a
-meter commit failure after known positive I/O. They verify endpoint byte counts
-and ledger observations. Linux persistent-ledger integration and a split-host
-route remain untested here.
+exceeds 16 KiB after its data quota is exhausted, unknown I/O outcomes, and
+commit failures before and after known positive I/O. They also cover adaptive
+1 KiB reads, revocation after durable reservation, hard-quota retirement, and
+backpressure expiry. A genuine TLS owner with a persistent Linux ledger is
+covered by a Linux-only conditional test; it is skipped on Windows. A
+split-host route remains untested here.

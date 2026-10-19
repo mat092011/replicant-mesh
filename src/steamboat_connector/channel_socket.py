@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import errno
 import socket
 import threading
 
 from steamboat_connector.traffic_budget import (
-    TrafficBudget, TrafficBudgetDenied,
+    TrafficBudget, TrafficBudgetBusy, TrafficBudgetDenied,
+    TrafficBudgetError, TrafficSocketIOError,
 )
 from steamboat_security.channel_tls import is_owned_worker_tls
 from steamboat_security.gateway_tls import is_owned_gateway_worker_tls
@@ -21,6 +21,7 @@ MAX_SOCKET_CHUNK = 16 * 1024
 MAX_PENDING_CIPHERTEXT = 16 * 1024
 MAX_PENDING_PLAINTEXT = 16 * 1024
 MAX_IO_CALLS_PER_PUMP = 4
+MAX_LEDGER_BACKPRESSURE_SECONDS = 30.0
 
 
 class ChannelSocketError(RuntimeError):
@@ -81,6 +82,7 @@ class ChannelSocket:
         self._io_outcome_uncertain = False
         self._metering_uncertain = False
         self._backpressure = None
+        self._backpressure_since = None
         self._socket.setblocking(False)
 
     @staticmethod
@@ -191,6 +193,10 @@ class ChannelSocket:
             receive_calls = 0
             try:
                 self._assert_owner_live()
+                if self._backpressure_since is not None:
+                    now = self._budget.clock.sample().monotonic
+                    if now - self._backpressure_since >= MAX_LEDGER_BACKPRESSURE_SECONDS:
+                        self._retire("traffic ledger backpressure exceeded 30 seconds")
                 self._collect_ciphertext()
                 self._drive_tls_read_and_write()
                 while self._pending_ciphertext and send_calls < MAX_IO_CALLS_PER_PUMP:
@@ -220,6 +226,7 @@ class ChannelSocket:
                 raise
             except BaseException as error:
                 self._retire("TLS/socket pump failed", error)
+            self._update_backpressure_clock()
             return {"handshake_complete": self._safe_handshake(),
                     "backpressure": self._backpressure,
                     "socket_byte_counts": self.socket_byte_counts,
@@ -247,6 +254,19 @@ class ChannelSocket:
             return bool(self._tls.handshake_complete)
         except Exception as error:
             self._retire("TLS deadline or policy check failed", error)
+
+    def _update_backpressure_clock(self):
+        if self._backpressure is None:
+            self._backpressure_since = None
+            return
+        try:
+            now = self._budget.clock.sample().monotonic
+        except Exception as error:
+            self._retire("traffic backpressure clock failed", error)
+        if self._backpressure_since is None:
+            self._backpressure_since = now
+        elif now - self._backpressure_since >= MAX_LEDGER_BACKPRESSURE_SECONDS:
+            self._retire("traffic ledger backpressure exceeded 30 seconds")
 
     def _collect_ciphertext(self):
         self._assert_owner_live()
@@ -296,86 +316,66 @@ class ChannelSocket:
                 self._received_plaintext = plaintext
                 self._collect_ciphertext()
 
-    def _allowance(self, direction, max_bytes=MAX_SOCKET_CHUNK):
-        kind = (self._pending_ciphertext_kind if direction == "send"
-                else ("cleanup" if self._incoming_cleanup_mode else "data"))
-        try:
-            allowance = self._budget.reserve(
-                self._role, self._boot_id, direction, kind, max_bytes)
-        except TrafficBudgetDenied as error:
-            self._backpressure = str(error)
-            raise ChannelBackpressure(str(error)) from error
-        try:
-            allowance.assert_live()
-        except Exception as error:
-            try:
-                allowance.settle(0, outcome_known=True)
-            except Exception:
-                self._metering_uncertain = True
-            self._retire("traffic allowance or liveness check failed", error)
-        return allowance
-
     def _send_once(self):
         self._assert_owner_live()
         payload = bytes(self._pending_ciphertext[:MAX_SOCKET_CHUNK])
-        allowance = self._allowance("send", len(payload))
-        self._assert_owner_live()
         try:
-            count = self._socket.send(payload)
-        except (BlockingIOError, InterruptedError):
-            self._settle(allowance, 0, outcome_known=True)
-            return False
-        except OSError as error:
-            if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
-                self._settle(allowance, 0, outcome_known=True)
-                return False
-            self._io_outcome_uncertain = True
-            self._settle_uncertain_io(allowance)
-            self._retire("socket send outcome is uncertain", error)
-        except BaseException as error:
-            self._io_outcome_uncertain = True
-            self._settle_uncertain_io(allowance)
-            self._retire("socket send outcome is uncertain", error)
-        if type(count) is not int or not 0 <= count <= len(payload):
-            self._io_outcome_uncertain = True
-            self._settle_uncertain_io(allowance)
-            self._retire("socket returned an invalid send count")
+            count = self._budget.run_socket_io(
+                self._socket, self._tls, self._role, self._boot_id, "send",
+                self._pending_ciphertext_kind, payload,
+                test_socket=type(self._socket) is not socket.socket)
+        except TrafficBudgetBusy as error:
+            self._backpressure = "ledger busy"
+            raise ChannelBackpressure(self._backpressure) from error
+        except TrafficBudgetDenied as error:
+            if error.reason == "quota":
+                self._retire("hard traffic quota exhausted with pending TLS output", error)
+            self._backpressure = error.reason
+            raise ChannelBackpressure(error.reason) from error
+        except TrafficSocketIOError as error:
+            if error.known_count:
+                self._socket_sent += error.known_count
+                del self._pending_ciphertext[:error.known_count]
+            self._io_outcome_uncertain = error.io_outcome_uncertain
+            self._metering_uncertain = error.metering_uncertain
+            self._retire("socket send transaction failed", error)
+        except TrafficBudgetError as error:
+            self._retire("traffic ledger failed before socket send", error)
         if count:
             self._socket_sent += count
-        self._settle(allowance, count, outcome_known=True)
         if count == 0:
-            self._retire("socket send made no progress")
+            return False
         if count:
             del self._pending_ciphertext[:count]
         return count > 0
 
     def _receive_once(self):
         self._assert_owner_live()
-        allowance = self._allowance("receive")
-        self._assert_owner_live()
         try:
-            data = self._socket.recv(MAX_SOCKET_CHUNK)
-        except (BlockingIOError, InterruptedError):
-            self._settle(allowance, 0, outcome_known=True)
+            data = self._budget.run_socket_io(
+                self._socket, self._tls, self._role, self._boot_id, "receive",
+                "cleanup" if self._incoming_cleanup_mode else "data",
+                MAX_SOCKET_CHUNK, test_socket=type(self._socket) is not socket.socket)
+        except TrafficBudgetBusy as error:
+            self._backpressure = "ledger busy"
+            raise ChannelBackpressure(self._backpressure) from error
+        except TrafficBudgetDenied as error:
+            if error.reason == "quota":
+                self._retire("hard traffic receive quota exhausted", error)
+            self._backpressure = error.reason
+            raise ChannelBackpressure(error.reason) from error
+        except TrafficSocketIOError as error:
+            self._io_outcome_uncertain = error.io_outcome_uncertain
+            self._metering_uncertain = error.metering_uncertain
+            if error.known_count:
+                self._socket_received += error.known_count
+            self._retire("socket receive transaction failed", error)
+        except TrafficBudgetError as error:
+            self._retire("traffic ledger failed before socket receive", error)
+        if data is None:
             return False
-        except OSError as error:
-            if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
-                self._settle(allowance, 0, outcome_known=True)
-                return False
-            self._io_outcome_uncertain = True
-            self._settle_uncertain_io(allowance)
-            self._retire("socket receive outcome is uncertain", error)
-        except BaseException as error:
-            self._io_outcome_uncertain = True
-            self._settle_uncertain_io(allowance)
-            self._retire("socket receive outcome is uncertain", error)
-        if type(data) is not bytes or len(data) > MAX_SOCKET_CHUNK:
-            self._io_outcome_uncertain = True
-            self._settle_uncertain_io(allowance)
-            self._retire("socket returned malformed receive data")
         if data:
             self._socket_received += len(data)
-        self._settle(allowance, len(data), outcome_known=True)
         if not data:
             self._retire("TCP peer closed the stream")
         self._assert_owner_live()
@@ -385,25 +385,6 @@ class ChannelSocket:
             self._retire("TLS encrypted input failed", error)
         self._collect_ciphertext()
         return True
-
-    def _settle(self, allowance, actual, *, outcome_known):
-        try:
-            result = allowance.settle(actual, outcome_known=outcome_known)
-            if result.get("uncertain"):
-                self._metering_uncertain = True
-        except Exception as error:
-            self._metering_uncertain = True
-            self._retire("traffic settlement failed after socket I/O", error)
-
-    def _settle_uncertain_io(self, allowance):
-        # The syscall may have transferred bytes, but its lower bound is zero.
-        # The ledger retains the full reservation and records zero observed bytes.
-        try:
-            result = allowance.settle(0, outcome_known=False)
-            if not result.get("uncertain"):
-                self._metering_uncertain = True
-        except Exception:
-            self._metering_uncertain = True
 
     def _require_live(self):
         if self._closed:

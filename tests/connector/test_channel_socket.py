@@ -7,7 +7,9 @@ from steamboat_connector.channel_socket import ChannelSocket, ChannelSocketError
 from tests.connector.test_traffic_budget import (
     _memory_budget, _policy, ALLOC, DOMAIN,
 )
-from steamboat_connector.traffic_budget import MemoryTrafficStore, TrafficBudget
+from steamboat_connector.traffic_budget import (
+    MemoryTrafficStore, TrafficBudget, TrafficBudgetDenied,
+)
 from tests.security import test_gateway_coordinator_tls as gateway_fixture_tests
 
 
@@ -55,6 +57,9 @@ class ChannelSocketTests(unittest.TestCase):
 
         def setblocking(self, value):
             self.sock.setblocking(value)
+
+        def getblocking(self):
+            return self.sock.getblocking()
 
         def send(self, data):
             self.send_calls += 1
@@ -289,7 +294,12 @@ class ChannelSocketTests(unittest.TestCase):
         policy["reservations"]["host"]["total_network_bytes"] += 100_000
         budget.refresh_policy(policy)
 
+        client.set_incoming_cleanup_mode(True)
+        server.set_incoming_cleanup_mode(True)
         before_cleanup_sent = client.socket_byte_counts[0]
+        before_client_received = client.socket_byte_counts[1]
+        before_server_sent = server.socket_byte_counts[0]
+        before_server_received = server.socket_byte_counts[1]
         payload = b"c" * (16 * 1024)
         client.offer_plaintext(payload, kind="cleanup")
         for _ in range(6):
@@ -300,8 +310,11 @@ class ChannelSocketTests(unittest.TestCase):
         self.assertEqual(sent - before_cleanup_sent, len(payload) + 22)
         self.assertEqual(client_tls.pending_encrypted_bytes, 0)
         state = store.state
-        self.assertEqual(state["roles"]["coordinator"]["observed"]["cleanup"],
-                         sent - before_cleanup_sent)
+        cleanup_wire_delta = ((sent - before_cleanup_sent)
+                              + (client.socket_byte_counts[1] - before_client_received)
+                              + (server.socket_byte_counts[0] - before_server_sent)
+                              + (server.socket_byte_counts[1] - before_server_received))
+        self.assertEqual(state["global"]["observed"]["cleanup"], cleanup_wire_delta)
         self.assertEqual(
             state["roles"]["coordinator"]["charged"]["data"],
             policy["reservations"]["coordinator"]["total_network_bytes"])
@@ -394,6 +407,218 @@ class ChannelSocketTests(unittest.TestCase):
         self.assertFalse(driver.io_outcome_uncertain)
         self.assertTrue(driver.metering_uncertain)
 
+    def test_policy_revocation_during_durable_reservation_prevents_send(self):
+        class RevokingStore(MemoryTrafficStore):
+            callback = None
+
+            def commit(self, state):
+                super().commit(state)
+                if self.callback is not None and state["reservations"]:
+                    callback, self.callback = self.callback, None
+                    callback()
+
+        store = RevokingStore()
+        budget, _unused, _clock = _memory_budget(store=store, policy=_policy(
+            global_total=2_000_000, role_total=500_000,
+            send_rate=1_000_000, role_send_rate=200_000,
+            cleanup_total=10_000, cleanup_rate=100_000,
+            role_cleanup_rate=30_000))
+        budget.bind_role("coordinator", COORD_BOOT)
+        budget.bind_role("host", HOST_BOOT)
+        client_socket, server_socket = self._connected_pair()
+        client_tls, server_tls = self._owners()
+        server_wrapper = self.PartialSocket(server_socket)
+        client = ChannelSocket(client_socket, client_tls, budget,
+                              role="coordinator", boot_id=COORD_BOOT)
+        server = ChannelSocket(server_wrapper, server_tls, budget,
+                              role="host", boot_id=HOST_BOOT, test_socket=True)
+        self.addCleanup(client.close)
+        self.addCleanup(server.close)
+        for _ in range(80):
+            client.pump()
+            server.pump()
+            if client.tls_handshake_complete and server.tls_handshake_complete:
+                break
+
+        payload = dict(self.owner_fixture.fixture.policy_payload)
+        payload["revision"] += 1
+        encoded = gateway_fixture_tests.egress_tests.sign_channel_policy(
+            payload, gateway_fixture_tests.egress_tests._private_pem(
+                self.owner_fixture.fixture.policy_key))
+        store.callback = lambda: self.owner_fixture.fixture.policy_store.install(encoded)
+        before = server_wrapper.send_calls
+        before_bytes = server.socket_byte_counts[0]
+        before_charge = store.state["global"]["charged"]["data"]
+        server.offer_plaintext(b"must stay unsent")
+        with self.assertRaises(ChannelSocketError):
+            server.pump()
+        self.assertEqual(server_wrapper.send_calls, before)
+        self.assertEqual(server.socket_byte_counts[0], before_bytes)
+        self.assertEqual(store.state["global"]["charged"]["data"], before_charge)
+        self.assertEqual(store.state["reservations"], [])
+        self.assertEqual(store.state["global"]["observed"]["data"],
+                         client.socket_byte_counts[0] + client.socket_byte_counts[1]
+                         + server.socket_byte_counts[0] + server.socket_byte_counts[1])
+
+    def test_receive_allowance_adapts_to_remaining_one_kibibyte_quota(self):
+        policy = _policy(global_total=1024, role_total=0, send_rate=7000,
+                         role_send_rate=2000, cleanup_total=300,
+                         cleanup_rate=300, role_cleanup_rate=100)
+        policy["reservations"]["coordinator"]["total_network_bytes"] = 1024
+        budget, store, _clock = _memory_budget(policy=policy)
+        budget.bind_role("coordinator", COORD_BOOT)
+        client_socket, server_socket = self._connected_pair()
+        client_tls, server_tls = self._owners()
+        client_socket.setblocking(False)
+        server_socket.setblocking(False)
+        self.addCleanup(client_socket.close)
+        self.addCleanup(server_socket.close)
+        self.addCleanup(client_tls.close)
+        self.addCleanup(server_tls.close)
+        server_socket.send(b"r" * 2048)
+
+        received = budget.run_socket_io(
+            client_socket, client_tls, "coordinator", COORD_BOOT,
+            "receive", "data", 16 * 1024)
+
+        self.assertEqual(len(received), 1024)
+        self.assertEqual(store.state["roles"]["coordinator"]["observed"]["data"], 1024)
+        self.assertEqual(client_socket.recv(2048), b"r" * 1024)
+
+    def test_shared_global_socket_quota_cannot_be_overspent_by_two_roles(self):
+        policy = _policy(global_total=4, role_total=0, send_rate=7000,
+                         role_send_rate=2000, cleanup_total=300,
+                         cleanup_rate=300, role_cleanup_rate=100)
+        policy["reservations"]["coordinator"]["total_network_bytes"] = 2
+        policy["reservations"]["host"]["total_network_bytes"] = 2
+        budget, store, _clock = _memory_budget(policy=policy)
+        budget.bind_role("coordinator", COORD_BOOT)
+        budget.bind_role("host", HOST_BOOT)
+        client_socket, peer_socket = self._connected_pair()
+        client_socket.setblocking(False)
+        peer_socket.setblocking(False)
+        self.addCleanup(client_socket.close)
+        self.addCleanup(peer_socket.close)
+
+        self.assertEqual(budget.run_socket_io(
+            client_socket, self.owner_fixture.client, "coordinator", COORD_BOOT,
+            "send", "data", b"AB"), 2)
+        self.assertEqual(budget.run_socket_io(
+            client_socket, self.owner_fixture.server, "host", HOST_BOOT,
+            "send", "data", b"CD"), 2)
+        with self.assertRaises(TrafficBudgetDenied) as denied:
+            budget.run_socket_io(
+                client_socket, self.owner_fixture.client, "coordinator", COORD_BOOT,
+                "send", "data", b"E")
+
+        self.assertEqual(denied.exception.reason, "quota")
+        self.assertEqual(peer_socket.recv(8), b"ABCD")
+        with self.assertRaises(BlockingIOError):
+            peer_socket.recv(8)
+        self.assertEqual(store.state["global"]["observed"]["data"], 4)
+        self.assertEqual(store.state["roles"]["coordinator"]["observed"]["data"], 2)
+        self.assertEqual(store.state["roles"]["host"]["observed"]["data"], 2)
+
+    def test_reservation_commit_failure_prevents_any_socket_call(self):
+        class FailOnceStore(MemoryTrafficStore):
+            fail_next_commit = False
+
+            def commit(self, state):
+                if self.fail_next_commit:
+                    self.fail_next_commit = False
+                    raise OSError("reservation durability unknown")
+                super().commit(state)
+
+        store = FailOnceStore()
+        budget, _unused, _clock = _memory_budget(store=store, policy=_policy(
+            global_total=2_000_000, role_total=500_000,
+            send_rate=1_000_000, role_send_rate=200_000,
+            cleanup_total=10_000, cleanup_rate=100_000,
+            role_cleanup_rate=30_000))
+        budget.bind_role("coordinator", COORD_BOOT)
+        client_socket, server_socket = self._connected_pair()
+        client_tls, server_tls = self._owners()
+        wrapper = self.PartialSocket(client_socket)
+        driver = ChannelSocket(wrapper, client_tls, budget,
+                               role="coordinator", boot_id=COORD_BOOT,
+                               test_socket=True)
+        peer = ChannelSocket(server_socket, server_tls, budget,
+                             role="host", boot_id=HOST_BOOT)
+        budget.bind_role("host", HOST_BOOT)
+        self.addCleanup(driver.close)
+        self.addCleanup(peer.close)
+        for _ in range(80):
+            driver.pump()
+            peer.pump()
+            if driver.tls_handshake_complete and peer.tls_handshake_complete:
+                break
+        before = wrapper.send_calls
+        before_bytes = driver.socket_byte_counts[0]
+        store.fail_next_commit = True
+        driver.offer_plaintext(b"never reaches send")
+        with self.assertRaises(ChannelSocketError):
+            driver.pump()
+        self.assertEqual(wrapper.send_calls, before)
+        self.assertEqual(driver.socket_byte_counts[0], before_bytes)
+        self.assertTrue(driver.metering_uncertain)
+        self.assertFalse(driver.io_outcome_uncertain)
+
+    def test_io_that_outlives_allowance_is_charged_and_retires_stream(self):
+        class SlowSocket(self.PartialSocket):
+            def __init__(self, sock, clock):
+                super().__init__(sock)
+                self.clock = clock
+
+            def send(self, data):
+                count = self.sock.send(data[:97])
+                self.clock.advance(0.101)
+                return count
+
+        budget, store, clock = _memory_budget(policy=_policy(
+            global_total=2_000_000, role_total=500_000,
+            send_rate=1_000_000, role_send_rate=200_000,
+            cleanup_total=10_000, cleanup_rate=100_000,
+            role_cleanup_rate=30_000))
+        budget.bind_role("coordinator", COORD_BOOT)
+        client_socket, server_socket = self._connected_pair()
+        client_tls, server_tls = self._owners()
+        wrapper = SlowSocket(client_socket, clock)
+        driver = ChannelSocket(wrapper, client_tls, budget,
+                               role="coordinator", boot_id=COORD_BOOT,
+                               test_socket=True)
+        peer = ChannelSocket(server_socket, server_tls, budget,
+                             role="host", boot_id=HOST_BOOT)
+        budget.bind_role("host", HOST_BOOT)
+        self.addCleanup(driver.close)
+        self.addCleanup(peer.close)
+        with self.assertRaises(ChannelSocketError):
+            driver.pump()
+        self.assertGreater(driver.socket_byte_counts[0], 0)
+        self.assertTrue(driver.metering_uncertain)
+        self.assertFalse(driver.io_outcome_uncertain)
+        self.assertGreater(store.state["global"]["uncertain_bytes"]["data"], 0)
+        self.assertEqual(store.state["global"]["uncertain_observed"]["data"],
+                         driver.socket_byte_counts[0])
+
+    def test_rate_backpressure_expires_after_thirty_monotonic_seconds(self):
+        tiny, _store, clock = _memory_budget(policy=_policy(
+            global_total=100_000, role_total=30_000, send_rate=3,
+            role_send_rate=1, cleanup_total=300, cleanup_rate=300,
+            role_cleanup_rate=100))
+        tiny.bind_role("coordinator", COORD_BOOT)
+        client_socket, server_socket = self._connected_pair()
+        client_tls, _server_tls = self._owners()
+        driver = ChannelSocket(client_socket, client_tls, tiny,
+                               role="coordinator", boot_id=COORD_BOOT)
+        self.addCleanup(driver.close)
+        first = driver.pump()
+        self.assertEqual(first["backpressure"], "rate")
+        clock.advance(31)
+        with self.assertRaises(ChannelSocketError):
+            driver.pump()
+        self.assertEqual(client_socket.fileno(), -1)
+        server_socket.close()
+
     def test_idle_handshake_deadline_retires_socket_before_io(self):
         client_socket, server_socket = self._connected_pair()
         client_tls, _server_tls = self._owners()
@@ -466,8 +691,8 @@ class ChannelSocketTests(unittest.TestCase):
                 break
         self.assertEqual(received, b"control-readable")
 
-    def test_quota_denial_is_backpressure_and_retains_ciphertext(self):
-        tiny, _store, _clock = _memory_budget(policy=_policy(
+    def test_quota_denial_with_pending_ciphertext_retires_stream(self):
+        tiny, store, _clock = _memory_budget(policy=_policy(
             global_total=3, role_total=1, send_rate=1_000_000,
             role_send_rate=200_000, cleanup_total=300, cleanup_rate=100_000,
             role_cleanup_rate=30_000))
@@ -480,11 +705,12 @@ class ChannelSocketTests(unittest.TestCase):
                               role="coordinator", boot_id=COORD_BOOT)
         self.addCleanup(client.close)
         self.addCleanup(server.close)
-        state = client.pump()
-        self.assertIsNotNone(state["backpressure"])
-        self.assertIsNone(client.failure)
-        self.assertGreater(client.pending_ciphertext_bytes, 0)
-        self.assertLessEqual(client.pending_ciphertext_bytes, 16 * 1024)
+        with self.assertRaises(ChannelSocketError):
+            client.pump()
+        self.assertIsNotNone(client.failure)
+        self.assertEqual(client_socket.fileno(), -1)
+        self.assertEqual(client.socket_byte_counts[0], 1)
+        self.assertEqual(store.state["global"]["observed"]["data"], 1)
 
     def test_exact_tls_owner_required(self):
         left, right = self._connected_pair()

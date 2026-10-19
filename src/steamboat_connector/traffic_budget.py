@@ -55,7 +55,22 @@ class TrafficBudgetBusy(TrafficBudgetError):
 
 
 class TrafficBudgetDenied(TrafficBudgetError):
-    """A configured rate or cumulative byte quota is exhausted."""
+    """A configured rate/quota or allowance-slot bound is exhausted."""
+
+    def __init__(self, message, *, reason="quota"):
+        super().__init__(message)
+        self.reason = reason
+
+
+class TrafficSocketIOError(TrafficBudgetError):
+    """A socket transaction failed; known_count preserves confirmed wire IO."""
+
+    def __init__(self, message, *, known_count=None, io_outcome_uncertain=False,
+                 metering_uncertain=False):
+        super().__init__(message)
+        self.known_count = known_count
+        self.io_outcome_uncertain = io_outcome_uncertain
+        self.metering_uncertain = metering_uncertain
 
 
 class MemoryTrafficStore:
@@ -595,6 +610,51 @@ class TrafficBudget:
     def _bucket(direction, kind):
         return kind + "_" + direction
 
+    def _reserve_in_state(self, state, role, boot_id, direction, kind,
+                          requested_bytes, *, reservation_id, adaptive):
+        """Shared reservation accounting for public grants and atomic socket IO."""
+        now = self._now(state)
+        self._advance(state, now)
+        role_state = self._current_role(state, role, boot_id)
+        if len(state["reservations"]) >= MAX_OUTSTANDING:
+            raise TrafficBudgetDenied("outstanding traffic allowance slots are full",
+                                      reason="slots")
+        role_cap = state["policy"]["reservations"][role]
+        limits = state["policy"]["limits"]
+        total_field = "total_network_bytes" if kind == "data" else "cleanup_total_network_bytes"
+        bucket = self._bucket(direction, kind)
+        available_rate = min(state["global"]["tokens"][bucket],
+                             role_state["tokens"][bucket]) // 1_000_000_000
+        available_quota = min(
+            limits[total_field] - state["global"]["charged"][kind],
+            role_cap[total_field] - role_state["charged"][kind])
+        amount = min(requested_bytes, available_rate, available_quota,
+                     MAX_ALLOWANCE_BYTES)
+        if amount < requested_bytes and not adaptive:
+            if available_quota <= 0:
+                raise TrafficBudgetDenied("cumulative traffic allowance is exhausted",
+                                          reason="quota")
+            raise TrafficBudgetDenied("directional traffic rate allowance is exhausted",
+                                      reason="rate")
+        if amount <= 0:
+            reason = "quota" if available_quota <= 0 else "rate"
+            raise TrafficBudgetDenied(
+                "cumulative traffic allowance is exhausted" if reason == "quota"
+                else "directional traffic rate allowance is exhausted",
+                reason=reason)
+        scaled = amount * 1_000_000_000
+        state["global"]["tokens"][bucket] -= scaled
+        role_state["tokens"][bucket] -= scaled
+        state["global"]["charged"][kind] += amount
+        role_state["charged"][kind] += amount
+        deadline = now + ALLOWANCE_LIFETIME_NS
+        item = {"reservation_id": reservation_id, "role": role,
+                "boot_id": boot_id, "direction": direction, "kind": kind,
+                "max_bytes": amount, "deadline_ns": deadline,
+                "status": "open", "actual_bytes": None}
+        state["reservations"].append(item)
+        return item
+
     def bind_role(self, role, boot_id):
         if role not in ROLE_NAMES or type(boot_id) is not str or not _BOOT_ID.fullmatch(boot_id):
             raise TrafficBudgetError("role or generation identity is invalid")
@@ -621,40 +681,244 @@ class TrafficBudget:
         reservation_id = secrets.token_hex(16)
         allowance = None
         with self._mutation() as state:
-            now = self._now(state)
-            self._advance(state, now)
-            role_state = self._current_role(state, role, boot_id)
-            if len(state["reservations"]) >= MAX_OUTSTANDING:
-                raise TrafficBudgetDenied("outstanding traffic allowance slots are full")
-            role_cap = state["policy"]["reservations"][role]
-            limits = state["policy"]["limits"]
-            total_field = "total_network_bytes" if kind == "data" else "cleanup_total_network_bytes"
-            bucket = self._bucket(direction, kind)
-            scaled = max_bytes * 1_000_000_000
-            if (state["global"]["tokens"][bucket] < scaled
-                    or role_state["tokens"][bucket] < scaled):
-                raise TrafficBudgetDenied("directional traffic rate allowance is exhausted")
-            if (state["global"]["charged"][kind] + max_bytes > limits[total_field]
-                    or role_state["charged"][kind] + max_bytes > role_cap[total_field]):
-                raise TrafficBudgetDenied("cumulative traffic allowance is exhausted")
-            state["global"]["tokens"][bucket] -= scaled
-            role_state["tokens"][bucket] -= scaled
-            state["global"]["charged"][kind] += max_bytes
-            role_state["charged"][kind] += max_bytes
-            deadline = now + ALLOWANCE_LIFETIME_NS
-            state["reservations"].append({
-                "reservation_id": reservation_id, "role": role, "boot_id": boot_id,
-                "direction": direction, "kind": kind, "max_bytes": max_bytes,
-                "deadline_ns": deadline, "status": "open", "actual_bytes": None})
+            item = self._reserve_in_state(
+                state, role, boot_id, direction, kind, max_bytes,
+                reservation_id=reservation_id, adaptive=False)
             allowance = object.__new__(TrafficAllowance)
             object.__setattr__(allowance, "_owner", self)
             object.__setattr__(allowance, "_reservation_id", reservation_id)
             object.__setattr__(allowance, "_binding", (
-                role, boot_id, direction, kind, max_bytes, deadline))
+                role, boot_id, direction, kind, max_bytes, item["deadline_ns"]))
             object.__setattr__(allowance, "_settlement", None)
             object.__setattr__(allowance, "_retired", False)
             self._live_allowances[reservation_id] = allowance
         return allowance
+
+    def run_socket_io(self, connected_socket, tls_owner, role, boot_id,
+                      direction, kind, payload_or_limit, *, test_socket=False):
+        """Atomically meter one exact nonblocking TCP send or receive.
+
+        The ledger lock covers only fixed socket IO. This method accepts no
+        callable and cannot invoke TLS, application, or peer-supplied code.
+        """
+        import socket
+        from steamboat_security.channel_tls import is_owned_worker_tls
+        from steamboat_security.gateway_tls import is_owned_gateway_worker_tls
+        from steamboat_security.gateway_coordinator_tls import is_owned_gateway_coordinator_tls
+        from steamboat_security.gateway_egress import is_owned_gateway_coordinator_egress
+        is_tls_owner = (is_owned_worker_tls(tls_owner)
+                        or is_owned_gateway_worker_tls(tls_owner)
+                        or is_owned_gateway_coordinator_tls(tls_owner)
+                        or is_owned_gateway_coordinator_egress(tls_owner))
+        if not is_tls_owner:
+            raise TypeError("socket transaction requires a genuine owned TLS engine")
+        if self._memory is None and getattr(tls_owner, "clock", None) is not self.clock:
+            raise TrafficBudgetError("production TLS owner and budget must share one Clock")
+        if (direction not in ("send", "receive") or kind not in _KINDS
+                or type(test_socket) is not bool):
+            raise TrafficBudgetError("socket transaction arguments are invalid")
+        if type(connected_socket) is not socket.socket:
+            if not (test_socket and self._memory is not None and all(
+                    callable(getattr(connected_socket, name, None))
+                    for name in ("send", "recv"))):
+                raise TypeError("socket transaction requires an exact connected TCP socket")
+            if connected_socket.getblocking():
+                raise TypeError("test socket transaction also requires nonblocking IO")
+        elif (connected_socket.family not in (socket.AF_INET, socket.AF_INET6)
+              or (connected_socket.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) & 0xF)
+              != socket.SOCK_STREAM):
+            raise TypeError("socket transaction requires connected IPv4/IPv6 TCP")
+        elif not connected_socket.getpeername():
+            raise TypeError("socket transaction requires an already connected TCP peer")
+        elif connected_socket.getblocking():
+            raise TypeError("socket transaction requires a nonblocking TCP socket")
+        if direction == "send":
+            if (type(payload_or_limit) is not bytes or not payload_or_limit
+                    or len(payload_or_limit) > MAX_ALLOWANCE_BYTES):
+                raise TrafficBudgetError("socket send payload is outside its bound")
+            requested = len(payload_or_limit)
+        else:
+            if not _valid_int(payload_or_limit, minimum=1, maximum=MAX_ALLOWANCE_BYTES):
+                raise TrafficBudgetError("socket receive limit is outside its bound")
+            requested = payload_or_limit
+
+        with self._owner_guard():
+            if self._faulted:
+                raise TrafficBudgetError(self._fault_reason or "traffic ledger is faulted",
+                                         retained_owner=self)
+            lock = None
+            if self._memory is None:
+                lock = FileLock(self.lock_path, uid=self.uid, timeout=0)
+                self._acquire_transaction_lock(lock)
+            known_count = None
+            unknown = False
+            primary = None
+            try:
+                if self._memory is None:
+                    try:
+                        state = read_private_json(self.path, maximum_size=MAX_STATE_BYTES,
+                                                  uid=self.uid)
+                    except BaseException as error:
+                        self._latch_fault("persistent traffic ledger read failed")
+                        raise TrafficBudgetError("persistent traffic ledger is unreadable",
+                                                 retained_owner=self) from error
+                else:
+                    state = copy.deepcopy(self._memory.state)
+                _validate_state(state, allocation_id=self.allocation_id, uid=self.uid,
+                                clock_domain=self.clock_domain)
+                if state["policy_sha256"] != self._requested_policy_sha256:
+                    self._policy_mismatch = True
+                    raise TrafficBudgetError("explicit policy refresh is required",
+                                             retained_owner=self)
+                reservation_id = __import__("secrets").token_hex(16)
+                item = self._reserve_in_state(
+                    state, role, boot_id, direction, kind, requested,
+                    reservation_id=reservation_id, adaptive=True)
+                deadline = item["deadline_ns"]
+                allowance_size = item["max_bytes"]
+                self._write_socket_state(state, known_count=None)
+
+                # A grant is never used after its 100 ms lifetime, even if
+                # acquiring the ledger took most of that interval.
+                now = self._now(state)
+                if now >= deadline:
+                    self._settle_socket_record(state, item, 0, known=True, now=now)
+                    self._write_socket_state(state, known_count=None)
+                    raise TrafficBudgetError("socket allowance expired before IO",
+                                             retained_owner=self)
+                try:
+                    # This is the only owner operation permitted under the
+                    # ledger lock: it checks clock/deadline/policy and touches
+                    # no TLS BIO or application data.
+                    tls_owner.assert_transport_live()
+                except BaseException as error:
+                    try:
+                        guard_now = self._now(state)
+                        self._settle_socket_record(state, item, 0,
+                                                   known=guard_now < deadline,
+                                                   now=guard_now)
+                        self._write_socket_state(state, known_count=0)
+                    except BaseException as settle_error:
+                        self._latch_fault("TLS liveness failure settlement is uncertain", state)
+                        raise TrafficSocketIOError(
+                            "owner liveness failed and reservation settlement is uncertain",
+                            known_count=0, metering_uncertain=True) from settle_error
+                    raise TrafficSocketIOError("TLS owner became unlive before socket IO",
+                                              known_count=0) from error
+                now = self._now(state)
+                if now >= deadline:
+                    self._settle_socket_record(state, item, 0, known=True, now=now)
+                    self._write_socket_state(state, known_count=None)
+                    raise TrafficBudgetError("socket allowance expired immediately before IO",
+                                             retained_owner=self)
+                try:
+                    if direction == "send":
+                        count = connected_socket.send(payload_or_limit[:allowance_size])
+                        if type(count) is not int or not 0 <= count <= allowance_size:
+                            unknown = True
+                            raise OSError("socket returned invalid send count")
+                        known_count = count
+                    else:
+                        result = connected_socket.recv(allowance_size)
+                        if type(result) is not bytes or len(result) > allowance_size:
+                            unknown = True
+                            raise OSError("socket returned malformed receive data")
+                        known_count = len(result)
+                except (BlockingIOError, InterruptedError):
+                    known_count = 0
+                    result = 0 if direction == "send" else None
+                except OSError as error:
+                    import errno
+                    if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
+                        known_count = 0
+                        result = 0 if direction == "send" else None
+                    else:
+                        unknown = True
+                        result = None
+                except BaseException:
+                    unknown = True
+                    result = None
+
+                settle_now = self._now(state)
+                settlement = self._settle_socket_record(
+                    state, item, 0 if unknown else known_count,
+                    known=not unknown, now=settle_now)
+                try:
+                    self._write_socket_state(state, known_count=known_count)
+                except BaseException as error:
+                    self._latch_fault("traffic ledger settlement outcome is unknown", state)
+                    raise TrafficSocketIOError(
+                        "traffic settlement failed after socket IO",
+                        known_count=known_count, io_outcome_uncertain=unknown,
+                        metering_uncertain=True) from error
+                if unknown:
+                    raise TrafficSocketIOError("socket IO outcome is uncertain",
+                                              io_outcome_uncertain=True,
+                                              metering_uncertain=settlement["uncertain"]
+                                              and settle_now >= deadline)
+                if settlement["uncertain"]:
+                    raise TrafficSocketIOError(
+                        "socket allowance expired before settlement",
+                        known_count=known_count, metering_uncertain=True)
+                if direction == "send":
+                    return known_count
+                return result
+            except BaseException as error:
+                primary = error
+                raise
+            finally:
+                if lock is not None:
+                    try:
+                        lock.release()
+                    except BaseException as error:
+                        self._latch_fault("traffic ledger lock release outcome is unknown",
+                                          retained_lock=lock)
+                        if primary is None:
+                            raise TrafficSocketIOError(
+                                "traffic lock release outcome is unknown",
+                                known_count=known_count,
+                                io_outcome_uncertain=unknown,
+                                metering_uncertain=True) from error
+
+    def _write_socket_state(self, state, *, known_count):
+        try:
+            if self._memory is None:
+                self._write_state(state)
+            else:
+                self._memory.commit(state)
+        except BaseException as error:
+            self._latch_fault("traffic ledger reservation outcome is unknown", state)
+            raise TrafficSocketIOError("traffic reservation commit is unknown",
+                                       known_count=known_count,
+                                       metering_uncertain=True) from error
+
+    def _settle_socket_record(self, state, item, actual_bytes, *, known, now):
+        role, kind, reserved = item["role"], item["kind"], item["max_bytes"]
+        bucket = self._bucket(item["direction"], kind)
+        certain = known and now < item["deadline_ns"]
+        refund = reserved - actual_bytes if certain else 0
+        if refund:
+            state["global"]["charged"][kind] -= refund
+            state["roles"][role]["charged"][kind] -= refund
+            state["global"]["tokens"][bucket] = min(
+                state["global"]["tokens"][bucket] + refund * 1_000_000_000,
+                self._rate(state["policy"], bucket) * 1_000_000_000)
+            state["roles"][role]["tokens"][bucket] = min(
+                state["roles"][role]["tokens"][bucket] + refund * 1_000_000_000,
+                self._rate(state["policy"], bucket, role) * 1_000_000_000)
+        state["global"]["observed"][kind] += actual_bytes
+        state["roles"][role]["observed"][kind] += actual_bytes
+        if not certain:
+            state["global"]["uncertain_bytes"][kind] += reserved
+            state["roles"][role]["uncertain_bytes"][kind] += reserved
+            state["global"]["uncertain_observed"][kind] += actual_bytes
+            state["roles"][role]["uncertain_observed"][kind] += actual_bytes
+            item["status"], item["actual_bytes"] = "uncertain", actual_bytes
+        else:
+            state["reservations"].remove(item)
+        return {"actual_bytes": actual_bytes, "charged_bytes": reserved - refund,
+                "refunded_bytes": refund, "outcome_known": known,
+                "uncertain": not certain}
 
     def _record_for(self, state, allowance):
         if type(allowance) is not TrafficAllowance:
@@ -722,35 +986,8 @@ class TrafficBudget:
                 raise TrafficBudgetError("uncertain allowance cannot be settled again")
             now = self._now(state)
             self._advance(state, now)
-            role = item["role"]
-            kind = item["kind"]
-            reserved = item["max_bytes"]
-            certain = outcome_known and now < item["deadline_ns"]
-            refund = reserved - actual_bytes if certain else 0
-            bucket = self._bucket(item["direction"], kind)
-            if refund:
-                state["global"]["charged"][kind] -= refund
-                state["roles"][role]["charged"][kind] -= refund
-                state["global"]["tokens"][bucket] = min(
-                    state["global"]["tokens"][bucket] + refund * 1_000_000_000,
-                    self._rate(state["policy"], bucket) * 1_000_000_000)
-                state["roles"][role]["tokens"][bucket] = min(
-                    state["roles"][role]["tokens"][bucket] + refund * 1_000_000_000,
-                    self._rate(state["policy"], bucket, role) * 1_000_000_000)
-            state["global"]["observed"][kind] += actual_bytes
-            state["roles"][role]["observed"][kind] += actual_bytes
-            if not certain:
-                state["global"]["uncertain_bytes"][kind] += reserved
-                state["roles"][role]["uncertain_bytes"][kind] += reserved
-                state["global"]["uncertain_observed"][kind] += actual_bytes
-                state["roles"][role]["uncertain_observed"][kind] += actual_bytes
-                item["status"] = "uncertain"
-                item["actual_bytes"] = actual_bytes
-            else:
-                state["reservations"].remove(item)
-            result = {"actual_bytes": actual_bytes, "charged_bytes": reserved - refund,
-                      "refunded_bytes": refund, "outcome_known": outcome_known,
-                      "uncertain": not certain}
+            result = self._settle_socket_record(
+                state, item, actual_bytes, known=outcome_known, now=now)
         object.__setattr__(allowance, "_settlement", (requested, result))
         if not result["uncertain"]:
             self._live_allowances.pop(allowance._reservation_id, None)

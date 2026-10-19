@@ -3,6 +3,7 @@
 import json
 import multiprocessing
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -163,6 +164,64 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
             with self.assertRaises(TrafficBudgetError):
                 self._create_budget(path)
             self.assertEqual(self._open_budget(path).status()["global"]["charged"]["data"], 0)
+
+    def test_real_tls_socket_transaction_uses_persistent_linux_ledger(self):
+        from steamboat_runtime.protocol.clock import clock_identity
+        from tests.security import test_gateway_coordinator_tls as gateway_fixture_tests
+
+        owner_fixture = gateway_fixture_tests.GatewayCoordinatorTLSOwnerTests()
+        owner_fixture.setUp()
+        self.addCleanup(lambda: (owner_fixture.tearDown(), owner_fixture.doCleanups()))
+        tls_owner = owner_fixture.client
+        clock = Clock.system(uncertainty_seconds=lambda: 0.0)
+        tls_owner.clock = clock
+        policy = _policy(global_total=100_000, role_total=30_000,
+                         send_rate=3000, role_send_rate=1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            os.chmod(temporary, 0o700)
+            state_path = str(Path(temporary) / "traffic.json")
+            budget = TrafficBudget.create_fresh(
+                state_path, allocation_id=ALLOC, uid=os.getuid(), clock=clock,
+                clock_domain=clock_identity(), policy=policy)
+            budget.bind_role("coordinator", BOOT_A)
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.connect(listener.getsockname())
+            peer, _ = listener.accept()
+            listener.close()
+            client.setblocking(False)
+            peer.setblocking(False)
+            self.addCleanup(client.close)
+            self.addCleanup(peer.close)
+            self.assertEqual(tls_owner.write_plaintext(b"linux socket transaction"),
+                             len(b"linux socket transaction"))
+            ciphertext = tls_owner.take_encrypted()
+            transferred = budget.run_socket_io(
+                client, tls_owner, "coordinator", BOOT_A, "send", "data",
+                ciphertext)
+            received = peer.recv(len(ciphertext))
+            self.assertEqual(transferred, len(ciphertext))
+            self.assertEqual(received, ciphertext)
+            reopened = TrafficBudget(
+                state_path, allocation_id=ALLOC, uid=os.getuid(), clock=clock,
+                clock_domain=clock_identity(), policy=policy)
+            self.assertEqual(reopened.status()["global"]["observed"]["data"],
+                             len(ciphertext))
+            from steamboat_connector.storage import FileLock
+            lock = FileLock(budget.lock_path, uid=os.getuid(), timeout=0)
+            before = budget.status()["global"]["charged"]["data"]
+            lock.acquire()
+            try:
+                with self.assertRaises(TrafficBudgetBusy):
+                    budget.run_socket_io(client, tls_owner, "coordinator", BOOT_A,
+                                         "send", "data", b"must-not-send")
+            finally:
+                lock.release()
+            self.assertEqual(budget.status()["global"]["charged"]["data"], before)
+            with self.assertRaises(BlockingIOError):
+                peer.recv(32)
 
     def test_independent_processes_share_one_role_ledger(self):
         with tempfile.TemporaryDirectory() as temporary:
