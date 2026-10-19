@@ -172,9 +172,41 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
             else:
                 self.worker_queues[index].append(message)
 
+    def _service_coordinator_client(self):
+        stream = self.fx.coordinator_client_stream
+        stream.pump()
+        message = stream.pop_message()
+        if message is None:
+            return
+        if message.kind == wire.HEARTBEAT:
+            mode, sequence = decode_heartbeat(message.payload)
+            if mode != PING:
+                raise AssertionError("gateway sent a non-PING coordinator heartbeat")
+            stream.enqueue(kind=wire.HEARTBEAT, message_id=message.message_id,
+                           payload=encode_heartbeat(PONG, sequence))
+            stream.pump()
+        else:
+            self.coordinator_queue.append(message)
+
+    def _wait_diagnostic(self, expected_id):
+        mux = getattr(self, "mux", None)
+        if mux is None:
+            return f"message_id={expected_id.hex()} (mux not constructed)"
+        streams = (self.fx.coordinator_client_stream, *self.fx.worker_client_streams)
+        pending = tuple((stream.decoded_pending_bytes,
+                         stream.pending_outgoing_frame_bytes,
+                         stream.writer.accounting.queued_and_active_payload_bytes)
+                        for stream in streams)
+        queues = {index: tuple(item.message_id.hex() for item in queue)
+                  for index, queue in self.worker_queues.items()}
+        return (f"message_id={expected_id.hex()} pending={mux.pending_counts} "
+                f"capture={mux.pending_capture_bytes} stream_bytes={pending} "
+                f"worker_message_ids={queues}")
+
     def _worker_message(self, index, expected_id, timeout=1.0):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            self._service_coordinator_client()
             if self.mux._accepting:
                 self.mux.pump_once()
             self._service_worker_clients()
@@ -183,7 +215,8 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
                 if message.message_id == expected_id:
                     return queue.pop(offset)
             time.sleep(0.001)
-        self.fail("selected actual worker stream did not receive its request")
+        self.fail("selected actual worker stream did not receive its request: "
+                   + self._wait_diagnostic(expected_id))
 
     def _another_coordinator_stream(self):
         fx = self.fx
@@ -221,24 +254,23 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
         stream = self.fx.coordinator_client_stream
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            self._service_coordinator_client()
             if self.mux._accepting:
                 self.mux.pump_once()
             self._service_worker_clients()
-            stream.pump()
-            message = stream.pop_message()
-            if message is not None:
-                self.coordinator_queue.append(message)
+            self._service_coordinator_client()
             for offset, queued in enumerate(self.coordinator_queue):
                 if queued.message_id == expected_id:
                     return self.coordinator_queue.pop(offset)
             time.sleep(0.001)
-        self.fail("actual coordinator stream did not receive its response")
+        self.fail("actual coordinator stream did not receive its response: "
+                   + self._wait_diagnostic(expected_id))
 
     def _expect_mux_error(self, pattern, timeout=1.0):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                self.fx.coordinator_client_stream.pump()
+                self._service_coordinator_client()
                 self.mux.pump_once()
             except GatewayMuxError as error:
                 self.assertRegex(str(error), pattern)
