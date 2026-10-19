@@ -1,0 +1,72 @@
+# Local C1a validation only. No public listener or physical-route claim.
+name: steamboat-participant-c1a
+
+x-security: &security
+  image: steamboat-participant-security:c1a-cpu-v1
+  platform: linux/amd64
+  build:
+    context: .
+    dockerfile: docker/participant-security/Dockerfile
+    target: validation
+  init: true
+  network_mode: none
+  restart: "no"
+  cpus: 2.0
+  mem_limit: 6g
+  pids_limit: 256
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp:size=134217728, /app/.lab:size=16777216]
+  environment:
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    OMP_NUM_THREADS: "2"
+    MKL_NUM_THREADS: "2"
+    STEAMBOAT_ARTIFACT_DIR: /artifacts
+    STEAMBOAT_REFERENCE_DIR: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+    STEAMBOAT_TEST_SNAPSHOT: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+    STEAMBOAT_TEST_REPORT: /results
+    STEAMBOAT_PROTOCOL_REPORT: /results
+    STEAMBOAT_PROTOCOL_TESTS: "1"
+    STEAMBOAT_PROCESS_TESTS: "1"
+    STEAMBOAT_COORDINATOR_TESTS: "1"
+    STEAMBOAT_SERVICE_TESTS: "1"
+    STEAMBOAT_IDENTITY_FOREIGN_FIXTURE: /opt/steamboat-test/identity-root/foreign.pem
+  volumes:
+    - pytorch-artifacts:/artifacts:ro
+    - pytorch-model-cache:/cache:ro
+    - ./.lab/participant-network/c1a-results:/results
+
+services:
+  security:
+    <<: *security
+
+  runtime-tests:
+    <<: *security
+    tmpfs: [/tmp:size=134217728, /test-app:size=134217728]
+    command:
+      - python
+      - -c
+      - |
+        import os
+        import shutil
+        import subprocess
+        import sys
+        shutil.copytree('/app', '/test-app', dirs_exist_ok=True)
+        environment = dict(os.environ, PYTHONPATH='/test-app/src:/test-app')
+        raise SystemExit(subprocess.call(
+            [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-v'],
+            cwd='/test-app', env=environment))
+
+  smoke:
+    <<: *security
+    command: [python, -m, lab.benchmark, check, --backend, pytorch, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f]
+
+volumes:
+  pytorch-artifacts:
+    external: true
+    name: steamboat-pytorch-m1_pytorch-artifacts
+  pytorch-model-cache:
+    external: true
+    name: steamboat-pytorch-m1_pytorch-model-cache

@@ -218,6 +218,20 @@ class WorkerHandler:
             queued_operation.completion.set_result(response)
         self._notify_supervisor()
 
+    def invalidate_for_authorization(self, session_id):
+        """Trusted local invalidation; no wire method can call this directly."""
+        if type(session_id) is not str or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session_id):
+            raise ValueError("authorization invalidation session identity is invalid")
+        self._bind_loop()
+        entry = self.sessions.get(session_id) or self.tombstones.get(session_id)
+        if entry is None:
+            return True
+        self._terminate(entry, "CANCELLED")
+        if (session_id in self.sessions or entry.in_flight or entry.queued
+                or entry.committed_bytes != 0):
+            return False
+        return entry.cache.allocated_bytes() == 0 and not any(entry.cache.lengths())
+
     def _remaining_ms(self, deadline):
         return max(0, int((deadline - self.clock()) * 1000))
 

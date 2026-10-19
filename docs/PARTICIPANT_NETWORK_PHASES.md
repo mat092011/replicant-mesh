@@ -1,11 +1,18 @@
 # Multiphase execution plan: participant network
 
 Prepared 2026-10-17 from [PARTICIPANT_NETWORK_PLAN.md](PARTICIPANT_NETWORK_PLAN.md).
-**C0 passed on 2026-10-17; C1–C9 remain planned.** See the
-[C0 validation record](experiments/2026-10-17-participant-c0.md). Writing a plan
-does not complete its implementation or evidence gates.
-Only the current laptop is available. Hardware, operators and dates for later
-work remain unconfirmed.
+**C0 passed on 2026-10-17; C1 validation and exit criteria were accepted on
+2026-10-19; C2–C9 remain planned.** See the [C1 final validation
+record](experiments/2026-10-18-participant-c1.md) and [C0 validation
+record](experiments/2026-10-17-participant-c0.md). Trial 78 passed all 878
+unique required software-regression cases with zero skips, failures or errors
+in 367.862 seconds on the laptop. Physical RST7, Drain4 and Remove4 passed
+bounded checks; Trial 75 M1/M2 controls and focused 359-case validation
+also passed. Trial 76, Native ZimaBlade run 3, Trial 77 and full-history DIAG3
+failures remain recorded with unknown causes; Trial 78 does not explain them,
+and no hardware cause is established. Separate-device evidence retains its own
+frozen source and image identities. The AMD 890M GPU backend remains
+unvalidated. Work stops after C1 as requested.
 
 This document owns the C0–C9 execution sequence, task checklists and engineering
 exit criteria. The [architecture plan](PARTICIPANT_NETWORK_PLAN.md) explains the
@@ -23,7 +30,7 @@ bounded subset of compatible machines.
 
 ## Phase overview
 
-C0 is **Passed**; C1–C9 are **Planned**. The hardware column describes an exit requirement,
+C0 is **Passed**; C1 is **Passed**; C2–C9 are **Planned**. The hardware column describes an exit requirement,
 not a reason to stop independent preparation. Responsibility labels are proposed
 roles, not assigned people or staffing commitments.
 
@@ -131,20 +138,20 @@ completed by C0; external operator/hardware dependencies remain open.
 
 **Tasks**
 
-- [ ] **C1.1 / C1a** Add an explicit TLS peer-authenticated transport profile to
+- [x] **C1.1 / C1a** Add an explicit TLS peer-authenticated transport profile to
   worker and coordinator services/clients. Preserve isolated insecure-lab
   configuration; never make the private-network flag authorize internet access.
-- [ ] **C1.2 / C1a** Implement invited enrollment, protected device credentials,
+- [x] **C1.2 / C1a** Implement invited enrollment, protected device credentials,
   scoped coordinator permissions, expiry/revocation and identity-bound sessions.
   Session IDs alone must not grant access.
-- [ ] **C1.3 / C1a** Bound connections, handshakes, admission and malformed payloads.
+- [x] **C1.3 / C1a** Bound connections, handshakes, admission and malformed payloads.
   Test wrong roots/identities/roles, expired or revoked credentials, stolen session
   IDs, reconnect and loss after possible cache mutation. Retain no automatic
   ambiguous-step retries.
-- [ ] **C1.4 / C1b** Inventory two or more physical devices and their actual route.
+- [x] **C1.4 / C1b** Inventory two or more physical devices and their actual route.
   Freeze model/runtime, public fixtures, resource ceilings and test bounds. The
   fixed three stages may share devices; record exactly where they execute.
-- [ ] **C1.5 / C1b** Run same-input prefill/forced-decode comparisons, interleaved
+- [x] **C1.5 / C1b** Run same-input prefill/forced-decode comparisons, interleaved
   sessions, cancellation, partial admission, restart/boot-ID invalidation and
   bounded cleanup across those devices.
 
@@ -156,8 +163,7 @@ bounds and preserves valid session semantics. C1b passes the frozen numerical an
 lifecycle checks on actual separate machines. If hardware is missing, record C1a
 independently and leave C1b pending; containers cannot substitute for this gate.
 
-**Evidence / next:** publish actual commands, environments and outcomes; C1a
-unlocks C2b, and complete C1 enables the remote C3b gate.
+**Evidence / next:** the [C1 final validation record](experiments/2026-10-18-participant-c1.md) records the accepted software regression and bounded physical evidence. C1 is complete; work stops here as requested. C2–C9 remain planned. The AMD 890M backend remains unvalidated.
 
 ## C2 — Deliver the headless participant connector
 
@@ -512,8 +518,10 @@ implementation. Each item should land with its relevant checks and documentation
 | 4 | C1b/C3b fixed-device parity and GPU remote validation | Respective local gates plus real hardware | Sanitized device inventory, numerical/lifecycle results and coverage limits |
 | 5 | C4b bounded placement/real-link comparison | C1–C3, C4a | Frozen selected cases, controls, audit and continue/revise/stop recommendation |
 
-Recruit a second device and identify a supported GPU cohort alongside items 1–3.
-While access is missing, implement local contracts, TLS/admission, connector
-lifecycle, fake-worker faults and bounded existing CPU experiments. Leave device
-gates pending. Do not require completion of every historical tiny-model sweep to
-start the connector, or mistake local scaffolding for a completed public network.
+The required full software regression passed on the laptop, and bounded C1b lifecycle checks passed on the laptop and separate ZimaBlade CPU host. C1 was accepted on 2026-10-19; see the [final validation record](experiments/2026-10-18-participant-c1.md). The AMD 890M is physically present, but its supported backend remains unvalidated. Identify additional
+hardware and a supported GPU cohort alongside items
+1–3. While those later resources are unavailable, implement local contracts,
+TLS/admission, connector lifecycle, fake-worker faults and bounded existing CPU
+experiments. Leave device gates pending. Do not require completion of every
+historical tiny-model sweep to start the connector, or mistake local scaffolding
+for a completed public network.

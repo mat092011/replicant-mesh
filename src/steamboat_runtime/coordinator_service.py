@@ -158,6 +158,150 @@ class RequestMetrics:
                 "timing_scope": "local durations; rpc includes worker queue and compute"}
 
 
+_WRITE_ERROR_REFERENCE_SCAN_LIMIT = 4096
+_TYPE_MRO_DESCRIPTOR = type.__dict__["__mro__"]
+
+
+def _scan_frame_for_write_references(frame, protected, budget):
+    """Scan exact builtin containers without invoking opaque-object hooks.
+
+    Container subclasses fail closed when their actual builtin MRO contains a
+    protected container type. Other opaque objects are not introspected; this
+    is bounded cleanup evidence, not a full-heap reference proof.
+    """
+    pending = [("value", frame.f_locals)]
+    seen_containers = set()
+    while pending:
+        if budget[0] <= 0:
+            return None
+        kind, value = pending.pop()
+        budget[0] -= 1
+        if kind == "tuple-iterator":
+            try:
+                child = next(value)
+            except StopIteration:
+                continue
+            pending.append((kind, value))
+            pending.append(("value", child))
+            continue
+        if kind == "dict-iterator":
+            try:
+                key, child = next(value)
+            except StopIteration:
+                continue
+            pending.append((kind, value))
+            pending.append(("value", key))
+            pending.append(("value", child))
+            continue
+        if any(value is reference for reference in protected):
+            return True
+        value_type = type(value)
+        if value_type is dict:
+            identity = id(value)
+            if identity in seen_containers:
+                continue
+            seen_containers.add(identity)
+            pending.append(("dict-iterator", iter(dict.items(value))))
+        elif any(value_type is container_type for container_type in
+                 (tuple, list, set, frozenset)):
+            identity = id(value)
+            if identity in seen_containers:
+                continue
+            seen_containers.add(identity)
+            pending.append(("tuple-iterator", iter(value)))
+        else:
+            if budget[0] <= 0:
+                return None
+            budget[0] -= 1
+            try:
+                # Calling type.__getattribute__ still runs data descriptors on
+                # a hostile metaclass. The builtin descriptor reads the real
+                # MRO tuple without consulting metaclass overrides.
+                hierarchy = _TYPE_MRO_DESCRIPTOR.__get__(value_type, type)
+            except (AttributeError, TypeError):
+                return None
+            if type(hierarchy) is not tuple:
+                return None
+            for base in hierarchy:
+                if budget[0] <= 0:
+                    return None
+                budget[0] -= 1
+                if any(base is container_type for container_type in
+                       (dict, tuple, list, set, frozenset)):
+                    return None
+    return False
+
+
+def _clear_write_error_payload_frames(error, references, *, write_task=None):
+    protected = tuple(reference for reference in references if reference is not None)
+    if not protected:
+        return True
+    if write_task is not None and not write_task.done():
+        return False
+
+    pending_errors = [error]
+    if write_task is not None and not write_task.cancelled():
+        try:
+            task_error = write_task.exception()
+        except asyncio.CancelledError:
+            task_error = None
+        if task_error is not None:
+            pending_errors.append(task_error)
+
+    budget = [_WRITE_ERROR_REFERENCE_SCAN_LIMIT]
+    seen_errors = set()
+    seen_tracebacks = set()
+    tracebacks = []
+    while pending_errors:
+        if budget[0] <= 0:
+            return False
+        current_error = pending_errors.pop()
+        identity = id(current_error)
+        if identity in seen_errors:
+            continue
+        seen_errors.add(identity)
+        budget[0] -= 1
+        traceback = current_error.__traceback__
+        while traceback is not None:
+            trace_identity = id(traceback)
+            if trace_identity in seen_tracebacks:
+                break
+            if budget[0] <= 0:
+                return False
+            seen_tracebacks.add(trace_identity)
+            budget[0] -= 1
+            tracebacks.append(traceback)
+            traceback = traceback.tb_next
+        if current_error.__cause__ is not None:
+            pending_errors.append(current_error.__cause__)
+        if current_error.__context__ is not None:
+            pending_errors.append(current_error.__context__)
+
+    current_frame = sys._getframe(1)
+    relevant_frames = []
+    seen_frames = set()
+    for traceback in tracebacks:
+        frame = traceback.tb_frame
+        if frame is current_frame or id(frame) in seen_frames:
+            continue
+        seen_frames.add(id(frame))
+        holds_reference = _scan_frame_for_write_references(
+            frame, protected, budget)
+        if holds_reference is None:
+            return False
+        if holds_reference:
+            relevant_frames.append(frame)
+
+    for frame in relevant_frames:
+        try:
+            frame.clear()
+        except RuntimeError:
+            return False
+        if _scan_frame_for_write_references(frame, protected, budget) is not False:
+            return False
+    return True
+
+
 class CoordinatorService:
     def __init__(self, coordinator, *, loading_seconds=0, max_streams=None):
         self.coordinator = coordinator
@@ -286,14 +430,35 @@ class CoordinatorService:
             self.tokenizing -= 1
 
     async def _write(self, context, value, deadline):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("Stream deadline expired")
-        payload = encode_json(value)
-        await asyncio.wait_for(context.write(payload), min(
-            remaining, self.coordinator.limits.output_stall_timeout_seconds))
+        payload = None
+        write_task = None
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Stream deadline expired")
+            payload = encode_json(value)
+            write_task = asyncio.create_task(context.write(payload))
+            await asyncio.wait_for(write_task, min(
+                remaining, self.coordinator.limits.output_stall_timeout_seconds))
+        except BaseException as error:
+            try:
+                references_cleared = _clear_write_error_payload_frames(
+                    error, (payload, value, write_task), write_task=write_task)
+            except Exception:
+                references_cleared = False
+            if not references_cleared:
+                ownership_error = RuntimeError(
+                    "Response write-buffer reclamation could not be confirmed")
+                ownership_error.capture_reference_cleanup_unconfirmed = True
+                raise ownership_error from error
+            raise
+        finally:
+            value = None
+            payload = None
+            write_task = None
 
-    async def _finish(self, handle, *, cancel):
+
+    async def _finish(self, handle, *, cancel, release_active_stream=True):
         try:
             result = await (handle.cancel() if cancel else handle.result())
             self.counters[{"completed": "completed_requests", "cancelled": "cancelled_requests",
@@ -302,7 +467,8 @@ class CoordinatorService:
                 self.counters["cleanup_incomplete_requests"] += 1
         finally:
             self.metrics.pop(handle.session_id, None)
-            self.active_streams -= 1
+            if release_active_stream:
+                self.active_streams -= 1
 
     async def generate_rpc(self, data, context):
         from .coordinator import CoordinatorError

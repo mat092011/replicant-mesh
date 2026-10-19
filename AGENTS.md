@@ -31,8 +31,9 @@ The [M5 report](docs/experiments/2026-10-16-pytorch-m5.md) records the lab gate 
 selected measurements. The full performance sweep remains incomplete; same-host
 container tests do not establish separate-device performance.
 Follow-on [experiment analysis](docs/PYTORCH_EXPERIMENT_ANALYSIS.md) and
-[capacity preparation](docs/PYTORCH_CAPACITY.md) tools support P3/P4. Only the local
-laptop is available. Capacity arithmetic and simulated networks do not complete
+[capacity preparation](docs/PYTORCH_CAPACITY.md) tools support P3/P4. The laptop and
+provided ZimaBlade CPU host are available; no supported GPU has been validated.
+Capacity arithmetic and simulated networks do not complete
 the pooled-GPU or separate-device gates; preserve these limits in future work.
 
 ## Technical principles

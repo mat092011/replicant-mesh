@@ -139,7 +139,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(handler.shutdown(), 4)
 
     async def start(self, **overrides):
-        limits = replace(self.Limits(), cleanup_timeout_seconds=1, **overrides)
+        limits = replace(self.Limits(), **{"cleanup_timeout_seconds": 1, **overrides})
         self.coordinator = self.Coordinator(self.manifest, self.clients, self.model, limits=limits)
         await self.coordinator.start()
         return self.coordinator
@@ -167,6 +167,57 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["active_requests"], 0)
         self.assertEqual(stats["waiting_admissions"], 0)
         self.assertEqual(stats["stage_queue_sizes"], [0, 0, 0])
+
+    async def test_execute_for_request_preserves_legacy_and_secure_call_signatures(self):
+        from steamboat_runtime.participant_context import TrustedRequestContext
+
+        coordinator = await self.start()
+        calls = []
+
+        async def legacy_execute(index, method, request):
+            calls.append((index, method, request, {}))
+            return "legacy"
+
+        coordinator._execute = legacy_execute
+        request = object()
+        self.assertEqual(await coordinator._execute_for_request(0, "Describe", request),
+                         "legacy")
+        self.assertEqual(calls, [(0, "Describe", request, {})])
+
+        class Authorization:
+            def assert_live(self):
+                return None
+
+            def remaining_seconds(self):
+                return 60.0
+
+        context = TrustedRequestContext(
+            tenant_account_id="acct_" + "1" * 32,
+            request_id="req_" + "2" * 32,
+            session_id="ses_" + "3" * 32,
+            route_id="route_" + "4" * 32,
+            coordinator_boot_id="5" * 32,
+            route_epoch=1,
+            attempt=1,
+            authorization=Authorization(),
+            hard_monotonic_deadline=time.monotonic() + 30,
+        )
+        scoped_calls = []
+
+        async def scoped_execute(index, method, request, **kwargs):
+            scoped_calls.append((index, method, request, kwargs))
+            return "scoped"
+
+        coordinator._execute = scoped_execute
+        self.assertEqual(await coordinator._execute_for_request(
+            1, "Step", request, trusted_request_context=context), "scoped")
+        self.assertEqual(await coordinator._execute_for_request(
+            1, "CloseSession", request, trusted_request_context=context, cleanup=True),
+            "scoped")
+        self.assertIs(scoped_calls[0][3]["trusted_request_context"], context)
+        self.assertNotIn("cleanup", scoped_calls[0][3])
+        self.assertIs(scoped_calls[1][3]["trusted_request_context"], context)
+        self.assertIs(scoped_calls[1][3]["cleanup"], True)
 
     async def test_one_three_eight_requests_preserve_greedy_causal_feedback(self):
         coordinator = await self.start()
@@ -459,6 +510,221 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(result.status == "cancelled" for result in results))
         self.assert_clean()
 
+    async def test_shutdown_returns_failure_after_ordinary_client_close_error(self):
+        from steamboat_runtime.protocol.secure_transport import SecureTransportError
+
+        coordinator = await self.start()
+
+        async def fail_client_close():
+            raise SecureTransportError("physical close was not confirmed")
+
+        self.clients[0].close = fail_client_close
+        self.assertFalse(await coordinator.close())
+        # Local model cleanup can succeed, but it cannot turn a failed worker
+        # transport close into a successful coordinator shutdown.
+        self.assertTrue(self.model.closed)
+        self.assertTrue(coordinator.model_cleanup_complete)
+        self.assertIsNotNone(coordinator._fatal_error)
+
+    async def test_shutdown_inspects_consumed_completed_startup_wrapper(self):
+        from unittest.mock import patch
+        from steamboat_runtime.protocol.secure_transport import SecureTaskPending
+        import steamboat_runtime.coordinator as coordinator_module
+
+        coordinator = self.Coordinator(self.manifest, self.clients, self.model)
+        self.coordinator = coordinator
+        child_started, release_child = asyncio.Event(), asyncio.Event()
+
+        async def resistant_child():
+            child_started.set()
+            try:
+                await release_child.wait()
+            except asyncio.CancelledError:
+                await release_child.wait()
+
+        async def completed_start_wrapper():
+            child = asyncio.create_task(resistant_child())
+            await child_started.wait()
+            raise SecureTaskPending((child,), "startup still owns a child")
+
+        wrapper = asyncio.create_task(completed_start_wrapper())
+        observed = (await asyncio.gather(wrapper, return_exceptions=True))[0]
+        self.assertIsInstance(observed, SecureTaskPending)
+        coordinator._start_task = wrapper
+
+        try:
+            with patch.object(coordinator_module,
+                              "MAX_CANCELLATION_GRACE_SECONDS", 0.05):
+                started = time.monotonic()
+                self.assertFalse(await coordinator.close())
+                self.assertLess(time.monotonic() - started, 0.5)
+            child = next(iter(coordinator._shutdown_pending_tasks))
+            self.assertNotIn(wrapper, coordinator._shutdown_pending_tasks)
+            self.assertFalse(child.done())
+            self.assertFalse(self.model.closed)
+            self.assertFalse(any(client.closed for client in self.clients))
+            release_child.set()
+            await asyncio.wait_for(child, 1)
+            self.assertTrue(await coordinator._wait_shutdown_tasks_until(
+                time.monotonic() + 0.5))
+        finally:
+            release_child.set()
+
+    async def test_pending_client_close_stays_bounded_and_retained_until_child_retires(self):
+        from unittest.mock import patch
+        from steamboat_runtime.protocol.secure_transport import SecureTaskPending
+        import steamboat_runtime.coordinator as coordinator_module
+
+        coordinator = await self.start()
+        child_started, release_child = asyncio.Event(), asyncio.Event()
+        owned = []
+
+        async def resistant_close_child():
+            child_started.set()
+            try:
+                await release_child.wait()
+            except asyncio.CancelledError:
+                await release_child.wait()
+
+        async def pending_client_close():
+            async def completed_wrapper():
+                child = asyncio.create_task(resistant_close_child())
+                owned.append(child)
+                await child_started.wait()
+                raise SecureTaskPending((child,), "close wrapper still owns a child")
+
+            wrapper = asyncio.create_task(completed_wrapper())
+            observed = (await asyncio.gather(wrapper, return_exceptions=True))[0]
+            self.assertIsInstance(observed, SecureTaskPending)
+            raise SecureTaskPending((wrapper,), "client close wrapper was observed")
+
+        self.clients[0].close = pending_client_close
+        try:
+            with patch.object(coordinator_module,
+                              "MAX_CANCELLATION_GRACE_SECONDS", 0.05):
+                started = time.monotonic()
+                self.assertFalse(await coordinator.close())
+                self.assertLess(time.monotonic() - started, 0.5)
+            self.assertTrue(owned)
+            child = owned[0]
+            self.assertFalse(child.done())
+            self.assertIn(child, coordinator._shutdown_pending_tasks)
+            self.assertFalse(self.model.closed)
+            self.assertFalse(self.clients[0].closed)
+
+            release_child.set()
+            await asyncio.wait_for(child, 1)
+            self.assertTrue(await coordinator._wait_shutdown_tasks_until(
+                time.monotonic() + 0.5))
+        finally:
+            release_child.set()
+
+    async def test_shutdown_callback_owns_child_announced_after_close_deadline(self):
+        from unittest.mock import patch
+        from steamboat_runtime.protocol.secure_transport import SecureTaskPending
+        from steamboat_runtime.protocol import secure_transport
+        import steamboat_runtime.coordinator as coordinator_module
+
+        coordinator = await self.start()
+        close_started, release_close, child_started, release_child = (
+            asyncio.Event(), asyncio.Event(), asyncio.Event(), asyncio.Event())
+        child_tasks = []
+
+        async def resistant_child():
+            child_started.set()
+            try:
+                await release_child.wait()
+            except asyncio.CancelledError:
+                await release_child.wait()
+
+        async def delayed_pending_close():
+            close_started.set()
+            await release_close.wait()
+            child = asyncio.create_task(resistant_child())
+            child_tasks.append(child)
+            await child_started.wait()
+            raise SecureTaskPending((child,), "late close child")
+
+        self.clients[0].close = delayed_pending_close
+        try:
+            with patch.object(coordinator_module,
+                              "MAX_CANCELLATION_GRACE_SECONDS", 0.05):
+                started = time.monotonic()
+                self.assertFalse(await coordinator.close())
+                self.assertLess(time.monotonic() - started, 0.5)
+            await asyncio.wait_for(close_started.wait(), 1)
+            self.assertFalse(coordinator.stats()["ready"])
+            self.assertTrue(coordinator._closed)
+            root = next(task for task in coordinator._shutdown_pending_tasks
+                        if not task.done())
+            self.assertIn(root, coordinator._shutdown_watched_tasks)
+
+            release_close.set()
+            await asyncio.wait_for(child_started.wait(), 1)
+            child = child_tasks[0]
+            await self.wait_for(lambda: child in coordinator._shutdown_pending_tasks, 1)
+            self.assertTrue(root.done())
+            self.assertIn(child, coordinator._shutdown_watched_tasks)
+            self.assertIn(child, secure_transport._RETAINED_TASKS)
+            self.assertFalse(child.done())
+            self.assertFalse(coordinator.stats()["ready"])
+        finally:
+            release_close.set()
+            release_child.set()
+            remaining = tuple(task for task in coordinator._shutdown_pending_tasks
+                              if not task.done())
+            if remaining:
+                await asyncio.wait_for(asyncio.gather(*remaining,
+                                                       return_exceptions=True), 1)
+            if child_tasks:
+                await asyncio.wait_for(asyncio.gather(*child_tasks,
+                                                       return_exceptions=True), 1)
+
+    async def test_model_close_timeout_is_bounded_after_clients_close(self):
+        from unittest.mock import patch
+        import steamboat_runtime.coordinator as coordinator_module
+
+        coordinator = await self.start()
+        model_close_started, release_model = asyncio.Event(), asyncio.Event()
+        model_tasks = []
+
+        async def delayed_model_close():
+            model_tasks.append(asyncio.current_task())
+            model_close_started.set()
+            try:
+                await release_model.wait()
+            except asyncio.CancelledError:
+                await release_model.wait()
+            self.model.closed = True
+            return True
+
+        self.model.close = delayed_model_close
+        try:
+            with patch.object(coordinator_module,
+                              "MAX_CANCELLATION_GRACE_SECONDS", 0.15):
+                started = time.monotonic()
+                self.assertFalse(await coordinator.close())
+                self.assertLess(time.monotonic() - started, 0.6)
+            await asyncio.wait_for(model_close_started.wait(), 1)
+            self.assertTrue(all(client.closed for client in self.clients))
+            self.assertIsNone(coordinator.model_cleanup_complete)
+            self.assertTrue(model_tasks)
+            model_task = model_tasks[0]
+            self.assertFalse(model_task.done())
+            self.assertIn(model_task, coordinator._shutdown_pending_tasks)
+            self.assertFalse(self.model.closed)
+            self.assertFalse(coordinator.stats()["ready"])
+
+            release_model.set()
+            await asyncio.wait_for(model_task, 1)
+            self.assertTrue(self.model.closed)
+            self.assertIsNone(coordinator.model_cleanup_complete)
+            self.assertFalse(await coordinator.close())
+        finally:
+            release_model.set()
+            if model_tasks:
+                await asyncio.gather(model_tasks[0], return_exceptions=True)
+
     async def test_limits_cannot_exceed_frozen_manifest_bounds(self):
         for values in ({"max_sessions": 9}, {"max_stage_queue": 9},
                        {"request_timeout_seconds": 301}, {"trace_events": 0},
@@ -466,3 +732,250 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 self.Coordinator(self.manifest, self.clients, self.model,
                                  limits=replace(self.Limits(), **values))
+
+    def trusted_context(self):
+        from steamboat_runtime.participant_context import TrustedRequestContext
+
+        class Authorization:
+            def assert_live(self):
+                return True
+
+            def remaining_seconds(self):
+                return 60.0
+
+        return TrustedRequestContext(
+            tenant_account_id="acct_" + "1" * 32,
+            request_id="req_" + "2" * 32,
+            session_id="ses_" + "3" * 32,
+            route_id="route_" + "4" * 32,
+            coordinator_boot_id="5" * 32,
+            route_epoch=1,
+            attempt=1,
+            authorization=Authorization(),
+            hard_monotonic_deadline=time.monotonic() + 60,
+        )
+
+    def install_context_clients(self, after_response):
+        for index, client in enumerate(self.clients):
+            original = client.execute
+
+            async def execute(method, request, *, trusted_request_context=None,
+                              _original=original, _index=index):
+                response = await _original(method, request)
+                await after_response(_index, method, request, response)
+                return response
+
+            client.execute = execute
+
+    async def test_step_pending_child_keeps_context_and_admission_until_cleanup(self):
+        from steamboat_runtime.protocol.secure_transport import SecureTaskPending
+
+        coordinator = await self.start(cleanup_timeout_seconds=1)
+        context = self.trusted_context()
+        child_started, release_child = asyncio.Event(), asyncio.Event()
+        injected = False
+
+        async def after_response(index, method, request, response):
+            nonlocal injected
+            if index != 1 or method != "Step" or injected:
+                return
+            injected = True
+
+            async def resistant_child():
+                child_started.set()
+                try:
+                    await release_child.wait()
+                except asyncio.CancelledError:
+                    await release_child.wait()
+
+            async def wrapper():
+                child = asyncio.create_task(resistant_child())
+                await child_started.wait()
+                raise SecureTaskPending((child,), "injected pending step owner")
+
+            completed_wrapper = asyncio.create_task(wrapper())
+            observed = (await asyncio.gather(completed_wrapper,
+                                             return_exceptions=True))[0]
+            self.assertIsInstance(observed, SecureTaskPending)
+            raise observed
+
+        self.install_context_clients(after_response)
+        handle = coordinator.submit(self.ids(9), 2, trusted_request_context=context)
+        await asyncio.wait_for(child_started.wait(), 2)
+        state = handle._state
+        await asyncio.sleep(0.05)
+        self.assertFalse(state.completion.done())
+        self.assertFalse(context._admission.completed)
+        self.assertIn(state.session_id, coordinator._requests)
+        self.assertEqual(coordinator.stats()["active_requests"], 1)
+        self.assertFalse(any(method in {"CancelSession", "CloseSession"}
+                             for client in self.clients for method, _, _ in client.calls))
+
+        release_child.set()
+        result = await asyncio.wait_for(handle.result(), 2)
+        self.assertTrue(result.cleanup_complete)
+        self.assertTrue(context._admission.completed)
+        self.assertTrue(state.retirement_event.is_set())
+        self.assert_clean()
+
+    async def test_open_pending_child_preserves_unknown_owner_and_requires_restart(self):
+        from steamboat_runtime.protocol.secure_transport import SecureTaskPending
+
+        coordinator = await self.start(cleanup_timeout_seconds=1)
+        context = self.trusted_context()
+        child_started, release_child = asyncio.Event(), asyncio.Event()
+        injected = False
+
+        async def after_response(index, method, request, response):
+            nonlocal injected
+            if index != 0 or method != "OpenSession" or injected:
+                return
+            injected = True
+
+            async def resistant_child():
+                child_started.set()
+                try:
+                    await release_child.wait()
+                except asyncio.CancelledError:
+                    await release_child.wait()
+
+            async def wrapper():
+                child = asyncio.create_task(resistant_child())
+                await child_started.wait()
+                raise SecureTaskPending((child,), "injected pending open owner")
+
+            completed_wrapper = asyncio.create_task(wrapper())
+            observed = (await asyncio.gather(completed_wrapper,
+                                             return_exceptions=True))[0]
+            self.assertIsInstance(observed, SecureTaskPending)
+            raise observed
+
+        self.install_context_clients(after_response)
+        handle = coordinator.submit(self.ids(9), 2, trusted_request_context=context)
+        await asyncio.wait_for(child_started.wait(), 2)
+        state = handle._state
+        self.assertIn(0, state.unknown_opens)
+        self.assertFalse(context._admission.completed)
+        self.assertEqual(coordinator.stats()["active_requests"], 1)
+        release_child.set()
+        result = await asyncio.wait_for(handle.result(), 2)
+        self.assertFalse(result.cleanup_complete)
+        self.assertEqual(result.error_code, "WORKER_PENDING")
+        self.assertTrue(state.restart_required)
+        self.assertIn(state.session_id, coordinator._requests)
+        self.assertFalse(context._admission.completed)
+        self.assertFalse(state.retirement_event.is_set())
+        self.assertEqual(len([call for call in self.clients[0].calls
+                              if call[0] == "OpenSession"]), 1)
+        self.assertEqual(len(self.handlers[0].sessions), 1)
+        self.assertFalse(await coordinator.close())
+        self.assertFalse(self.model.closed)
+        self.assertFalse(any(client.closed for client in self.clients))
+
+    async def test_renew_pending_child_is_owned_before_session_cleanup(self):
+        from steamboat_runtime.protocol.secure_transport import SecureTaskPending
+
+        coordinator = await self.start(renew_interval_seconds=0.01,
+                                       cleanup_timeout_seconds=1)
+        context = self.trusted_context()
+        self.clients[0].step_gate = asyncio.Event()
+        child_started, release_child = asyncio.Event(), asyncio.Event()
+        injected = False
+
+        async def after_response(index, method, request, response):
+            nonlocal injected
+            if index != 0 or method != "RenewSession" or injected:
+                return
+            injected = True
+
+            async def resistant_child():
+                child_started.set()
+                try:
+                    await release_child.wait()
+                except asyncio.CancelledError:
+                    await release_child.wait()
+
+            async def wrapper():
+                child = asyncio.create_task(resistant_child())
+                await child_started.wait()
+                raise SecureTaskPending((child,), "injected pending renew owner")
+
+            completed_wrapper = asyncio.create_task(wrapper())
+            observed = (await asyncio.gather(completed_wrapper,
+                                             return_exceptions=True))[0]
+            self.assertIsInstance(observed, SecureTaskPending)
+            raise observed
+
+        self.install_context_clients(after_response)
+        handle = coordinator.submit(self.ids(9), 3, trusted_request_context=context)
+        await asyncio.wait_for(self.clients[0].step_started.wait(), 2)
+        await asyncio.wait_for(child_started.wait(), 2)
+        state = handle._state
+        self.assertFalse(context._admission.completed)
+        self.assertIn(state.session_id, coordinator._requests)
+        self.assertEqual(coordinator.stats()["active_requests"], 1)
+        self.assertFalse(any(method in {"CancelSession", "CloseSession"}
+                             for client in self.clients for method, _, _ in client.calls))
+        release_child.set()
+        result = await asyncio.wait_for(handle.result(), 2)
+        self.assertTrue(result.cleanup_complete)
+        self.assertTrue(context._admission.completed)
+        self.assertEqual(len([call for call in self.clients[0].calls
+                              if call[0] == "RenewSession"]), 1)
+        self.assert_clean()
+
+    async def test_pending_cancel_switches_to_status_without_replaying_mutation(self):
+        from steamboat_runtime.protocol.secure_transport import SecureTaskPending
+
+        coordinator = await self.start(cleanup_timeout_seconds=1)
+        context = self.trusted_context()
+        self.clients[0].step_gate = asyncio.Event()
+        child_started, release_child = asyncio.Event(), asyncio.Event()
+        injected = False
+
+        async def after_response(index, method, request, response):
+            nonlocal injected
+            if index != 0 or method != "CancelSession" or injected:
+                return
+            injected = True
+
+            async def resistant_child():
+                child_started.set()
+                try:
+                    await release_child.wait()
+                except asyncio.CancelledError:
+                    await release_child.wait()
+
+            async def wrapper():
+                child = asyncio.create_task(resistant_child())
+                await child_started.wait()
+                raise SecureTaskPending((child,), "injected pending cancel owner")
+
+            completed_wrapper = asyncio.create_task(wrapper())
+            observed = (await asyncio.gather(completed_wrapper,
+                                             return_exceptions=True))[0]
+            self.assertIsInstance(observed, SecureTaskPending)
+            raise observed
+
+        self.install_context_clients(after_response)
+        handle = coordinator.submit(self.ids(9), 3, trusted_request_context=context)
+        await asyncio.wait_for(self.clients[0].step_started.wait(), 2)
+        cancelling = asyncio.create_task(handle.cancel())
+        await asyncio.wait_for(child_started.wait(), 2)
+        state = handle._state
+        await asyncio.sleep(0.05)
+        self.assertFalse(cancelling.done())
+        self.assertFalse(context._admission.completed)
+        self.assertIn(state.session_id, coordinator._requests)
+        self.assertEqual(coordinator.stats()["active_requests"], 1)
+        self.assertEqual(len([call for call in self.clients[0].calls
+                              if call[0] == "CancelSession"]), 1)
+        release_child.set()
+        result = await asyncio.wait_for(cancelling, 2)
+        self.assertTrue(result.cleanup_complete)
+        self.assertTrue(context._admission.completed)
+        self.assertEqual(len([call for call in self.clients[0].calls
+                              if call[0] == "CancelSession"]), 1)
+        self.assertGreaterEqual(len([call for call in self.clients[0].calls
+                                     if call[0] == "SessionStatus"]), 1)
+        self.assert_clean()
