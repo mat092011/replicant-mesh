@@ -21,8 +21,14 @@ from .validation import new_id, valid_typed_id
 class InactiveRoleBackend:
     secure_runtime_ready = False
 
-    def start(self, role, policy):
+    def start(self, role, policy, *, cancel_event=None):
         return False
+
+    def request_stop(self, roles):
+        return {role: False for role in roles}
+
+    def request_drain(self, roles):
+        return {role: False for role in roles}
 
     def drain(self, roles, deadline, cancel_event):
         return {"drained": True, "reclaimed": True}
@@ -57,6 +63,11 @@ class ManagementController:
         self._urgent = queue.Queue(maxsize=64)
         self._closing = threading.Event()
         self._drains = {}
+        # A start owns its cancellation token before entering the lifecycle
+        # queue. Retain it until backend.start returns, including after Stop.
+        self._starts = {}
+        self._stop_fences = {}
+        self._stop_tokens = {}
         self._threads = []
         self._state = validate_state(self.store.load())
         self.boot_id = __import__("secrets").token_hex(16)
@@ -171,6 +182,7 @@ class ManagementController:
             queue_target.put_nowait((operation_id, kind, payload))
             return True
         except queue.Full:
+            self._stop_tokens.pop(operation_id, None)
             self._operation_update(operation_id, "incomplete", {"reason": "lifecycle_queue_full",
                                                                  "reclaimed": False})
             return False
@@ -312,7 +324,10 @@ class ManagementController:
         with self._lock:
             self._state["roles"][role] = False
             self._state["paused_roles"][role] = True
+            self._cancel_starts((role,))
             operation = self._record_operation("role.disable", result={"role": role})
+            self._fence_stop((role,), operation["operation_id"])
+            self._notify_backend((role,), draining=False)
         self._enqueue(self._urgent, operation["operation_id"], "stop", (role,))
         return {"operation_id": operation["operation_id"], "role": role,
                 "enabled": False, "admission": "disabled_immediately"}
@@ -323,21 +338,35 @@ class ManagementController:
             raise ConnectorError("INVALID_ARGUMENT", "policy is required")
         try:
             policy = validate_policy(payload["policy"])
-            ledger_state = self.ledger.configure(policy)
-        except (ValueError, ResourceError, StorageError) as error:
+        except ValueError as error:
             raise ConnectorError("INVALID_POLICY", str(error)) from error
         with self._lock:
+            try:
+                ledger_state = self.ledger.configure(policy)
+            except (ResourceError, StorageError) as error:
+                raise ConnectorError("INVALID_POLICY", str(error)) from error
             self._state["policy"] = policy
             affected = []
+            # A queued start captured the previous policy. It may never use
+            # that snapshot after the owner has replaced it.
+            for role in ("host", "coordinator"):
+                if role in self._starts:
+                    self._starts[role][1].set()
+                    self._state["paused_roles"][role] = True
+                    affected.append(role)
             if ledger_state["blocked"]:
                 for role in ("host", "coordinator"):
                     if self._state["roles"][role]:
                         self._state["paused_roles"][role] = True
-                        affected.append(role)
+                        if role not in affected:
+                            affected.append(role)
             self._persist()
             operation = self._record_operation("policy.set", status=("queued" if affected else "succeeded"),
                                                result={"resource_ledger_blocked": ledger_state["blocked"],
                                                        "roles_paused": affected})
+            if affected:
+                self._fence_stop(affected, operation["operation_id"])
+                self._notify_backend(tuple(affected), draining=False)
         if affected:
             self._enqueue(self._urgent, operation["operation_id"], "policy_reduction",
                           tuple(affected))
@@ -349,11 +378,19 @@ class ManagementController:
         self._payload(payload, {"roles"})
         with self._lock:
             roles = self._roles(payload)
+            if self._closing.is_set():
+                raise ConnectorError("SHUTTING_DOWN", "daemon is shutting down")
+            if any(role in self._starts or role in self._stop_fences
+                   or role in self._drains for role in roles):
+                raise ConnectorError("BUSY", "prior lifecycle ownership is unresolved")
             if any(not self._state["roles"][role] for role in roles):
                 raise ConnectorError("ROLE_DISABLED", "explicitly enable each role before start")
             statuses = self._role_statuses(self._state)
-            blockers = {role: statuses[role]["blockers"] for role in roles
-                        if statuses[role]["blockers"]}
+            # An explicit Start is the owner's permission to resume a paused
+            # role; it cannot override any security or enforcement blocker.
+            blockers = {role: [item for item in statuses[role]["blockers"]
+                               if item != "owner_paused"] for role in roles}
+            blockers = {role: items for role, items in blockers.items() if items}
             if blockers:
                 operation = self._record_operation("start", status="blocked",
                                                    result={"blockers": blockers})
@@ -371,7 +408,18 @@ class ManagementController:
             for role in roles:
                 self._state["paused_roles"][role] = False
             operation = self._record_operation("start", result={"roles": list(roles)})
-        self._enqueue(self._normal, operation["operation_id"], "start", (roles, policy))
+            tokens = {role: threading.Event() for role in roles}
+            for role, token in tokens.items():
+                self._starts[role] = (operation["operation_id"], token)
+            if not self._enqueue(self._normal, operation["operation_id"], "start",
+                                 (roles, policy, tokens)):
+                for role, token in tokens.items():
+                    token.set()
+                    del self._starts[role]
+                    self._state["paused_roles"][role] = True
+                self._persist()
+                return {"operation_id": operation["operation_id"], "state": "unavailable",
+                        "reason": "lifecycle_queue_full"}
         return {"operation_id": operation["operation_id"], "state": "starting",
                 "roles": list(roles)}
 
@@ -388,6 +436,8 @@ class ManagementController:
                 raise ConnectorError("BUSY", "another bounded drain is in progress")
             for role in roles:
                 self._state["paused_roles"][role] = True
+            self._cancel_starts(roles)
+            self._notify_backend(roles, draining=True)
             if not new_roles:
                 operation_id = next(iter(already.values()))
                 existing = self._find_operation(operation_id)
@@ -419,8 +469,11 @@ class ManagementController:
                 drain = self._drains.get(role)
                 if drain is not None:
                     drain[2].set()
+            self._cancel_starts(roles)
             operation = self._record_operation("stop", result={"roles": list(roles),
                                                                  "reclaimed": False})
+            self._fence_stop(roles, operation["operation_id"])
+            self._notify_backend(roles, draining=False)
         self._enqueue(self._urgent, operation["operation_id"], "stop", roles)
         return {"operation_id": operation["operation_id"], "state": "stop_intent_recorded",
                 "admission": "disabled_immediately", "reclaimed": False}
@@ -439,9 +492,12 @@ class ManagementController:
                     drain[2].set()
             self._state["removed"] = True
             self._state["revocation_pending"] = True
+            self._cancel_starts(ROLE_NAMES)
             operation = self._record_operation("remove", result={
                 "delete_owned_data": delete_owned_data,
                 "revocation_status": "pending_offline", "reclaimed": False})
+            self._fence_stop(ROLE_NAMES, operation["operation_id"])
+            self._notify_backend(ROLE_NAMES, draining=False)
         self._enqueue(self._urgent, operation["operation_id"], "remove",
                       (ROLE_NAMES, delete_owned_data))
         return {"operation_id": operation["operation_id"], "state": "removal_pending",
@@ -514,20 +570,71 @@ class ManagementController:
                 self._operation_update(operation_id, "incomplete",
                                        {"reason": "lifecycle_operation_failed", "reclaimed": False})
             finally:
+                with self._lock:
+                    self._stop_tokens.pop(operation_id, None)
                 work_queue.task_done()
 
-    def _perform_start(self, operation_id, payload):
-        roles, policy = payload
-        started = []
+    def _cancel_starts(self, roles):
+        # Caller holds _lock. No I/O, joins, or backend lock acquisition here.
         for role in roles:
-            if not self.backend.start(role, policy):
+            pending = self._starts.get(role)
+            if pending is not None:
+                pending[1].set()
+
+    def _notify_backend(self, roles, *, draining):
+        # The backend contract requires these intent hooks to be nonblocking.
+        # A missing/failing hook never constitutes proof of reclamation.
+        hook = getattr(self.backend, "request_drain" if draining else "request_stop", None)
+        if hook is not None:
+            try:
+                hook(roles)
+            except Exception:
+                for role in roles:
+                    self._stop_fences.setdefault(role, object())
+
+    def _fence_stop(self, roles, operation_id):
+        tokens = {role: object() for role in roles}
+        self._stop_fences.update(tokens)
+        self._stop_tokens[operation_id] = tokens
+
+    def _perform_start(self, operation_id, payload):
+        roles, policy, tokens = payload
+        started = []
+        try:
+            for role in roles:
+                token = tokens[role]
                 with self._lock:
-                    self._state["paused_roles"][role] = True
-                    self._persist()
-                return {"roles_started": started, "blocked_role": role,
-                        "success": False, "reason": "role_backend_not_ready"}
-            started.append(role)
-        return {"roles_started": started, "success": True}
+                    allowed = (self._starts.get(role) == (operation_id, token)
+                               and not token.is_set() and not self._closing.is_set()
+                               and self._state["roles"][role]
+                               and not self._state["paused_roles"][role]
+                               and not self._state["removed"])
+                if not allowed:
+                    return {"roles_started": started, "blocked_role": role,
+                            "success": False, "reason": "start_cancelled"}
+                # Stop may run between the check above and this call. The
+                # backend must observe the same already-owned cancellation token.
+                ready = self.backend.start(role, policy, cancel_event=token)
+                with self._lock:
+                    if not ready or token.is_set():
+                        self._state["paused_roles"][role] = True
+                        self._persist()
+                        return {"roles_started": started, "blocked_role": role,
+                                "success": False, "reason": "role_backend_not_ready"}
+                started.append(role)
+            return {"roles_started": started, "success": True}
+        except Exception:
+            with self._lock:
+                for role, token in tokens.items():
+                    if self._starts.get(role) == (operation_id, token):
+                        self._state["paused_roles"][role] = True
+                self._persist()
+            raise
+        finally:
+            with self._lock:
+                for role, token in tokens.items():
+                    if self._starts.get(role) == (operation_id, token):
+                        del self._starts[role]
 
     def _perform_drain(self, operation_id, payload):
         roles, deadline, cancel_event = payload
@@ -572,6 +679,11 @@ class ManagementController:
                     self.ledger.release(role, reclaimed=True)
                 except (ResourceError, StorageError):
                     reclaimed_map[role] = False
+        with self._lock:
+            tokens = self._stop_tokens.pop(operation_id, {})
+            for role, reclaimed in reclaimed_map.items():
+                if reclaimed and self._stop_fences.get(role) is tokens.get(role):
+                    self._stop_fences.pop(role, None)
         return {"roles": list(roles), "reclaimed_by_role": reclaimed_map,
                 "reclaimed": all(reclaimed_map.values()),
                 "success": all(reclaimed_map.values()),
@@ -722,12 +834,18 @@ class ManagementController:
             operation = self._record_operation("stop", result={
                 "roles": affected, "reason": "required_telemetry_unavailable",
                 "reclaimed": False})
+            self._cancel_starts(affected)
+            self._fence_stop(affected, operation["operation_id"])
+            self._notify_backend(tuple(affected), draining=False)
         self._enqueue(self._urgent, operation["operation_id"], "policy_reduction",
                       tuple(affected))
         return True
 
     def shutdown(self, *, wait_seconds=1.0):
         with self._lock:
+            self._closing.set()
+            self._cancel_starts(ROLE_NAMES)
+            self._notify_backend(ROLE_NAMES, draining=False)
             for role, enabled in self._state["roles"].items():
                 if enabled:
                     self._state["paused_roles"][role] = True
