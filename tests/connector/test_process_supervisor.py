@@ -247,10 +247,15 @@ class ProcessSupervisorTests(unittest.TestCase):
 
     def test_request_stop_deadline_survives_delayed_final_stop(self):
         holder, popen, _ = self._spawn_patch(kill_descendants=False)
+        signals = []
+
+        def killpg(pid, sig):
+            signals.append(sig)
+            holder["process"].on_signal(sig)
+
         with popen, mock.patch(
                 "steamboat_connector.process_supervisor.os.killpg",
-                side_effect=lambda pid, sig: holder["process"].on_signal(
-                    sig), create=True), mock.patch(
+                side_effect=killpg, create=True), mock.patch(
                 "steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.3):
             self.assertTrue(self.backend.start("host", sample_policy()))
             self.assertTrue(self.backend.request_stop(["host"])["host"])
@@ -258,10 +263,41 @@ class ProcessSupervisorTests(unittest.TestCase):
             first_deadline = owned.stop_deadline
             self.assertIsNotNone(first_deadline)
             time.sleep(0.32)
+            self.assertIn(9, signals)
+            self.assertIsNotNone(holder["process"].poll())
+            self.assertTrue(self.backend._events_populated(owned.group))
             started = time.monotonic()
             self.assertTrue(self.backend.stop(["host"], 1.0)["host"])
         self.assertEqual(owned.stop_deadline, first_deadline)
         self.assertLess(time.monotonic() - started, 0.15)
+
+    def test_request_stop_tightens_watchdog_deadline_without_extension(self):
+        holder, popen, _ = self._spawn_patch(kill_descendants=False)
+        signals = []
+
+        def killpg(pid, sig):
+            signals.append(sig)
+            holder["process"].on_signal(sig)
+
+        with popen, mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg",
+                side_effect=killpg, create=True), mock.patch(
+                "steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.5):
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            self.assertTrue(self.backend.request_stop(["host"])["host"])
+            owned = self.backend._owned["host"]
+            first = owned.stop_deadline
+            time.sleep(0.03)
+            with mock.patch("steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.12):
+                self.assertTrue(self.backend.request_stop(["host"])["host"])
+            self.assertLess(owned.stop_deadline, first)
+            self.assertLessEqual(owned.term_deadline, owned.stop_deadline)
+            deadline = owned.term_deadline + 0.1
+            while 9 not in signals and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertIn(9, signals)
+            self.assertTrue(self.backend._events_populated(owned.group))
+            self.assertTrue(self.backend.stop(["host"], 0.4)["host"])
 
     def test_drain_cutoff_is_not_process_cleanup_deadline(self):
         holder, popen, _ = self._spawn_patch()
@@ -400,6 +436,42 @@ class ProcessSupervisorTests(unittest.TestCase):
         first_wait = next(index for index, event in enumerate(events) if event[0] == "wait")
         self.assertEqual([event[1] for event in events[:first_wait]],
                          [signal.SIGTERM, signal.SIGTERM])
+
+    def test_request_stop_uses_one_watchdog_per_role_for_both_roles(self):
+        holder = {}
+
+        def spawn(*args, **kwargs):
+            process = FakeProcess(args[0], kwargs, self.cgroup)
+            holder[args[0][4]] = process
+            return process
+
+        signals = []
+
+        def killpg(pid, sig):
+            process = next(item for item in holder.values() if item.pid == pid)
+            signals.append((process.args[0][4], sig))
+            process.on_signal(sig)
+
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
+                        side_effect=spawn), mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg",
+                side_effect=killpg, create=True), mock.patch(
+                "steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.2):
+            self.assertTrue(self.backend.start("host", sample_policy()))
+            self.assertTrue(self.backend.start("coordinator", sample_policy()))
+            self.assertEqual(self.backend.request_stop(["host", "coordinator"]),
+                             {"host": True, "coordinator": True})
+            self.assertEqual(len(self.backend._stop_watchdogs), 2)
+            self.assertEqual([sig for _, sig in signals], [signal.SIGTERM, signal.SIGTERM])
+            deadline = time.monotonic() + 0.3
+            while (sum(sig == 9 for _, sig in signals) < 2
+                   and time.monotonic() < deadline):
+                time.sleep(0.005)
+            self.assertEqual(sum(sig == 9 for _, sig in signals), 2)
+            self.assertTrue(all(self.backend._events_populated(
+                self.backend._owned[role].group) for role in ("host", "coordinator")))
+            self.assertEqual(self.backend.stop(["host", "coordinator"], 0.4),
+                             {"host": True, "coordinator": True})
 
     def test_duplicate_start_does_not_mutate_config_or_create_second_group(self):
         holder, popen, killpg = self._spawn_patch()
@@ -613,6 +685,7 @@ class ProcessSupervisorTests(unittest.TestCase):
         real_killpg = os.killpg
         holder = {}
         outcome = {}
+        signals = []
 
         program = (
             "import os,signal,sys,time\n"
@@ -638,6 +711,7 @@ class ProcessSupervisorTests(unittest.TestCase):
             return original_read_ready(process, timeout, cancelled)
 
         def killpg(pid, sig):
+            signals.append(sig)
             real_killpg(pid, sig)
             if sig == signal.SIGKILL:
                 self.cgroup.set_empty()
@@ -665,6 +739,11 @@ class ProcessSupervisorTests(unittest.TestCase):
                 self.assertFalse(thread.is_alive())
                 self.assertFalse(outcome["started"])
                 time.sleep(0.45)
+                # Prove the independent watchdog killed the TERM-ignoring
+                # child before final lifecycle stop had a chance to do so.
+                self.assertIn(9, signals)
+                self.assertIsNotNone(holder["process"].poll())
+                self.assertTrue(self.backend._events_populated(owned.group))
                 final_started = time.monotonic()
                 self.assertTrue(self.backend.stop(["host"], 1.0)["host"])
                 self.assertEqual(owned.stop_deadline, original_deadline)
@@ -677,6 +756,10 @@ class ProcessSupervisorTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
                     child.wait(timeout=2)
+                    if owned is not None:
+                        self.cgroup.set_empty(owned.group)
+                if owned is not None and self.backend._owned.get("host") is owned:
+                    self.backend.stop(["host"], 1.0)
                 thread.join(2)
                 if thread.is_alive():
                     self.fail("readiness thread did not terminate during test cleanup")
@@ -723,6 +806,68 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertFalse(outcome["started"])
         gate_write.assert_not_called()
         self.assertEqual(self.backend.status(), {})
+
+    def test_request_stop_watchdog_covers_process_publication_race(self):
+        entered = threading.Event()
+        release = threading.Event()
+        holder = {}
+        outcome = {}
+        signals = []
+
+        def spawn(*args, **kwargs):
+            process = FakeProcess(args[0], kwargs, self.cgroup)
+            holder["process"] = process
+            entered.set()
+            release.wait(2)
+            return process
+
+        original_attach = self.cgroup.attach_child
+
+        def attach_after_spawn(group, process):
+            if process.poll() is not None:
+                self.cgroup.attached = True
+                self.cgroup.set_empty(group)
+                (Path(group) / "cgroup.procs").write_text("", encoding="ascii")
+                return
+            original_attach(group, process)
+
+        def killpg(pid, sig):
+            signals.append(sig)
+            holder["process"].on_signal(sig)
+
+        with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
+                        side_effect=spawn), mock.patch.object(
+                self.cgroup, "attach_child", side_effect=attach_after_spawn), mock.patch(
+                "steamboat_connector.process_supervisor.os.killpg",
+                side_effect=killpg, create=True), mock.patch(
+                "steamboat_connector.process_supervisor.os.write",
+                side_effect=REAL_OS_WRITE), mock.patch(
+                "steamboat_connector.process_supervisor.STOP_GRACE_MAX_SECONDS", 0.2):
+            thread = threading.Thread(target=lambda: outcome.setdefault(
+                "started", self.backend.start("host", sample_policy())))
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(self.backend.request_stop(["host"])["host"])
+                time.sleep(0.12)  # The watchdog reaches its TERM-to-KILL deadline while Popen is unpublished.
+                self.assertNotIn(9, signals)
+                release.set()
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+                self.assertFalse(outcome["started"])
+                deadline = time.monotonic() + 0.2
+                while 9 not in signals and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                self.assertIn(9, signals)
+                self.assertIsNotNone(holder["process"].poll())
+                self.assertTrue(self.backend._events_populated(holder["process"].group))
+                self.assertTrue(self.backend.stop(["host"], 0.3)["host"])
+            finally:
+                release.set()
+                thread.join(2)
+                if "host" in self.backend._owned:
+                    self.backend.stop(["host"], 0.4)
+        self.assertFalse(thread.is_alive())
 
     def test_empty_cgroup_disposal_uses_real_rmdir_and_unknown_state_is_retained(self):
         empty = Path(self.temp.name) / "empty-group"

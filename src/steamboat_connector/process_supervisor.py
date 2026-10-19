@@ -27,6 +27,7 @@ READY_TIMEOUT_SECONDS = 30.0
 READY_LINE_MAX = 64
 ROLE_CONFIG_MAX_BYTES = 65_536
 STOP_GRACE_MAX_SECONDS = 15.0
+SIGKILL = getattr(signal, "SIGKILL", 9)
 _CHILD_ENV = {"PATH": "/usr/bin:/bin", "PYTHONNOUSERSITE": "1"}
 
 
@@ -43,6 +44,9 @@ class _OwnedProcess:
     reclaimed: bool = False
     stop_deadline: float = None
     term_deadline: float = None
+    start_intent: object = None
+    attached: bool = False
+    escalation_lock: object = field(default_factory=threading.Lock)
 
 
 @dataclass
@@ -53,6 +57,16 @@ class _StartIntent:
     group: Path = None
     finished: bool = False
     final_stop_requested: bool = False
+
+
+@dataclass
+class _StopWatchdog:
+    role: str
+    generation: object
+    stop_deadline: float
+    term_deadline: float
+    wake: object = field(default_factory=threading.Event)
+    thread: object = None
 
 
 class ProcessRoleBackend:
@@ -67,6 +81,8 @@ class ProcessRoleBackend:
         self._lock = threading.RLock()
         self._owned = {}
         self._start_intents = {}
+        self._watchdog_lock = threading.Lock()
+        self._stop_watchdogs = {}
 
     @property
     def secure_runtime_ready(self):
@@ -179,7 +195,7 @@ class ProcessRoleBackend:
         # has exited. Fall back to the owned session group only if unavailable.
         kill_file = owned.group / "cgroup.kill"
         try:
-            if sig == signal.SIGKILL and kill_file.exists():
+            if sig == SIGKILL and kill_file.exists():
                 kill_file.write_text("1", encoding="ascii")
                 return
         except OSError:
@@ -211,13 +227,145 @@ class ProcessRoleBackend:
 
     @staticmethod
     def _cancel_intent(intent, deadline=None, term_deadline=None):
-        if not intent.cancelled.is_set():
-            now = time.monotonic()
-            intent.cancel_deadline = deadline if deadline is not None else (
-                now + STOP_GRACE_MAX_SECONDS)
-            intent.term_deadline = term_deadline if term_deadline is not None else (
-                now + STOP_GRACE_MAX_SECONDS * 0.5)
+        now = time.monotonic()
+        requested_deadline = (deadline if deadline is not None else
+                              now + STOP_GRACE_MAX_SECONDS)
+        requested_term = (term_deadline if term_deadline is not None else
+                          now + STOP_GRACE_MAX_SECONDS * 0.5)
+        intent.cancel_deadline = (requested_deadline if intent.cancel_deadline is None else
+                                  min(intent.cancel_deadline, requested_deadline))
+        intent.term_deadline = (requested_term if intent.term_deadline is None else
+                                min(intent.term_deadline, requested_term))
         intent.cancelled.set()
+
+    def _register_stop_watchdog(self, role, generation, stop_deadline, term_deadline):
+        with self._watchdog_lock:
+            current = self._stop_watchdogs.get(role)
+            if current is not None and current.generation is generation:
+                current.stop_deadline = min(current.stop_deadline, stop_deadline)
+                current.term_deadline = min(current.term_deadline, term_deadline,
+                                            current.stop_deadline)
+                current.wake.set()
+                if current.thread.is_alive():
+                    return True
+                watchdog = current
+            else:
+                if current is not None and current.thread.is_alive():
+                    return False
+                watchdog = _StopWatchdog(role, generation, stop_deadline,
+                                         min(term_deadline, stop_deadline))
+                self._stop_watchdogs[role] = watchdog
+            thread = threading.Thread(target=self._run_stop_watchdog,
+                                      args=(watchdog,),
+                                      name=f"participant-stop-{role}", daemon=True)
+            watchdog.thread = thread
+            self._stop_watchdogs[role] = watchdog
+            try:
+                thread.start()
+            except RuntimeError:
+                self._stop_watchdogs.pop(role, None)
+                return False
+            return True
+
+    def _stop_watchdog_owner(self, watchdog):
+        intent = watchdog.generation
+        owned = self._owned.get(watchdog.role)
+        if owned is not None and owned.start_intent is intent and not owned.reclaimed:
+            return owned, False
+        if intent.finished and intent.group is None:
+            return None, True
+        return None, False
+
+    @staticmethod
+    def _group_populated(group):
+        try:
+            values = {}
+            for line in (Path(group) / "cgroup.events").read_text(
+                    encoding="ascii").splitlines():
+                name, value = line.split()
+                if name == "populated" and name not in values and value in ("0", "1"):
+                    values[name] = value
+            if "populated" not in values:
+                return None
+            return values["populated"] == "1"
+        except (OSError, ValueError):
+            return None
+
+    def _watchdog_kill(self, owned):
+        """Escalate without lifecycle/global locks or a stale PID fallback."""
+        with owned.escalation_lock:
+            process = owned.process
+            if process is None or owned.reclaimed or self._owned.get(owned.role) is not owned:
+                return
+            kill_file = owned.group / "cgroup.kill"
+            if owned.attached:
+                try:
+                    if kill_file.exists():
+                        kill_file.write_text("1", encoding="ascii")
+                        return
+                except OSError:
+                    pass
+            # Before cgroup attachment the session leader is the only available
+            # safe target. Afterward, only use the pgid while the cgroup proves a
+            # live member remains (preventing a reaped/reused PID signal).
+            if process.poll() is None or (owned.attached and
+                                          self._group_populated(owned.group) is True):
+                try:
+                    os.killpg(process.pid, SIGKILL)
+                except OSError:
+                    pass
+
+    def _signal_owned_term(self, owned):
+        with owned.escalation_lock:
+            process = owned.process
+            if process is None or owned.reclaimed or self._owned.get(owned.role) is not owned:
+                return
+            if (process.poll() is None
+                    or self._group_populated(owned.group) is True):
+                self._signal_tree(owned, signal.SIGTERM)
+
+    def _run_stop_watchdog(self, watchdog):
+        while True:
+            with self._watchdog_lock:
+                if self._stop_watchdogs.get(watchdog.role) is not watchdog:
+                    return
+                if watchdog.wake.is_set():
+                    watchdog.wake.clear()
+                term_deadline = watchdog.term_deadline
+            owner, finished = self._stop_watchdog_owner(watchdog)
+            if finished:
+                with self._watchdog_lock:
+                    if self._stop_watchdogs.get(watchdog.role) is watchdog:
+                        self._stop_watchdogs.pop(watchdog.role, None)
+                return
+            now = time.monotonic()
+            if now < term_deadline:
+                watchdog.wake.wait(min(term_deadline - now, 0.05))
+                continue
+            if owner is not None:
+                self._watchdog_kill(owner)
+                if (owner.process is not None and owner.process.poll() is not None
+                        and self._group_populated(owner.group) is False):
+                    watchdog.wake.wait(0.05)
+                else:
+                    watchdog.wake.wait(0.05)
+                continue
+            # A canceled launch may not have published Popen yet. Keep this
+            # bounded per-role watchdog alive until its intent resolves.
+            watchdog.wake.wait(0.05)
+
+    def _retire_stop_watchdog(self, role, generation):
+        with self._watchdog_lock:
+            watchdog = self._stop_watchdogs.get(role)
+            if watchdog is None or watchdog.generation is not generation:
+                return
+            watchdog.wake.set()
+        if watchdog.thread is not threading.current_thread():
+            watchdog.thread.join(timeout=0.2)
+        with self._watchdog_lock:
+            if (self._stop_watchdogs.get(role) is watchdog
+                    and not watchdog.thread.is_alive()):
+                self._stop_watchdogs.pop(role, None)
 
     def start(self, role, policy, *, cancel_event=None):
         if (cancel_event is not None
@@ -240,6 +388,12 @@ class ProcessRoleBackend:
             if ((cancel_event is not None and cancel_event.is_set())
                     or role in self._owned or role in self._start_intents):
                 return False
+            with self._watchdog_lock:
+                prior_watchdog = self._stop_watchdogs.get(role)
+                if prior_watchdog is not None and prior_watchdog.thread.is_alive():
+                    return False
+                if prior_watchdog is not None:
+                    self._stop_watchdogs.pop(role, None)
             intent = _StartIntent()
             self._start_intents[role] = intent
 
@@ -272,7 +426,8 @@ class ProcessRoleBackend:
                 if (self._cancelled(intent, cancel_event)
                         or self._start_intents.get(role) is not intent):
                     return False
-                owned = _OwnedProcess(role, None, Path(group), self.clock())
+                owned = _OwnedProcess(role, None, Path(group), self.clock(),
+                                      start_intent=intent)
                 self._owned[role] = owned
                 if self._cancelled(intent, cancel_event):
                     del self._owned[role]
@@ -294,9 +449,14 @@ class ProcessRoleBackend:
                     self._cancel_intent(intent)
                     self._mark_stopping(owned, intent.cancel_deadline,
                                         intent.term_deadline)
+                    if time.monotonic() >= intent.term_deadline:
+                        self._watchdog_kill(owned)
+                    else:
+                        self._signal_owned_term(owned)
             os.close(read_fd)
             read_fd = -1
             self.cgroup.attach_child(group, process)
+            owned.attached = True
             with self._lock:
                 cancelled = self._cancelled(intent, cancel_event) or owned.stopping
                 if not cancelled and os.write(write_fd, b"R") != 1:
@@ -339,7 +499,7 @@ class ProcessRoleBackend:
                 self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
             elif owned is None and process is not None:
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    os.killpg(process.pid, SIGKILL)
                 except OSError:
                     pass
                 try:
@@ -430,7 +590,7 @@ class ProcessRoleBackend:
                         owned.stopping = True
                         owned.ready = False
                         if owned.process is not None:
-                            self._signal_tree(owned, signal.SIGTERM)
+                            self._signal_owned_term(owned)
                     results[role] = False
                 return results
             try:
@@ -450,7 +610,7 @@ class ProcessRoleBackend:
             # Signal every independent process before waiting on any one of them.
             if send_term:
                 for _, owned in active:
-                    self._signal_tree(owned, signal.SIGTERM)
+                    self._signal_owned_term(owned)
             for _, owned in active:
                 own_term_deadline = (owned.term_deadline if owned.term_deadline is not None
                                      else term_deadline)
@@ -464,7 +624,7 @@ class ProcessRoleBackend:
             for _, owned in active:
                 if (not self._events_populated(owned.group)
                         or owned.process.poll() is None):
-                    self._signal_tree(owned, signal.SIGKILL)
+                    self._watchdog_kill(owned)
 
             for role, owned in active:
                 own_deadline = min(deadline, owned.stop_deadline or deadline)
@@ -480,16 +640,21 @@ class ProcessRoleBackend:
                         reclaimed = False
                     else:
                         try:
-                            if self._owned.get(role) is not owned:
-                                reclaimed = owned.reclaimed
-                            elif not self._remove_empty_group(owned.group):
-                                reclaimed = False
-                            else:
-                                del self._owned[role]
-                                owned.reclaimed = True
+                            with owned.escalation_lock:
+                                # Recheck while excluding watchdog signals so a
+                                # stale PID cannot be targeted after reaping.
+                                reclaimed = (self._owned.get(role) is owned
+                                             and owned.process.poll() is not None
+                                             and self._events_populated(owned.group))
+                                if reclaimed and self._remove_empty_group(owned.group):
+                                    del self._owned[role]
+                                    owned.reclaimed = True
+                                else:
+                                    reclaimed = owned.reclaimed
                         finally:
                             self._lock.release()
                 if reclaimed:
+                    self._retire_stop_watchdog(role, owned.start_intent)
                     results[role] = True
                 else:
                     results[role] = False
@@ -535,7 +700,7 @@ class ProcessRoleBackend:
                 if owned is not None:
                     self._mark_stopping(owned, deadline, term_deadline)
                     if owned.process is not None:
-                        self._signal_tree(owned, signal.SIGTERM)
+                        self._signal_owned_term(owned)
                 results[role] = False
             return results
         try:
@@ -584,7 +749,7 @@ class ProcessRoleBackend:
         return results
 
     def request_stop(self, roles):
-        """Fence in-flight starts and send TERM without waiting for reclamation."""
+        """Fence starts, send TERM, and install bounded independent escalation."""
         results = {}
         for role in roles:
             if role not in ROLE_MODULES:
@@ -594,19 +759,32 @@ class ProcessRoleBackend:
             # ownership itself remains reconciled by stop() on the lifecycle queue.
             intent = self._start_intents.get(role)
             now = time.monotonic()
+            requested_deadline = now + STOP_GRACE_MAX_SECONDS
+            requested_term = now + STOP_GRACE_MAX_SECONDS * 0.5
             if intent is not None:
                 intent.final_stop_requested = True
-                self._cancel_intent(intent, now + STOP_GRACE_MAX_SECONDS,
-                                    now + STOP_GRACE_MAX_SECONDS * 0.5)
+                self._cancel_intent(intent, requested_deadline, requested_term)
             owned = self._owned.get(role)
+            generation = intent
             if owned is not None:
-                deadline = (intent.cancel_deadline if intent is not None else
-                            now + STOP_GRACE_MAX_SECONDS)
-                term_deadline = (intent.term_deadline if intent is not None else
-                                 now + STOP_GRACE_MAX_SECONDS * 0.5)
+                generation = owned.start_intent
+                deadline = requested_deadline
+                term_deadline = requested_term
+                if intent is not None:
+                    deadline = min(deadline, intent.cancel_deadline)
+                    term_deadline = min(term_deadline, intent.term_deadline)
                 self._mark_stopping(owned, deadline, term_deadline)
-                if owned.process is not None:
-                    self._signal_tree(owned, signal.SIGTERM)
+                deadline = owned.stop_deadline
+                term_deadline = owned.term_deadline
+            elif intent is not None:
+                deadline = intent.cancel_deadline
+                term_deadline = intent.term_deadline
+            else:
+                deadline = term_deadline = None
+            if generation is not None:
+                if owned is not None:
+                    self._signal_owned_term(owned)
+                self._register_stop_watchdog(role, generation, deadline, term_deadline)
             results[role] = intent is not None or owned is not None
         return results
 
