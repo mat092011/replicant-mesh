@@ -12,6 +12,7 @@ import time
 import uuid
 import base64
 import hashlib
+import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -80,6 +81,22 @@ class _StopWatchdog:
     closing: bool = False
 
 
+class PendingRoleStart:
+    """Opaque one-shot READY observation for a process already owned here."""
+
+    __slots__ = ("_backend", "_role", "_intent", "_owned", "_cancel_event",
+                 "_seal", "_state", "_lock")
+
+    def __init__(self, backend, role, intent, owned, cancel_event, seal):
+        if seal is not backend._pending_start_seal:
+            raise TypeError("pending role starts are created by their backend")
+        self._backend, self._role = backend, role
+        self._intent, self._owned = intent, owned
+        self._cancel_event, self._seal = cancel_event, seal
+        self._state = "pending"
+        self._lock = threading.Lock()
+
+
 class _PinReleaseMonitor:
     """Prestarted owner that performs potentially slow pin fsync outside locks."""
 
@@ -134,6 +151,8 @@ class ProcessRoleBackend:
         self._pin_cleanups = {}
         self._pin_release_blocked = set()
         self._start_intents = {}
+        self._pending_start_seal = object()
+        self._pending_starts = {}
         self._watchdog_lock = threading.Lock()
         self._stop_watchdogs = {}
 
@@ -640,20 +659,23 @@ class ProcessRoleBackend:
             watchdog.armed.set()
             watchdog.wake.set()
 
-    def start(self, role, policy, *, cancel_event=None):
+    def spawn_owned_start(self, role, policy, *, cancel_event=None,
+                          before_popen_check=None):
         if (cancel_event is not None
                 and not callable(getattr(cancel_event, "is_set", None))):
-            return False
+            return None
+        if before_popen_check is not None and not callable(before_popen_check):
+            return None
         if cancel_event is not None and cancel_event.is_set():
-            return False
+            return None
         if role not in ROLE_MODULES:
-            return False
+            return None
         if not sys.platform.startswith("linux"):
-            return False
+            return None
         try:
             policy = validate_policy(policy)
         except (OSError, ValueError, ResourceError, StorageError):
-            return False
+            return None
 
         # Publish intent and ensure its monitor under the same lock used by
         # monitor retirement, eliminating the gap where a new generation could
@@ -663,14 +685,14 @@ class ProcessRoleBackend:
                 if ((cancel_event is not None and cancel_event.is_set())
                         or role in self._owned or role in self._start_intents
                         or role in self._pin_release_blocked):
-                    return False
+                    return None
                 intent = _StartIntent()
                 self._start_intents[role] = intent
             if not self._ensure_stop_watchdog_locked(role):
                 with self._lock:
                     if self._start_intents.get(role) is intent:
                         del self._start_intents[role]
-                return False
+                return None
             watchdog = self._stop_watchdogs[role]
             if cancel_event is not None and cancel_event.is_set():
                 intent.cancelled.set()
@@ -681,7 +703,7 @@ class ProcessRoleBackend:
                 self._stop_watchdogs.pop(role, None)
                 watchdog.closing = True
                 watchdog.armed.set()
-                return False
+                return None
             watchdog.armed.set()
             watchdog.wake.set()
 
@@ -689,41 +711,42 @@ class ProcessRoleBackend:
         read_fd = write_fd = -1
         process = None
         owned = None
+        pending = None
         try:
             if self._cancelled(intent, cancel_event):
-                return False
+                return None
             with self._lock:
                 configured_pin = self._pinned_roles.get(role)
             role_config = self._configured_role(role)
             if role_config is None or self._cancelled(intent, cancel_event):
-                return False
+                return None
             pin = configured_pin[0] if configured_pin is not None else None
             pin_metadata = configured_pin[2] if configured_pin is not None else None
             if configured_pin is not None:
                 try:
                     pin.assert_open_descriptors()
                 except Exception:
-                    return False
+                    return None
             try:
                 document = read_private_json(self._config_path(role),
                                              maximum_size=ROLE_CONFIG_MAX_BYTES)
             except (OSError, StorageError):
-                return False
+                return None
             if (type(document) is not dict
                     or ("artifact_pin" in document) != (pin_metadata is not None)
                     or (pin_metadata is not None
                         and document.get("artifact_pin") != pin_metadata)):
-                return False
+                return None
             atomic_write_private(self._config_path(role),
                                  self._encode_config(role, role_config, policy,
                                                      pin_metadata=pin_metadata))
             if self._cancelled(intent, cancel_event):
-                return False
+                return None
             group = self.cgroup.create_group(
                 f"participant-{role}-{uuid.uuid4().hex[:12]}", policy, role)
             intent.group = Path(group)
             if self._cancelled(intent, cancel_event):
-                return False
+                return None
             read_fd, write_fd = os.pipe()
             bootstrap = Path(__file__).with_name("process_bootstrap.py").resolve()
             command = [sys.executable, "-I", "-S", os.fspath(bootstrap), role,
@@ -733,19 +756,25 @@ class ProcessRoleBackend:
             with self._lock:
                 if (self._cancelled(intent, cancel_event)
                         or self._start_intents.get(role) is not intent):
-                    return False
+                    return None
+                inherited_fds = [read_fd]
+                if pin_metadata is not None:
+                    inherited_fds.extend((pin_metadata["global_fd"],
+                                          pin_metadata["role_fd"]))
+                if before_popen_check is not None:
+                    checked = before_popen_check()
+                    if inspect.isawaitable(checked):
+                        close = getattr(checked, "close", None)
+                        if callable(close):
+                            close()
+                        raise TypeError("before_popen_check must be synchronous")
+                    if checked is not None:
+                        raise TypeError("before_popen_check must return None")
                 owned = _OwnedProcess(role, None, Path(group), self.clock(),
                                       start_intent=intent, artifact_pin=pin)
                 self._owned[role] = owned
-                if self._cancelled(intent, cancel_event):
-                    del self._owned[role]
-                    owned = None
-                    return False
                 try:
-                    inherited_fds = [read_fd]
                     if pin_metadata is not None:
-                        inherited_fds.extend((pin_metadata["global_fd"],
-                                              pin_metadata["role_fd"]))
                         # From entering Popen onward, a failed return is not
                         # proof that no child was created. Keep release sticky.
                         self._pin_release_blocked.add(role)
@@ -782,35 +811,26 @@ class ProcessRoleBackend:
                 self._cancel_intent(intent)
                 if not intent.final_stop_requested:
                     self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
-                return False
+                return None
             os.close(write_fd)
             write_fd = -1
-            ready = self._read_ready(
-                process, READY_TIMEOUT_SECONDS,
-                cancelled=lambda: self._cancelled(intent, cancel_event)
-                or owned.stopping)
             with self._lock:
-                current = self._owned.get(role)
-                cancelled_before_ready = (current is not owned or owned.stopping
-                                          or self._cancelled(intent, cancel_event))
-                if not cancelled_before_ready:
-                    owned.starting = False
-                    with owned.escalation_lock:
-                        process_live = process.poll() is None
-                        if not process_live:
-                            owned.leader_reaped = True
-                            owned.reaped_event.set()
-                    owned.ready = bool(ready and process_live)
-            if cancelled_before_ready:
+                if (self._owned.get(role) is not owned or owned.stopping
+                        or self._cancelled(intent, cancel_event)
+                        or not owned.attached):
+                    cancelled_before_return = True
+                else:
+                    cancelled_before_return = False
+                    pending = PendingRoleStart(
+                        self, role, intent, owned, cancel_event,
+                        self._pending_start_seal)
+                    self._pending_starts[role] = pending
+            if cancelled_before_return:
                 self._cancel_intent(intent)
                 if not intent.final_stop_requested:
                     self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
-                return False
-            if not owned.ready:
-                self._cancel_intent(intent)
-                self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
-                return False
-            return True
+                return None
+            return pending
         except Exception as error:
             self._cancel_intent(intent)
             if group is None:
@@ -828,7 +848,7 @@ class ProcessRoleBackend:
                     process.wait(timeout=1)
                 except Exception:
                     pass
-            return False
+            return None
         finally:
             if read_fd >= 0:
                 try:
@@ -848,7 +868,78 @@ class ProcessRoleBackend:
             elif group is not None and owned is None:
                 if self._remove_empty_group(group):
                     intent.group = None
-            self._forget_start_intent(role, intent)
+            if pending is None:
+                self._forget_start_intent(role, intent)
+
+    def observe_owned_ready(self, handle, *, timeout_seconds=READY_TIMEOUT_SECONDS):
+        """Consume one backend-owned handle and observe READY once."""
+        try:
+            timeout = float(timeout_seconds)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("READY timeout must be between zero and 30 seconds")
+        if (type(timeout_seconds) not in (int, float)
+                or not math.isfinite(timeout)
+                or not 0 <= timeout <= READY_TIMEOUT_SECONDS):
+            raise ValueError("READY timeout must be between zero and 30 seconds")
+        if (type(handle) is not PendingRoleStart
+                or getattr(handle, "_backend", None) is not self
+                or getattr(handle, "_seal", None) is not self._pending_start_seal):
+            raise ValueError("foreign or forged pending role start")
+        if not handle._lock.acquire(blocking=False):
+            raise RuntimeError("READY observation is already in progress")
+        try:
+            if handle._state != "pending":
+                raise ValueError("pending role start was already observed")
+            with self._lock:
+                if self._pending_starts.get(handle._role) is not handle:
+                    raise ValueError("pending role start is no longer current")
+                owned = self._owned.get(handle._role)
+                if (owned is not handle._owned
+                        or owned.start_intent is not handle._intent):
+                    handle._state = "consumed"
+                    self._pending_starts.pop(handle._role, None)
+                    return False
+                handle._state = "observing"
+            intent = handle._intent
+            try:
+                ready = self._read_ready(
+                    owned.process, timeout,
+                    cancelled=lambda: self._cancelled(intent, handle._cancel_event)
+                    or owned.stopping)
+            except Exception:
+                # A failed READY observer is terminal for this handle. Keep
+                # the process owned and use the existing bounded stop path.
+                ready = False
+            with self._lock:
+                cancelled = (self._owned.get(handle._role) is not owned
+                             or owned.stopping
+                             or self._cancelled(intent, handle._cancel_event))
+                if not cancelled:
+                    owned.starting = False
+                    with owned.escalation_lock:
+                        process_live = owned.process.poll() is None
+                        if not process_live:
+                            owned.leader_reaped = True
+                            owned.reaped_event.set()
+                    owned.ready = bool(ready and process_live)
+                result = bool(not cancelled and owned.ready)
+                handle._state = "consumed"
+                self._pending_starts.pop(handle._role, None)
+            if not result:
+                self._cancel_intent(intent)
+                if not intent.final_stop_requested:
+                    self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
+            self._forget_start_intent(handle._role, intent)
+            return result
+        finally:
+            handle._lock.release()
+
+    def start(self, role, policy, *, cancel_event=None):
+        """Compatibility wrapper preserving the original boolean contract."""
+        handle = self.spawn_owned_start(role, policy, cancel_event=cancel_event)
+        if handle is None:
+            return False
+        return self.observe_owned_ready(handle)
 
     def _remove_empty_group(self, group):
         # False means populated/unknown state or failed disposal; callers must
@@ -992,6 +1083,9 @@ class ProcessRoleBackend:
                                 if reclaimed and owned.artifact_pin is None:
                                     del self._owned[role]
                                     owned.reclaimed = True
+                                    self._pending_starts.pop(role, None)
+                                    if self._start_intents.get(role) is owned.start_intent:
+                                        del self._start_intents[role]
                         finally:
                             self._lock.release()
                 if reclaimed and owned.artifact_pin is not None:
@@ -1023,6 +1117,9 @@ class ProcessRoleBackend:
                                     self._pin_release_blocked.discard(role)
                                     del self._owned[role]
                                     owned.reclaimed = True
+                                    self._pending_starts.pop(role, None)
+                                    if self._start_intents.get(role) is owned.start_intent:
+                                        del self._start_intents[role]
                             finally:
                                 self._lock.release()
                 if reclaimed:
