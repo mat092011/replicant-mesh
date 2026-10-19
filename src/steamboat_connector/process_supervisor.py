@@ -10,6 +10,8 @@ import sys
 import threading
 import time
 import uuid
+import base64
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,6 +55,8 @@ class _OwnedProcess:
     reaped_event: object = field(default_factory=threading.Event)
     deadline_lock: object = field(default_factory=threading.Lock)
     force_cleanup: object = field(default_factory=threading.Event)
+    artifact_pin: object = None
+    group_removed: bool = False
 
 
 @dataclass
@@ -92,6 +96,10 @@ class ProcessRoleBackend:
         self.clock = clock
         self._lock = threading.RLock()
         self._owned = {}
+        # This map is intentionally process-local. A persisted JSON config is
+        # never sufficient proof that its numeric descriptor values are live.
+        self._pinned_roles = {}
+        self._pin_release_blocked = set()
         self._start_intents = {}
         self._watchdog_lock = threading.Lock()
         self._stop_watchdogs = {}
@@ -106,10 +114,12 @@ class ProcessRoleBackend:
         return self.state_directory / f"{role}-runtime.json"
 
     @staticmethod
-    def _encode_config(role, config, policy=None):
+    def _encode_config(role, config, policy=None, pin_metadata=None):
         document = {"version": 1, "role": role, "config": config}
         if policy is not None:
             document["policy"] = policy
+        if pin_metadata is not None:
+            document["artifact_pin"] = pin_metadata
         return json_bytes(document, maximum_bytes=ROLE_CONFIG_MAX_BYTES)
 
     def configure_role(self, role, config):
@@ -121,11 +131,138 @@ class ProcessRoleBackend:
         except (TypeError, ValueError):
             return False
         with self._lock:
-            if role in self._owned or role in self._start_intents:
+            if (role in self._owned or role in self._start_intents
+                    or role in self._pinned_roles):
                 return False
             try:
                 atomic_write_private(self._config_path(role), encoded)
             except (OSError, StorageError):
+                return False
+            return True
+
+    def configure_pinned_role(self, role, config, pin, *, catalog_verifier):
+        """Configure one fixed role while retaining its exact artifact pin.
+
+        This transports authority to a supervised child; it does not make the
+        role ready or establish its execution adapter.
+        """
+        from steamboat_connector.artifact_pin import RuntimeArtifactPin
+        from steamboat_connector.aggregate_artifact_pin import RuntimeArtifactGroupPin
+        from steamboat_connector.catalog import CatalogVerifier
+
+        if (role not in ROLE_MODULES or type(config) is not dict
+                or type(catalog_verifier) is not CatalogVerifier):
+            return False
+        if role == "coordinator":
+            if type(pin) is not RuntimeArtifactPin or pin.record.get("role") != role:
+                return False
+            if catalog_verifier.clock is not pin.clock:
+                return False
+            try:
+                pin.assert_open_descriptors()
+                catalog = catalog_verifier.verify_catalog(pin.signed_catalog)
+                if hashlib.sha256(catalog.document_bytes).hexdigest() != pin.record["catalog_sha256"]:
+                    return False
+                assignment = catalog_verifier.verify_assignment(
+                    pin.signed_assignment, catalog,
+                    account_id=pin.record["account_id"],
+                    device_id=pin.record["device_id"], role=role)
+                if (assignment.payload["assignment_id"] != pin.record["assignment_id"]
+                        or assignment.document_sha256 != pin.record["assignment_sha256"]):
+                    return False
+                pin_meta = {
+                    "version": 1, "kind": "single", "role": role, "root": str(pin.root),
+                    "uid": pin.uid, "record_path": str(pin.record_path),
+                    "record": dict(pin.record), "global_fd": pin.global_fd,
+                    "role_fd": pin.role_fd, "clock_domain": pin.clock_domain,
+                    "captured_mono": pin.captured_mono,
+                    "catalog_deadline": pin.catalog_deadline,
+                    "assignment_deadline": pin.assignment_deadline,
+                    "signed_catalog": base64.b64encode(pin.signed_catalog).decode("ascii"),
+                    "signed_assignment": base64.b64encode(pin.signed_assignment).decode("ascii"),
+                    "public_key": base64.b64encode(catalog_verifier.public_key).decode("ascii"),
+                }
+            except Exception:
+                return False
+        else:
+            if type(pin) is not RuntimeArtifactGroupPin or pin.record.get("role") != role:
+                return False
+            if catalog_verifier.clock is not pin.clock:
+                return False
+            try:
+                pin.assert_open_descriptors()
+                from steamboat_connector.aggregate_artifact_pin import _validate_group_record
+                _validate_group_record(dict(pin.record))
+                catalog = catalog_verifier.verify_catalog(pin.signed_catalog)
+                if hashlib.sha256(catalog.document_bytes).hexdigest() != pin.record["catalog_sha256"]:
+                    return False
+                assignments = []
+                for entry in pin.record["assignments"]:
+                    launch = pin.child_launch_metadata(entry["assignment_id"])
+                    assignment = catalog_verifier.verify_assignment(
+                        launch["signed_assignment"], catalog,
+                        account_id=pin.record["account_id"],
+                        device_id=pin.record["device_id"], role=role)
+                    if (assignment.payload["assignment_id"] != entry["assignment_id"]
+                            or assignment.payload["component"] != entry["component"]
+                            or assignment.document_sha256 != entry["assignment_sha256"]):
+                        return False
+                    assignments.append({
+                        "component": launch["component"],
+                        "worker_boot_id": launch["worker_boot_id"],
+                        "assignment_deadline": launch["assignment_deadline"],
+                        "signed_assignment": base64.b64encode(
+                            launch["signed_assignment"]).decode("ascii"),
+                    })
+                pin_meta = {
+                    "version": 1, "kind": "group", "role": role, "root": str(pin.root),
+                    "uid": pin.uid, "record_path": str(pin.record_path),
+                    "record": dict(pin.record), "global_fd": pin.global_fd,
+                    "role_fd": pin.role_fd, "clock_domain": pin.clock_domain,
+                    "captured_mono": pin.captured_mono,
+                    "catalog_deadline": pin.catalog_deadline,
+                    "signed_catalog": base64.b64encode(pin.signed_catalog).decode("ascii"),
+                    "public_key": base64.b64encode(catalog_verifier.public_key).decode("ascii"),
+                    "assignments": assignments,
+                }
+            except Exception:
+                return False
+        try:
+            encoded = self._encode_config(role, config, pin_metadata=pin_meta)
+        except (TypeError, ValueError):
+            return False
+        with self._lock:
+            if (role in self._owned or role in self._start_intents
+                    or role in self._pinned_roles):
+                return False
+            try:
+                atomic_write_private(self._config_path(role), encoded)
+            except (OSError, StorageError):
+                return False
+            self._pinned_roles[role] = (pin, catalog_verifier, pin_meta)
+            return True
+
+    def release_configured_pin(self, role):
+        """Release a pin only when no start intent or process owns the role."""
+        with self._lock:
+            if role in self._owned or role in self._start_intents:
+                return False
+            if role in self._pin_release_blocked:
+                return False
+            entry = self._pinned_roles.get(role)
+            if entry is None:
+                return False
+            pin = entry[0]
+            try:
+                pin.release()
+            except Exception:
+                return False
+            self._pinned_roles.pop(role, None)
+            try:
+                self._config_path(role).unlink(missing_ok=True)
+            except OSError:
+                # Keep a strong owner if config cleanup is uncertain; release
+                # was already successful, so do not retry a descriptor close.
                 return False
             return True
 
@@ -137,7 +274,9 @@ class ProcessRoleBackend:
             return None
         if (type(document) is not dict
                 or set(document) not in ({"version", "role", "config"},
-                                        {"version", "role", "config", "policy"})
+                                        {"version", "role", "config", "policy"},
+                                        {"version", "role", "config", "artifact_pin"},
+                                        {"version", "role", "config", "policy", "artifact_pin"})
                 or type(document.get("version")) is not int
                 or document["version"] != 1 or document.get("role") != role
                 or type(document.get("config")) is not dict):
@@ -495,11 +634,31 @@ class ProcessRoleBackend:
         try:
             if self._cancelled(intent, cancel_event):
                 return False
+            with self._lock:
+                configured_pin = self._pinned_roles.get(role)
             role_config = self._configured_role(role)
             if role_config is None or self._cancelled(intent, cancel_event):
                 return False
+            pin = configured_pin[0] if configured_pin is not None else None
+            pin_metadata = configured_pin[2] if configured_pin is not None else None
+            if configured_pin is not None:
+                try:
+                    pin.assert_open_descriptors()
+                except Exception:
+                    return False
+            try:
+                document = read_private_json(self._config_path(role),
+                                             maximum_size=ROLE_CONFIG_MAX_BYTES)
+            except (OSError, StorageError):
+                return False
+            if (type(document) is not dict
+                    or ("artifact_pin" in document) != (pin_metadata is not None)
+                    or (pin_metadata is not None
+                        and document.get("artifact_pin") != pin_metadata)):
+                return False
             atomic_write_private(self._config_path(role),
-                                 self._encode_config(role, role_config, policy))
+                                 self._encode_config(role, role_config, policy,
+                                                     pin_metadata=pin_metadata))
             if self._cancelled(intent, cancel_event):
                 return False
             group = self.cgroup.create_group(
@@ -518,16 +677,24 @@ class ProcessRoleBackend:
                         or self._start_intents.get(role) is not intent):
                     return False
                 owned = _OwnedProcess(role, None, Path(group), self.clock(),
-                                      start_intent=intent)
+                                      start_intent=intent, artifact_pin=pin)
                 self._owned[role] = owned
                 if self._cancelled(intent, cancel_event):
                     del self._owned[role]
                     owned = None
                     return False
                 try:
+                    inherited_fds = [read_fd]
+                    if pin_metadata is not None:
+                        inherited_fds.extend((pin_metadata["global_fd"],
+                                              pin_metadata["role_fd"]))
+                        # From entering Popen onward, a failed return is not
+                        # proof that no child was created. Keep release sticky.
+                        self._pin_release_blocked.add(role)
                     process = subprocess.Popen(
                         command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL, close_fds=True, pass_fds=(read_fd,),
+                        stderr=subprocess.DEVNULL, close_fds=True,
+                        pass_fds=tuple(inherited_fds),
                         start_new_session=True, env=dict(_CHILD_ENV), bufsize=0)
                 except BaseException:
                     if self._owned.get(role) is owned:
@@ -737,7 +904,7 @@ class ProcessRoleBackend:
             for role, owned in active:
                 effective_stop, _ = self._effective_deadlines(owned)
                 own_deadline = min(deadline, effective_stop or deadline)
-                empty = self._wait_empty(owned, own_deadline)
+                empty = (owned.group_removed or self._wait_empty(owned, own_deadline))
                 remaining = max(0.0, own_deadline - time.monotonic())
                 owned.reaped_event.wait(remaining)
                 reaped = self._poll_owned(owned)
@@ -752,12 +919,22 @@ class ProcessRoleBackend:
                                 # stale PID cannot be targeted after reaping.
                                 reclaimed = (self._owned.get(role) is owned
                                              and owned.leader_reaped
-                                             and self._events_populated(owned.group))
-                                if reclaimed and self._remove_empty_group(owned.group):
+                                             and (owned.group_removed
+                                                  or self._events_populated(owned.group)))
+                                if reclaimed and not owned.group_removed:
+                                    reclaimed = self._remove_empty_group(owned.group)
+                                    owned.group_removed = reclaimed
+                                if reclaimed and owned.artifact_pin is not None:
+                                    try:
+                                        owned.artifact_pin.release()
+                                    except Exception:
+                                        reclaimed = False
+                                    else:
+                                        self._pinned_roles.pop(role, None)
+                                        self._pin_release_blocked.discard(role)
+                                if reclaimed:
                                     del self._owned[role]
                                     owned.reclaimed = True
-                                else:
-                                    reclaimed = owned.reclaimed
                         finally:
                             self._lock.release()
                 if reclaimed:
