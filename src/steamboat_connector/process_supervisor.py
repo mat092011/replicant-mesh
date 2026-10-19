@@ -631,7 +631,8 @@ class ProcessRoleBackend:
             bridge.finalize_stop()
             if owned.process is None or not owned.leader_reaped or not owned.group_removed:
                 return False
-            bridge.confirm_child_reaped(owned.process.pid)
+            if bridge.try_confirm_child_reaped(owned.process.pid) is not True:
+                return False
             return bridge.quiescent is True
         except Exception:
             return False
@@ -826,6 +827,11 @@ class ProcessRoleBackend:
                 authority_clock = self._authority_clock
             if c2_profile and authority_clock is None:
                 return None
+            if c2_profile and configured_pin is not None:
+                if (type(configured_pin) is not tuple or len(configured_pin) != 3
+                        or getattr(configured_pin[0], "clock", None) is not authority_clock
+                        or getattr(configured_pin[1], "clock", None) is not authority_clock):
+                    return None
             if (type(document) is not dict
                     or ("artifact_pin" in document) != (pin_metadata is not None)
                     or (pin_metadata is not None

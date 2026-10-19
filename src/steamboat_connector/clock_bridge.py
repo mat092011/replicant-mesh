@@ -489,6 +489,26 @@ class OwnedClockBridge:
         self._maybe_release_slot()
         return True
 
+    def try_confirm_child_reaped(self, pid):
+        """Nonblocking reap confirmation for bounded lifecycle callers.
+
+        A busy bridge owner lock means the caller has not confirmed this
+        transition; it must retain its process owner and retry later.
+        """
+        if not _exact_identity(pid, positive=True):
+            return False
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            if self._child_pid is None or pid != self._child_pid:
+                return False
+            self._child_reaped = True
+            self._child_may_exist = False
+        finally:
+            self._lock.release()
+        self._maybe_release_slot()
+        return True
+
     @property
     def quiescent(self):
         if not self._lock.acquire(blocking=False):

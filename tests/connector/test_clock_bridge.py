@@ -253,6 +253,26 @@ class ClockBridgeTests(unittest.TestCase):
         owner._server_thread.join(1.0)
         self.assertTrue(owner.quiescent)
 
+    def test_nonblocking_child_reap_confirmation_defers_when_owner_lock_is_busy(self):
+        owner = self._owner()
+        owner.begin_spawn()
+        pid = os.getpid()
+        owner.bind_child(pid, os.getuid())
+        owner.close_parent_child_copy()
+        owner.stop()
+        self.assertTrue(owner._lock.acquire(blocking=False))
+        try:
+            before = time.monotonic()
+            self.assertFalse(owner.try_confirm_child_reaped(pid))
+            self.assertLess(time.monotonic() - before, 0.1)
+        finally:
+            owner._lock.release()
+        self.assertTrue(owner.try_confirm_child_reaped(pid))
+        thread = owner._server_thread
+        if thread is not None:
+            thread.join(1.0)
+        self.assertTrue(owner.quiescent)
+
     def test_different_parent_monotonic_domain_fails_closed(self):
         clock = Clock(wall=time.time, monotonic=lambda: time.monotonic() + 10.0,
                       uncertainty_seconds=lambda: 0.01)

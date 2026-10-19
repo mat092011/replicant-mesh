@@ -27,6 +27,9 @@ owned cgroup is empty and removed, the bridge service is quiescent, and all
 descriptor cleanup is confirmed. A stopped bridge that is still serving, has
 uncertain descriptor cleanup, or has an unresolved spawn remains strongly
 owned and prevents same-role reuse.
+Stop-time reap confirmation takes the bridge owner lock nonblockingly. A busy
+bridge therefore leaves the process, pin and bridge generation retained for a
+later explicit cleanup pass instead of extending the bounded stop call.
 
 The focused test uses a real local child process and the actual
 `ChildClockBridge` protocol to sample the captured `Clock`. Its cgroup fixture

@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from steamboat_connector.c2_child_config import build_c2_child_config
@@ -157,6 +158,7 @@ class ProcessClockHandoffTests(unittest.TestCase):
                 "'monotonic':sample.monotonic,'uncertainty':sample.uncertainty})); "
                 "bridge.stop()")
             launched = {}
+            real_popen = subprocess.Popen
 
             def popen(_command, **kwargs):
                 passed = tuple(kwargs["pass_fds"])
@@ -165,7 +167,7 @@ class ProcessClockHandoffTests(unittest.TestCase):
                 child_command = [sys.executable, "-c", child_code,
                     os.fspath(backend._config_path("coordinator")),
                     str(passed[0]), os.fspath(source)]
-                process = subprocess.Popen(child_command, **kwargs)
+                process = real_popen(child_command, **kwargs)
                 launched["process"] = process
                 launched["passed"] = passed
                 return process
@@ -230,13 +232,14 @@ class ProcessClockHandoffTests(unittest.TestCase):
                 "from steamboat_connector.clock_bridge import ChildClockBridge; "
                 "doc=json.load(open(sys.argv[1],encoding='utf-8')); "
                 "bridge=ChildClockBridge(doc['clock_handoff']); bridge.clock.sample()")
+            real_popen = subprocess.Popen
 
             def popen(_command, **kwargs):
                 passed = tuple(kwargs["pass_fds"])
                 child_command = [sys.executable, "-c", child_code,
                     os.fspath(backend._config_path("coordinator")), str(passed[0]),
                     os.fspath(source)]
-                return subprocess.Popen(child_command, **kwargs)
+                return real_popen(child_command, **kwargs)
 
             with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen",
                             side_effect=popen), \
@@ -251,11 +254,18 @@ class ProcessClockHandoffTests(unittest.TestCase):
             self.assertTrue(entered.wait(3), "child did not reach the blocked authority Clock")
 
             before = time.monotonic()
-            self.assertFalse(backend.stop(("coordinator",), 0.2)["coordinator"])
-            self.assertLess(time.monotonic() - before, 1.0)
-            process.wait(timeout=3)
-            cgroup.mark_empty()
-            self.assertFalse(backend.stop(("coordinator",), 0.1)["coordinator"])
+            bridge_lock = owned.clock_bridge._lock
+            self.assertTrue(bridge_lock.acquire(blocking=False))
+            try:
+                self.assertFalse(backend.stop(("coordinator",), 0.2)["coordinator"])
+                self.assertLess(time.monotonic() - before, 1.0)
+                process.wait(timeout=3)
+                cgroup.mark_empty()
+                self.assertFalse(backend.stop(("coordinator",), 0.1)["coordinator"])
+                self.assertFalse(owned.clock_bridge.quiescent)
+                self.assertGreaterEqual(active_clock_bridge_generations(), 1)
+            finally:
+                bridge_lock.release()
             self.assertIs(backend._owned["coordinator"], owned)
             self.assertFalse(owned.clock_bridge.quiescent)
             self.assertGreaterEqual(active_clock_bridge_generations(), 1)
@@ -294,6 +304,33 @@ class ProcessClockHandoffTests(unittest.TestCase):
                 legacy = ProcessRoleBackend(legacy_dir, _LifecycleCgroup(legacy_dir))
             self.assertIsNone(legacy._authority_clock)
             self.assertIs(legacy.clock, time.monotonic)
+
+    def test_c2_configured_pin_and_verifier_must_share_backend_authority_clock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            os.chmod(temporary, 0o700)
+            with mock.patch("steamboat_connector.process_supervisor.sys.platform", "linux"):
+                backend = ProcessRoleBackend(temporary, _LifecycleCgroup(temporary))
+            authority = Clock.system(uncertainty_seconds=lambda: 0.01)
+            other = Clock.system(uncertainty_seconds=lambda: 0.01)
+            backend.bind_authority_clock(authority)
+            def write_private(path, data):
+                Path(path).write_bytes(data)
+                os.chmod(path, 0o600)
+            reader = lambda path, **_kw: json.loads(Path(path).read_text(encoding="utf-8"))
+            with mock.patch("steamboat_connector.process_supervisor.sys.platform", "linux"), \
+                 mock.patch("steamboat_connector.process_supervisor.atomic_write_private",
+                            side_effect=write_private), \
+                 mock.patch("steamboat_connector.process_supervisor.read_private_json",
+                            side_effect=reader):
+                self.assertTrue(backend.configure_role("coordinator", _coordinator_config()))
+                with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as popen:
+                    for pin_clock, verifier_clock in ((other, authority), (authority, other)):
+                        pin = SimpleNamespace(clock=pin_clock,
+                            assert_open_descriptors=lambda: None)
+                        verifier = SimpleNamespace(clock=verifier_clock)
+                        backend._pinned_roles["coordinator"] = (pin, verifier, None)
+                        self.assertIsNone(backend.spawn_owned_start("coordinator", _policy()))
+                    popen.assert_not_called()
 
     def test_authority_clock_is_exact_idempotent_and_separate_from_deadline_callable(self):
         with tempfile.TemporaryDirectory() as temporary:
