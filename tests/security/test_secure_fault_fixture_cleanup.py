@@ -451,6 +451,7 @@ class SecureFaultFixtureCleanupTests(unittest.IsolatedAsyncioTestCase):
                 self.session_id = session_id
                 self.core_owner = ("core-owner",)
                 self.core_identity = ("core-identity",)
+                self.ingress_identity = None
                 self.invalidated = False
                 self.invalidation_reason = ""
                 self.invalidation_event = None
