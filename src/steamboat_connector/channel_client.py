@@ -105,6 +105,7 @@ class CoordinatorChannelClient:
         self._lock = asyncio.Lock()
         self._pump_task = None
         self._closed = self._unavailable = self._close_complete = False
+        self._unavailable_reason = None
         self._retained, self._active, self._retirement_tasks = set(), set(), set()
 
     async def execute(self, method, request, *, trusted_request_context):
@@ -336,6 +337,8 @@ class CoordinatorChannelClient:
 
     def _fence(self, reason):
         self._unavailable = True
+        if self._unavailable_reason is None:
+            self._unavailable_reason = reason
         self.stream.close()
         for entry in tuple(self._pending.values()):
             future = entry["future"]
@@ -366,6 +369,8 @@ class CoordinatorChannelClient:
 
     def _retain_pending(self, tasks):
         self._unavailable = True
+        if self._unavailable_reason is None:
+            self._unavailable_reason = "secure operation transferred pending task ownership"
         for task in tasks:
             self._retained.add(task)
             task.add_done_callback(self._retained.discard)

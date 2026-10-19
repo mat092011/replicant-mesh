@@ -386,7 +386,8 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
         self.fx.base.time_source.advance(3)
         with self.assertRaises(SessionError):
             await asyncio.wait_for(short_call, timeout=2)
-        self.assertFalse(self.client._unavailable)
+        self.assertFalse(self.client._unavailable,
+                         f"request-local expiry fenced channel: {self.client._unavailable_reason}")
 
         def open_response(context):
             return Response(protocol_version=1, manifest_fingerprint=self.fx.model_id,
