@@ -153,15 +153,80 @@ and UID/GID 65534. The test process exited successfully and its container was
 removed. These are model-free client component results; its fake-peer tests do
 not establish actual C1 TLS streaming interoperability or a C2 gateway route.
 
+## Artifact ownership and combined component inventory
+
+The pin-specific component-6 attempt ran 24 tests and ended with one error. Its
+close-failure fixture patched the process-wide `os.close`, accidentally affecting
+directory cleanup before the intended acquisition rollback. The fixture now
+isolates that operation and checks that the intended inactive-view error caused
+rollback. The retained failed log SHA-256 is
+`7fc1fb8c384f0c0ea0ba314bad916e4d310e08c6707148bfc02c6272b3fd0498`.
+Component 7 passed all 24 cases with zero skips/failures/errors in 3.602 seconds;
+its test log SHA-256 is
+`6c644ccf45442c69d7b035fa595079c66e7bf97826372ed66674e82174138bf6`.
+
+Those cases include Linux flock exclusion, child descriptor retention and
+CLOEXEC with a real exec, concurrent close-once handling, retained uncertain
+cleanup, conservative clock caps, resident assigned adapters and the two real
+model checks. Each numerical worker still used its own installation root and
+pin; this does not establish one aggregate multi-handler host pin.
+
+Adding three active component slots exposed a serialization regression in
+component 8: one of 60 tests failed because concurrent installers competed for
+the nonblocking global runtime exclusion lock. Mutations now first serialize
+on the existing bounded installer gate and then probe global EX **without
+waiting**. If a runtime already holds global SH while awaiting the installer
+gate, the mutation refuses and releases that gate. A real Linux lock race
+control checks this ordering. Component 9 retained two test failures: the new
+control lacked its exception import, and an older mock asserted the previous
+lock order. Both were corrected; the exclusion control now checks unchanged
+state through a real installer and runtime pin.
+
+Component 10 passed **61 artifact/pin/adapter cases, zero skips/failures/errors,
+4.086 seconds**. Its frozen source was
+`ca32613681d861d9e5dad334f6a9d092104c7d9be21ad2b6739eb8e6c1aff899`
+(362 files); its test log SHA-256 is
+`252ea6ed60f9a32ff86ef19e12c784527b8ab138b87c406f18b622f6b6d6a4e0`.
+This covers explicit v1-to-v2 migration, three component slots in one installer,
+shared disk/catalog accounting and the pin controls above. The source-proof
+log SHA-256 is
+`138fee0b6d77690d5b60ab2160a0c9a1473d9da36351ed804158eacf26403f51`.
+
+After supervisor and controller corrections, component 11 passed **216 checks,
+zero skips/failures/errors, 16.114 seconds** under the original component limits.
+The inventory combines all connector tests with channel certificate and policy
+tests; these successive inventories reuse cases and must not be added as
+independent test counts. The frozen source was
+`ba4dcc6a44e031336d23aacbb7d2d6973d9b27233f7a2f012784d23698e1ac48`
+(363 files), and the image was
+`sha256:d3efa70ec5df12c30319ceed56d2c860afe73aa3cb045571726ad8ff05575ec1`.
+All 363 source files matched. Its source-proof log SHA-256 is
+`97ae8e1ad5da99204a6240f95fa7b008fb856ae3a1ae011a2e8c9aacac1940f9`;
+its test log SHA-256 is
+`6f5255ed65e4076aa402938657264c3ea0ff14e11173f00dbc8b3560fbbf5d47`.
+The exited container was inspected and removed, without an OOM kill.
+
+The supervisor tests execute a real TERM-ignoring child and verify escalation
+and reaping. Their cgroup-population evidence is supplied by a fixture, not
+kernel cgroup enforcement. The daemon shutdown test holds cleanup unresolved
+for over one second and checks that its main thread retains ownership until
+proof. These results still do not establish an actual executing connector,
+native gateway inference or separate-device C2 acceptance.
+
+The retained component-8 and component-9 failed test log hashes are respectively
+`da60ba3f77296a2fb29c2801271a013c33c2ae5f72c1c4204845698aca0260b6`
+and `7a6b307217a2bf295222d78340d608f76d0f4be72b1060cf5a4ac029bd876214`.
+
 ## Remaining acceptance work
 
 The daemon still needs actual backend, assigned artifact ownership and readiness
 integration. The adapter's blocking file verification has a source-reviewed
 replacement using a lifetime artifact pin and live in-memory authority guard;
-its native and numerical checks and supervisor handoff remain pending. Process
-supervision still needs the corrections recorded above. Physical-pool locking
-and channel policy passed their cases within the failed inventories; those cases
-alone cannot establish a passing application or physical enforcement.
+its single-assignment native and numerical checks passed, while aggregate host
+ownership and supervisor handoff remain pending. Process supervision now has
+the passing component inventory above, with independent source review still
+required for further ownership concerns. These cases alone cannot establish a
+passing application or physical enforcement.
 
 C2 still requires actual shared CPU/RAM, disk/staging/log and traffic enforcement;
 authenticated enrollment and expiring loaded readiness; the trusted terminating
