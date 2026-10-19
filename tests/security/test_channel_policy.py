@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import unittest
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -389,6 +390,56 @@ class ChannelPolicyTests(unittest.TestCase):
         uncertainty[0] = 0.0
         self.wall += 87
         self.mono += 87
+        with self.assertRaises(SnapshotError):
+            store.current()
+
+    def test_current_permanently_clips_before_rejecting_widened_uncertainty(self):
+        uncertainty = [0.0]
+        self.clock = Clock(
+            wall=lambda: self.wall,
+            monotonic=lambda: self.mono,
+            uncertainty_seconds=lambda: uncertainty[0],
+        )
+        store = self.new_store()
+        store.install(self.sign())
+        self.wall, self.mono, uncertainty[0] = 1080.0, 130.0, 20.0
+        with self.assertRaises(SnapshotError):
+            store.current()
+        self.assertEqual(store._view.deadline_monotonic, 130.0)
+        self.wall, self.mono, uncertainty[0] = 1081.0, 131.0, 0.0
+        with self.assertRaises(SnapshotError):
+            store.current()
+        self.assertEqual(store._view.deadline_monotonic, 130.0)
+
+    def test_same_revision_install_permanently_clips_before_expiry_rejection(self):
+        uncertainty = [0.0]
+        self.clock = Clock(
+            wall=lambda: self.wall,
+            monotonic=lambda: self.mono,
+            uncertainty_seconds=lambda: uncertainty[0],
+        )
+        store = self.new_store()
+        encoded = self.sign()
+        store.install(encoded)
+        self.wall, self.mono, uncertainty[0] = 1080.0, 130.0, 20.0
+        with self.assertRaises(SnapshotError):
+            store.install(encoded)
+        self.assertEqual(store._view.deadline_monotonic, 130.0)
+        self.wall, self.mono, uncertainty[0] = 1081.0, 131.0, 0.0
+        with self.assertRaises(SnapshotError):
+            store.current()
+
+    def test_postcommit_publication_fault_latches_after_durable_head_advances(self):
+        store = self.new_store()
+        store.install(self.sign())
+        self.payload = {**self.payload, "revision": 2}
+        with patch.object(store, "_publish_view", side_effect=MemoryError("publish")):
+            with self.assertRaises(SnapshotError):
+                store.install(self.sign())
+        self.assertEqual(len(self.commit_calls), 2)
+        with self.assertRaises(SnapshotError):
+            store.current()
+        self.clock.revalidate_after_resume(trusted_clock=True)
         with self.assertRaises(SnapshotError):
             store.current()
 

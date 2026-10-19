@@ -434,6 +434,7 @@ class ChannelPolicyView:
     expires_at: int
     policy_digest: str
     deadline_monotonic: float
+    published_monotonic: float
     gateways: object
     workers: object
     routes: tuple
@@ -612,6 +613,8 @@ class ChannelPolicyStore:
         ):
             raise SnapshotError("channel policy revision equivocation")
         sample = self.clock.sample()
+        if previous is not None:
+            previous = self._clip_live_view(previous, sample)
         if issued > sample.earliest_wall or expires <= sample.latest_wall:
             raise SnapshotError("channel policy is not currently valid")
         deadline = sample.monotonic + (expires - sample.latest_wall)
@@ -624,39 +627,6 @@ class ChannelPolicyStore:
             return previous
         if self._commit is None and self._require_durable:
             raise SnapshotError("durable channel policy hook is unavailable")
-        if self._commit is not None:
-            try:
-                result = self._commit(encoded, revision, digest)
-                if inspect.isawaitable(result) or result is not None:
-                    raise SnapshotError(
-                        "durable channel policy hook must synchronously return None"
-                    )
-            except BaseException as error:
-                self._faulted = True
-                if isinstance(error, SnapshotError):
-                    raise
-                raise SnapshotError("durable channel policy commit failed") from error
-        try:
-            sample = self.clock.sample()
-        except BaseException as error:
-            if self._commit is not None:
-                self._faulted = True
-            raise SnapshotError("clock failed after channel policy commit") from error
-        final_deadline = sample.monotonic + (expires - sample.latest_wall)
-        final_deadline = min(deadline, final_deadline)
-        if previous is not None and previous.expires_at == expires:
-            final_deadline = min(final_deadline, previous.deadline_monotonic)
-        if (
-            issued > sample.earliest_wall
-            or expires <= sample.latest_wall
-            or sample.monotonic >= final_deadline
-        ):
-            if self._commit is not None:
-                self._faulted = True
-            raise SnapshotError("channel policy expired during commit")
-        if previous is not None and revision <= previous.revision:
-            self._faulted = True
-            raise SnapshotError("channel policy changed during durable commit")
         frozen_gateways = MappingProxyType(
             {
                 k: MappingProxyType(
@@ -702,19 +672,67 @@ class ChannelPolicyStore:
                 for k, v in workers.items()
             }
         )
-        view = ChannelPolicyView(
+        prepared_view = ChannelPolicyView(
             revision,
             issued,
             expires,
             digest,
-            final_deadline,
+            deadline,
+            sample.monotonic,
             frozen_gateways,
             frozen_workers,
             routes,
             canonical,
         )
+        durable_started = self._commit is not None
+        if durable_started:
+            self._faulted = True
+        try:
+            if self._commit is not None:
+                result = self._commit(encoded, revision, digest)
+                if inspect.isawaitable(result) or result is not None:
+                    raise SnapshotError(
+                        "durable channel policy hook must synchronously return None"
+                    )
+            sample = self.clock.sample()
+            final_deadline = sample.monotonic + (expires - sample.latest_wall)
+            final_deadline = min(deadline, final_deadline)
+            if previous is not None and previous.expires_at == expires:
+                final_deadline = min(final_deadline, previous.deadline_monotonic)
+            if (
+                issued > sample.earliest_wall
+                or expires <= sample.latest_wall
+                or sample.monotonic >= final_deadline
+            ):
+                raise SnapshotError("channel policy expired during commit")
+            if previous is not None and revision <= previous.revision:
+                raise SnapshotError("channel policy changed during durable commit")
+            view = ChannelPolicyView(
+                prepared_view.revision,
+                prepared_view.issued_at,
+                prepared_view.expires_at,
+                prepared_view.policy_digest,
+                final_deadline,
+                sample.monotonic,
+                prepared_view.gateways,
+                prepared_view.workers,
+                prepared_view.routes,
+                prepared_view.canonical_payload,
+            )
+            self._publish_view(view)
+            self._faulted = False
+            return view
+        except BaseException as error:
+            if durable_started:
+                self._faulted = True
+            if isinstance(error, SnapshotError):
+                raise
+            raise SnapshotError(
+                "channel policy commit or publication failed"
+            ) from error
+
+    def _publish_view(self, view: ChannelPolicyView) -> None:
         self._view = view
-        return view
 
     def current(self) -> ChannelPolicyView:
         with self._lock:
@@ -723,9 +741,37 @@ class ChannelPolicyStore:
             if self._faulted or self._view is None:
                 raise SnapshotError("no live channel policy is installed")
             sample = self.clock.sample()
+            view = self._clip_live_view(self._view, sample)
             if (
-                sample.latest_wall >= self._view.expires_at
-                or sample.monotonic >= self._view.deadline_monotonic
+                sample.latest_wall >= view.expires_at
+                or sample.monotonic >= view.deadline_monotonic
             ):
                 raise SnapshotError("channel policy has expired")
-            return self._view
+            return view
+
+    def _clip_live_view(self, view: ChannelPolicyView, sample) -> ChannelPolicyView:
+        if sample.monotonic < view.published_monotonic:
+            raise SnapshotError("clock sample predates channel policy publication")
+        candidate = sample.monotonic + (view.expires_at - sample.latest_wall)
+        clipped = min(view.deadline_monotonic, candidate)
+        if clipped != view.deadline_monotonic:
+            try:
+                view = ChannelPolicyView(
+                    view.revision,
+                    view.issued_at,
+                    view.expires_at,
+                    view.policy_digest,
+                    clipped,
+                    view.published_monotonic,
+                    view.gateways,
+                    view.workers,
+                    view.routes,
+                    view.canonical_payload,
+                )
+            except BaseException as error:
+                self._faulted = True
+                raise SnapshotError(
+                    "channel policy deadline clipping failed closed"
+                ) from error
+            self._view = view
+        return view

@@ -86,7 +86,13 @@ the clock again afterward and refuses publication if policy authority expired
 during the callback.
 
 `current()` resamples the supplied `Clock` and fails when the policy's wall or
-monotonic expiry has passed. The view provides `gateway(id)`,
+monotonic expiry has passed. Each sample permanently clips the stored monotonic
+deadline before the expiry result is returned; later clock-uncertainty changes
+cannot restore time already removed from the lease. A same-revision install
+also clips the current view before deciding whether the signed policy remains
+valid. Once a durable commit starts, any later clock or publication failure
+latches the store unusable because the durable high-water mark may have moved
+ahead of memory. The view provides `gateway(id)`,
 `worker(device_id, worker_boot_id)`, and exact-field `route(...)` lookup. Views
 contain frozen mappings and tuples and do not expose the mutable input payload.
 Consumers must call `current()` on every authorization/liveness check rather
