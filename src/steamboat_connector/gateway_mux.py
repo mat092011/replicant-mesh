@@ -14,6 +14,7 @@ from steamboat_connector import channel_wire as wire
 from steamboat_connector.channel_hello import (
     CoordinatorHelloServer, RegisteredCoordinator, RegisteredWorker,
 )
+from steamboat_connector.channel_writer import ChannelFragmentWriter
 from steamboat_connector.channel_protobuf import preflight_worker_protobuf
 from steamboat_connector.channel_rpc import (
     GatewayChannelRelay, _CONTROL_CAPTURE_BYTES,
@@ -31,8 +32,8 @@ _MAX_WORKERS = 3
 _MAX_MESSAGE_IDS = 1024
 _CLAIM_LOCK = threading.Lock()
 _MAX_LIVE_MUXES = 8
-_MAX_CLAIMED_STREAMS = _MAX_LIVE_MUXES * (_MAX_WORKERS + 1)
-_STREAM_CLAIMS = {}
+_MAX_CLAIMED_RESOURCES = _MAX_LIVE_MUXES * 2 * (_MAX_WORKERS + 1)
+_RESOURCE_CLAIMS = {}
 _LIVE_MUXES = set()
 _RETAINED_MUXES = set()
 
@@ -59,6 +60,9 @@ class GatewayChannelMultiplexer:
                 or not coordinator_stream.transport_bootstrap_complete
                 or coordinator_stream.closed):
             raise GatewayMuxError("coordinator stream is not the live HELLO owner")
+        coordinator_writer = coordinator_stream.writer
+        if type(coordinator_writer) is not ChannelFragmentWriter:
+            raise GatewayMuxError("coordinator stream lacks its actual owned writer")
         if type(worker_streams) is not tuple:
             raise TypeError("worker streams must be a fixed immutable tuple")
         streams = worker_streams
@@ -72,6 +76,7 @@ class GatewayChannelMultiplexer:
                 or control_capture_reservation_bytes < control_min):
             raise ValueError("control reservation must cover the aggregate bounded request captures")
         workers = {}
+        worker_writers = {}
         for stream in streams:
             if not is_registered_worker_channel_stream(stream):
                 raise TypeError("mux workers must be live registered server HELLO streams")
@@ -81,18 +86,26 @@ class GatewayChannelMultiplexer:
                     or not stream.transport_bootstrap_complete):
                 raise GatewayMuxError("worker stream is not its actual committed HELLO owner")
             identity = capability.identity
+            writer = stream.writer
+            if type(writer) is not ChannelFragmentWriter:
+                raise GatewayMuxError("worker stream lacks its actual owned writer")
             key = (identity[1], identity[2])
             if key in workers:
                 raise GatewayMuxError("worker tuple repeats an exact device/boot slot")
             slot = router._slot(*key)
             if slot.registration is not capability or slot.stream is not stream:
                 raise GatewayMuxError("worker is not the exact router-registered stream")
+            if slot.writer is not writer:
+                raise GatewayMuxError("worker stream writer differs from its router slot")
             workers[key] = (stream, capability, identity)
+            worker_writers[key] = writer
         self.coordinator_stream = coordinator_stream
         self.coordinator = coordinator
         self._coordinator_identity = coordinator.identity
         self.router = router
         self._workers = workers
+        self._coordinator_writer = coordinator_writer
+        self._worker_writers = worker_writers
         self._relays = {
             key: GatewayChannelRelay(
                 coordinator_stream=coordinator_stream, worker_stream=entry[0],
@@ -117,23 +130,25 @@ class GatewayChannelMultiplexer:
         self._close_once = set()
         self._stuck = []
         self._failure = None
-        claim_streams = (coordinator_stream, *(item[0] for item in workers.values()))
-        markers = tuple(id(stream) for stream in claim_streams)
+        claim_resources = (coordinator_stream, coordinator_writer,
+                           *(item[0] for item in workers.values()),
+                           *(worker_writers[key] for key in workers))
+        markers = tuple(id(resource) for resource in claim_resources)
         with _CLAIM_LOCK:
             if len(_LIVE_MUXES) + len(_RETAINED_MUXES) >= _MAX_LIVE_MUXES:
                 raise GatewayMuxError("global live/uncertain mux cohort bound is exhausted")
-            if len(_STREAM_CLAIMS) + len(markers) > _MAX_CLAIMED_STREAMS:
-                raise GatewayMuxError("global claimed stream bound is exhausted")
-            if any((marker in _STREAM_CLAIMS
-                    and _STREAM_CLAIMS[marker][0] is stream)
-                   for marker, stream in zip(markers, claim_streams)):
-                raise GatewayMuxError("a captured stream already has a mux owner")
+            if len(_RESOURCE_CLAIMS) + len(markers) > _MAX_CLAIMED_RESOURCES:
+                raise GatewayMuxError("global claimed stream/writer bound is exhausted")
+            if any((marker in _RESOURCE_CLAIMS
+                    and _RESOURCE_CLAIMS[marker][0] is resource)
+                   for marker, resource in zip(markers, claim_resources)):
+                raise GatewayMuxError("a captured stream or writer already has a mux owner")
             if len(set(markers)) != len(markers):
-                raise GatewayMuxError("mux cohort repeats a captured stream")
+                raise GatewayMuxError("mux cohort repeats a captured stream or writer")
             _LIVE_MUXES.add(self)
-            for marker, stream in zip(markers, claim_streams):
-                _STREAM_CLAIMS[marker] = (stream, self)
-        self._claim_streams = claim_streams
+            for marker, resource in zip(markers, claim_resources):
+                _RESOURCE_CLAIMS[marker] = (resource, self)
+        self._claim_resources = claim_resources
 
     @property
     def pending_counts(self):
@@ -150,12 +165,14 @@ class GatewayChannelMultiplexer:
         if (self.coordinator_stream.registration is not self.coordinator
                 or self.coordinator.identity != self._coordinator_identity
                 or self.coordinator_stream.closed
+                or self.coordinator_stream.writer is not self._coordinator_writer
                 or self.coordinator_stream._driver._tls is not self.coordinator_stream._hello.owner):
             raise GatewayMuxError("captured coordinator stream was replaced or closed")
         for key, (stream, capability, identity) in self._workers.items():
             if (not is_registered_worker_channel_stream(stream)
                     or stream.registration is not capability
                     or capability.identity != identity
+                    or stream.writer is not self._worker_writers[key]
                     or stream._driver._tls is not stream._hello.owner):
                 raise GatewayMuxError("captured worker cohort member was replaced or closed")
             slot = self.router._slot(*key)
@@ -318,11 +335,11 @@ class GatewayChannelMultiplexer:
             self._accepting = False
             with _CLAIM_LOCK:
                 _LIVE_MUXES.discard(self)
-                for stream in self._claim_streams:
-                    marker = id(stream)
-                    claim = _STREAM_CLAIMS.get(marker)
-                    if claim is not None and claim[0] is stream and claim[1] is self:
-                        del _STREAM_CLAIMS[marker]
+                for resource in self._claim_resources:
+                    marker = id(resource)
+                    claim = _RESOURCE_CLAIMS.get(marker)
+                    if claim is not None and claim[0] is resource and claim[1] is self:
+                        del _RESOURCE_CLAIMS[marker]
             cohort = (self.coordinator_stream,
                       *(item[0] for item in self._workers.values()))
             for stream in cohort:

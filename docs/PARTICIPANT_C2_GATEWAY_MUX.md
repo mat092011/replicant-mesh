@@ -29,6 +29,13 @@ cohort. Pending capture accounting is retained after uncertain failure rather
 than reported as reclaimed.
 
 At most eight mux cohorts, including stopped cohorts with unresolved pending
+captures or uncertain stream closes, are retained process-wide. They keep
+strong stream, writer, and request ownership; exhaustion rejects new cohorts
+rather than dropping unresolved owners. A global identity claim also prevents
+a coordinator, worker stream, or actual writer from being shared by a second
+mux.
+
+At most eight mux cohorts, including stopped cohorts with unresolved pending
 captures or uncertain stream closes, are retained process-wide. Those cohorts
 keep strong stream and request ownership; exhaustion rejects new cohorts rather
 than dropping unresolved owners. A global identity claim also prevents a

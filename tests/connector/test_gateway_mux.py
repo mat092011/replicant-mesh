@@ -440,7 +440,7 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
 
     def test_duplicate_wire_id_is_rejected_after_completion_history_boundary(self):
         mux = self._mux()
-        with self.assertRaisesRegex(GatewayMuxError, "captured stream already has a mux owner"):
+        with self.assertRaisesRegex(GatewayMuxError, "already has a mux owner"):
             GatewayChannelMultiplexer(
                 coordinator_stream=self.fx.coordinator_server_stream,
                 worker_streams=self.fx.worker_server_streams,
@@ -450,7 +450,7 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
         # A distinct genuine coordinator cannot reuse these genuine worker
         # streams/writers in a competing mux cohort.
         second_coordinator_stream = self._another_coordinator_stream()
-        with self.assertRaisesRegex(GatewayMuxError, "captured stream already has a mux owner"):
+        with self.assertRaisesRegex(GatewayMuxError, "already has a mux owner"):
             GatewayChannelMultiplexer(
                 coordinator_stream=second_coordinator_stream,
                 worker_streams=self.fx.worker_server_streams,
