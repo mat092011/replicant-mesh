@@ -461,8 +461,9 @@ class C2HostProcessFixture:
             configuration_path=str(self.startup.selected_store.header_path),
             launch_spec=self.selected_spec,
             operator_verification_key_pem=self.startup.operator_verification_key_pem)
-        if (Path(config.selected_root).resolve() != self.startup.selected_store.root.resolve()
-                or Path(config.protected_root).resolve()
+        if (Path(config["selected_root"]).resolve()
+                != self.startup.selected_store.root.resolve()
+                or Path(config["protected_root"]).resolve()
                 != self.startup.selected_store.protected.resolve()):
             raise RuntimeError("child configuration differs from the verified selected roots")
         if not self.backend.configure_pinned_role("host", config, self.pin,
@@ -505,15 +506,17 @@ class C2HostProcessFixture:
         if self.gateway is not None:
             self.gateway.stop()
             gateway_reclaimed = self.gateway_reclamation_confirmed()
+        if not gateway_reclaimed:
+            if self.backend is not None:
+                self.backend.request_stop(("host",))
+            return
+        if self._startup_construction_failed:
+            return
         reclaimed = True
         if self.backend is not None:
             result = self.backend.stop(("host",), 15.0)
             reclaimed = (result.get("host") is True
                          and "host" not in self.backend._owned)
-        if not gateway_reclaimed:
-            return
-        if self._startup_construction_failed:
-            return
         if (reclaimed and self.backend is not None
                 and "host" in self.backend._pinned_roles):
             reclaimed = self.backend.release_configured_pin("host") is True
