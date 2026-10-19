@@ -3,6 +3,7 @@ import os
 import struct
 import subprocess
 import sys
+import tracemalloc
 import unittest
 
 from steamboat_connector import channel_wire as wire
@@ -107,10 +108,98 @@ class ChannelWireTests(unittest.TestCase):
         decoder = wire.FragmentDecoder(GENERATION, reassembly_capacity=32)
         with self.assertRaises(wire.ChannelWireError):
             list(decoder.feed(bytes(broken)))
-        self.assertEqual(decoder._frame, bytearray())
+        self.assertEqual(decoder._frame_used, 0)
         self.assertEqual(decoder._lanes, {"data": None, "control": None})
         with self.assertRaises(wire.ChannelWireError):
             list(decoder.feed(b""))
+        self.assertEqual(decoder._next_sequence, 1)
+
+    def test_suspended_feed_cannot_be_overlapped_or_bypassed_by_eof(self):
+        frame_one = _frame(wire.DATA, wire.START | wire.END, 1, DATA_ID, 0, b"first")
+        frame_two = _frame(wire.DATA, wire.START | wire.END, 2, b"e" * 16, 0, b"second")
+        decoder = wire.FragmentDecoder(GENERATION, reassembly_capacity=64)
+        iterator = decoder.feed(frame_one + frame_two)
+        self.assertEqual(next(iterator).payload, b"first")
+        self.assertEqual(decoder._frame_used, 0)
+        self.assertIsNone(decoder._header)
+        self.assertEqual(decoder._next_sequence, 2)
+        with self.assertRaises(wire.ChannelWireError):
+            decoder.finish()
+        self.assertEqual(decoder._next_sequence, 2)
+        with self.assertRaises(wire.ChannelWireError):
+            next(iterator)
+
+        decoder = wire.FragmentDecoder(GENERATION, reassembly_capacity=64)
+        iterator = decoder.feed(frame_one + frame_two)
+        self.assertEqual(next(iterator).payload, b"first")
+        with self.assertRaises(wire.ChannelWireError):
+            decoder.feed(frame_two)
+        self.assertEqual(decoder._next_sequence, 2)
+        with self.assertRaises(wire.ChannelWireError):
+            next(iterator)
+
+    def test_feed_size_is_bounded_and_failure_preserves_sequence(self):
+        decoder = wire.FragmentDecoder(GENERATION, reassembly_capacity=64)
+        with self.assertRaises(wire.ChannelWireError):
+            decoder.feed(b"x" * (wire.MAX_FEED_BYTES + 1))
+        self.assertEqual(decoder._next_sequence, 1)
+        self.assertEqual(decoder._frame_used, 0)
+        with self.assertRaises(wire.ChannelWireError):
+            decoder.finish()
+
+    def test_tiny_fragments_have_constant_bounded_reassembly_memory(self):
+        capacity = 10_000
+        tracemalloc.start()
+        try:
+            decoder = wire.FragmentDecoder(GENERATION, reassembly_capacity=capacity)
+            _, baseline = tracemalloc.get_traced_memory()
+            tracemalloc.reset_peak()
+            for index in range(capacity):
+                flags = wire.START if index == 0 else 0
+                if index == capacity - 1:
+                    flags |= wire.END
+                frame = _frame(wire.DATA, flags, index + 1, DATA_ID, index, b"x")
+                messages = list(decoder.feed(frame))
+                if index == capacity - 1:
+                    self.assertEqual(messages[0].payload, b"x" * capacity)
+            _, peak = tracemalloc.get_traced_memory()
+            self.assertLessEqual(peak - baseline, decoder.reservation_bound_bytes)
+            self.assertLess(peak - baseline, 10 * capacity)
+        finally:
+            tracemalloc.stop()
+
+    def test_control_bundle_uses_tightest_combined_control_limit(self):
+        payload = wire.encode_bundle(
+            "CancelSession", wire.REQUEST,
+            envelope=b"e" * wire.MAX_ENVELOPE_BYTES,
+            binding=b"b" * wire.MAX_BINDING_BYTES,
+            protobuf=b"p" * wire.MAX_CONTROL_PROTOBUF_BYTES)
+        self.assertEqual(len(payload), wire.MAX_CONTROL_BUNDLE_BYTES)
+        self.assertEqual(wire.decode_bundle(payload, fragment_kind=wire.CONTROL).method,
+                         "CancelSession")
+        decoder = wire.FragmentDecoder(GENERATION,
+                                       reassembly_capacity=wire.MAX_CONTROL_BUNDLE_BYTES)
+        oversized = wire.MAX_CONTROL_BUNDLE_BYTES + 1
+        offset = 0
+        sequence = 1
+        index = 0
+        while offset < oversized:
+            chunk = b"x" * min(wire.MAX_FRAGMENT_BYTES, oversized - offset)
+            flags = (wire.START if index == 0 else 0)
+            if offset + len(chunk) == oversized:
+                flags |= wire.END
+            frame = _frame(wire.CONTROL, flags, sequence, CONTROL_ID, index, chunk)
+            if index < 3:
+                list(decoder.feed(frame))
+            else:
+                with self.assertRaises(wire.ChannelWireError):
+                    list(decoder.feed(frame))
+                break
+            offset += len(chunk)
+            sequence += 1
+            index += 1
+        self.assertEqual(decoder._next_sequence, sequence)
+        self.assertTrue(decoder._fault)
 
     def test_generation_sequence_start_index_and_reassembly_are_strict(self):
         cases = (
@@ -137,6 +226,8 @@ class ChannelWireTests(unittest.TestCase):
         with self.assertRaises(wire.ChannelWireError):
             list(decoder.feed(_frame(wire.CONTROL, wire.START | wire.END, 2,
                                      CONTROL_ID, 0, b"de")))
+        self.assertEqual(decoder._buffers["data"][:3], bytes(3))
+        self.assertEqual(decoder._buffers["control"][:1], bytes(1))
         with self.assertRaises(wire.ChannelWireError):
             list(decoder.feed(b""))
         decoder = wire.FragmentDecoder(GENERATION, reassembly_capacity=32)

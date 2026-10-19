@@ -21,6 +21,12 @@ MAX_BUNDLE_BYTES = BUNDLE_HEADER_BYTES + MAX_ENVELOPE_BYTES + MAX_BINDING_BYTES 
 MAX_CONTROL_PROTOBUF_BYTES = 8 * 1024
 MAX_SMALL_CONTROL_BYTES = 4 * 1024
 MAX_HEARTBEAT_BYTES = 64
+MAX_CONTROL_BUNDLE_BYTES = (BUNDLE_HEADER_BYTES + MAX_ENVELOPE_BYTES
+                            + MAX_BINDING_BYTES + MAX_CONTROL_PROTOBUF_BYTES)
+MAX_WIRE_FRAME_BYTES = FRAGMENT_HEADER_BYTES + MAX_FRAGMENT_BYTES
+MAX_FEED_BYTES = 64 * 1024
+_METADATA_RESERVATION_BYTES = 4096
+_ZERO_BLOCK = bytes(4096)
 
 START = 1
 END = 2
@@ -40,7 +46,7 @@ CONTROL_METHODS = {5, 6, 7}
 DATA_KINDS = {DATA, RESPONSE}
 CONTROL_KINDS = {CONTROL, HELLO, HEARTBEAT, CLOSE}
 _MAX_LOGICAL = {DATA: MAX_BUNDLE_BYTES, RESPONSE: MAX_BUNDLE_BYTES,
-                CONTROL: MAX_BUNDLE_BYTES,
+                CONTROL: MAX_CONTROL_BUNDLE_BYTES,
                 HELLO: MAX_SMALL_CONTROL_BYTES, CLOSE: MAX_SMALL_CONTROL_BYTES,
                 HEARTBEAT: MAX_HEARTBEAT_BYTES}
 
@@ -57,6 +63,15 @@ class DecodedMessage:
     first_sequence: int
     last_sequence: int
     payload: bytes
+
+
+@dataclass(slots=True)
+class _PartialMessage:
+    kind: int
+    message_id: bytes
+    first_sequence: int
+    next_index: int
+    size: int
 
 
 @dataclass(frozen=True)
@@ -171,7 +186,16 @@ def decode_bundle(payload, *, fragment_kind):
 
 
 class FragmentDecoder:
-    """Incremental decoder; one partial logical message per data/control lane."""
+    """Incremental decoder with an explicit total reassembly reservation.
+
+    Each lane owns one preallocated ``reassembly_capacity`` bytearray, so
+    fragment count cannot create per-fragment objects or geometric-growth
+    headroom. ``reservation_bound_bytes`` includes both buffers, the maximum
+    frame buffer, at most 64 KiB of input pinned while the feed iterator is
+    active, one yielded payload copy, and a fixed 4 KiB metadata allowance.
+    Split larger socket reads into <=64 KiB feed calls. Caller-retained
+    messages and pending queues need separate reservations.
+    """
 
     def __init__(self, expected_generation, *, reassembly_capacity):
         self.expected_generation = _id16(expected_generation, "expected_generation")
@@ -179,11 +203,23 @@ class FragmentDecoder:
             raise ChannelWireError("explicit positive reassembly capacity is required")
         self._next_sequence = 1
         self.reassembly_capacity = reassembly_capacity
-        self._frame = bytearray()
+        self._buffers = {"data": bytearray(reassembly_capacity),
+                         "control": bytearray(reassembly_capacity)}
+        self._frame = bytearray(MAX_WIRE_FRAME_BYTES)
+        self._frame_used = 0
         self._frame_size = FRAGMENT_HEADER_BYTES
         self._header = None
         self._lanes = {"data": None, "control": None}
         self._fault = False
+        self._feed_active = False
+
+    @property
+    def reservation_bound_bytes(self):
+        """Decoder backing buffers, one output message, and fixed metadata."""
+        return (2 * self.reassembly_capacity + MAX_WIRE_FRAME_BYTES
+                + MAX_FEED_BYTES
+                + min(self.reassembly_capacity, MAX_BUNDLE_BYTES)
+                + _METADATA_RESERVATION_BYTES)
 
     @staticmethod
     def _lane(kind):
@@ -193,11 +229,30 @@ class FragmentDecoder:
             return "control"
         raise ChannelWireError("unknown fragment kind")
 
-    def _fail(self, message):
-        self._fault = True
-        self._frame.clear()
-        self._header = None
+    @staticmethod
+    def _wipe(buffer, length):
+        offset = 0
+        while offset < length:
+            take = min(len(_ZERO_BLOCK), length - offset)
+            buffer[offset:offset + take] = _ZERO_BLOCK[:take]
+            offset += take
+
+    def _clear_state(self):
+        for lane, partial in self._lanes.items():
+            if partial is not None:
+                self._wipe(self._buffers[lane], partial.size)
         self._lanes = {"data": None, "control": None}
+        self._wipe(self._frame, self._frame_used)
+        self._frame_used = 0
+        self._frame_size = FRAGMENT_HEADER_BYTES
+        self._header = None
+
+    def _poison(self):
+        self._fault = True
+        self._clear_state()
+
+    def _fail(self, message):
+        self._poison()
         raise ChannelWireError(message)
 
     def feed(self, data):
@@ -208,41 +263,66 @@ class FragmentDecoder:
         """
         if self._fault:
             raise ChannelWireError("decoder is permanently faulted")
+        if self._feed_active:
+            self._fail("the prior feed iterator was not exhausted")
         if type(data) is not bytes:
             self._fail("input must be immutable bytes")
-        incoming = memoryview(data)
-        offset = 0
-        while offset < len(incoming):
-            if self._header is None:
-                wanted = FRAGMENT_HEADER_BYTES - len(self._frame)
-                take = min(wanted, len(incoming) - offset)
-                self._frame.extend(incoming[offset:offset + take])
-                offset += take
-                if len(self._frame) < FRAGMENT_HEADER_BYTES:
-                    continue
-                try:
-                    header = struct.unpack(FRAGMENT_FORMAT, self._frame)
-                    self._validate_header(header)
-                except ChannelWireError as error:
-                    self._fail(str(error))
-                self._header = header
-                self._frame_size = FRAGMENT_HEADER_BYTES + header[-1]
-            else:
-                wanted = self._frame_size - len(self._frame)
-                take = min(wanted, len(incoming) - offset)
-                self._frame.extend(incoming[offset:offset + take])
-                offset += take
-                if len(self._frame) < self._frame_size:
-                    continue
-                try:
-                    item = self._accept_fragment(self._header, bytes(self._frame[FRAGMENT_HEADER_BYTES:]))
-                except ChannelWireError as error:
-                    self._fail(str(error))
-                if item is not None:
-                    yield item
-                self._frame.clear()
-                self._header = None
-                self._frame_size = FRAGMENT_HEADER_BYTES
+        if len(data) > MAX_FEED_BYTES:
+            self._fail("input read exceeds the bounded feed size")
+        self._feed_active = True
+        return self._feed(data)
+
+    def _feed(self, data):
+        complete = False
+        try:
+            if self._fault:
+                raise ChannelWireError("decoder is permanently faulted")
+            incoming = memoryview(data)
+            offset = 0
+            while offset < len(incoming):
+                if self._header is None:
+                    wanted = FRAGMENT_HEADER_BYTES - self._frame_used
+                    take = min(wanted, len(incoming) - offset)
+                    self._frame[self._frame_used:self._frame_used + take] = incoming[offset:offset + take]
+                    self._frame_used += take
+                    offset += take
+                    if self._frame_used < FRAGMENT_HEADER_BYTES:
+                        continue
+                    try:
+                        header = struct.unpack_from(FRAGMENT_FORMAT, self._frame)
+                        self._validate_header(header)
+                    except ChannelWireError as error:
+                        self._fail(str(error))
+                    self._header = header
+                    self._frame_size = FRAGMENT_HEADER_BYTES + header[-1]
+                else:
+                    wanted = self._frame_size - self._frame_used
+                    take = min(wanted, len(incoming) - offset)
+                    self._frame[self._frame_used:self._frame_used + take] = incoming[offset:offset + take]
+                    self._frame_used += take
+                    offset += take
+                    if self._frame_used < self._frame_size:
+                        continue
+                    try:
+                        item = self._accept_fragment(
+                            self._header,
+                            memoryview(self._frame)[FRAGMENT_HEADER_BYTES:self._frame_size])
+                    except ChannelWireError as error:
+                        self._fail(str(error))
+                    self._wipe(self._frame, self._frame_used)
+                    self._frame_used = 0
+                    self._header = None
+                    self._frame_size = FRAGMENT_HEADER_BYTES
+                    if item is not None:
+                        yield item
+                        del item
+                        if self._fault:
+                            raise ChannelWireError("decoder is permanently faulted")
+            complete = True
+        finally:
+            if not complete and not self._fault:
+                self._poison()
+            self._feed_active = False
 
     def _validate_header(self, header):
         magic, kind, flags, reserved, generation, sequence, message_id, index, length = header
@@ -252,19 +332,21 @@ class FragmentDecoder:
                 or sequence != self._next_sequence or sequence > MAX_SEQUENCE
                 or not 1 <= length <= MAX_FRAGMENT_BYTES):
             raise ChannelWireError("fragment header or transport sequence is invalid")
+        if sequence == MAX_SEQUENCE and not flags & END:
+            raise ChannelWireError("transport sequence exhausted before message end")
         partial = self._lanes[lane]
         if partial is None:
             if flags & START != START or index != 0:
                 raise ChannelWireError("first fragment must start at index zero")
         else:
-            if (flags & START or partial["kind"] != kind
-                    or partial["message_id"] != message_id
-                    or index != partial["next_index"]):
+            if (flags & START or partial.kind != kind
+                    or partial.message_id != message_id
+                    or index != partial.next_index):
                 raise ChannelWireError("fragment does not continue its lane message")
-        total = length if partial is None else partial["size"] + length
+        total = length if partial is None else partial.size + length
         if total > _kind_limit(kind):
             raise ChannelWireError("logical message exceeds its kind limit")
-        other_lane_bytes = sum(item["size"] for name, item in self._lanes.items()
+        other_lane_bytes = sum(item.size for name, item in self._lanes.items()
                                if name != lane and item is not None)
         if total + other_lane_bytes > self.reassembly_capacity:
             raise ChannelWireError("reassembly byte capacity is exhausted")
@@ -278,21 +360,18 @@ class FragmentDecoder:
         lane = self._lane(kind)
         partial = self._lanes[lane]
         if partial is None:
-            partial = {"kind": kind, "generation": generation, "message_id": message_id,
-                       "first_sequence": sequence, "last_sequence": sequence,
-                       "next_index": 1, "size": len(payload), "chunks": [payload]}
-        else:
-            partial["chunks"].append(payload)
-            partial["size"] += len(payload)
-            partial["last_sequence"] = sequence
-            partial["next_index"] += 1
+            partial = _PartialMessage(kind, message_id, sequence, 0, 0)
+        start = partial.size
+        end = start + len(payload)
+        self._buffers[lane][start:end] = payload
+        partial.size = end
+        partial.next_index = index + 1
         self._next_sequence += 1
-        if self._next_sequence > MAX_SEQUENCE and not flags & END:
-            raise ChannelWireError("transport sequence exhausted before message end")
         if flags & END:
             message = DecodedMessage(kind, generation, message_id,
-                                     partial["first_sequence"], sequence,
-                                     b"".join(partial["chunks"]))
+                                     partial.first_sequence, sequence,
+                                     bytes(memoryview(self._buffers[lane])[:partial.size]))
+            self._wipe(self._buffers[lane], partial.size)
             self._lanes[lane] = None
             return message
         self._lanes[lane] = partial
@@ -302,7 +381,9 @@ class FragmentDecoder:
         """Signal EOF; any partial header or logical message permanently faults."""
         if self._fault:
             raise ChannelWireError("decoder is permanently faulted")
-        if self._frame or self._header is not None or any(self._lanes.values()):
+        if self._feed_active:
+            self._fail("cannot finish while a feed iterator is suspended")
+        if self._frame_used or self._header is not None or any(self._lanes.values()):
             self._fail("truncated channel stream")
 
 
