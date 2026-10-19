@@ -7,6 +7,7 @@ import json
 import ssl
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from cryptography import x509
@@ -140,7 +141,8 @@ from steamboat_security.channel_certificates import (
 from steamboat_security.channel_policy import sign_channel_policy
 from steamboat_security.gateway_coordinator_tls import OwnedGatewayCoordinatorTLS
 from steamboat_security.gateway_delegation import (
-    DOMAIN as DELEGATION_DOMAIN, GatewayDelegationVerifier, sign_gateway_delegation,
+    DOMAIN as DELEGATION_DOMAIN, DelegationError, GatewayDelegationVerifier,
+    sign_gateway_delegation,
 )
 from steamboat_security.gateway_egress import GatewayCoordinatorEgress
 from steamboat_security.gateway_ingress import GatewayWorkerIngress
@@ -162,7 +164,14 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
         egress_tests.GatewayEgressTests.setUpClass()
         self.base = egress_tests.GatewayEgressTests(
             methodName="test_route_guard_reuses_c1_scope_and_checks_live_gateway_on_completion")
+        # LIFO: nested owners close first, base.tearDown restores NOW and the
+        # fixture cleans its own resources, then TestCase cleanups close the
+        # base's egress and unlink its temporary TLS files. The assertion runs
+        # last and only inspects paths created by this fixture.
+        self.addCleanup(self._assert_base_tempfiles_removed)
+        self.addCleanup(self.base.doCleanups)
         self.base.setUp()
+        self._base_temp_paths = tuple(Path(path) for path in self.base.client_temp[2])
         self.addCleanup(self.base.tearDown)
         self.fx = self.base.fx
         self.host = self.fx.credentials["host"]
@@ -555,12 +564,22 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
         alt_cert = self.fx.credentials["alt_coordinator"]["certificate"]
         payload["actor_certificate_base64"] = base64.b64encode(alt_cert).decode("ascii")
         forged = sign_gateway_delegation(payload, self.base.gateway_key, self.base.gateway_cert)
-        with self.assertRaises(Exception):
+        with self.assertRaises(DelegationError):
             self.worker_verifier.verify(
                 forged, gateway_peer_certificate_pem=self.base.gateway_cert,
                 metadata=metadata, request_bytes=raw_request,
                 expected_stream_generation=self.worker_registration.identity[3],
                 expected_frame_sequence=1, expected_lane="data")
+        slot = self.router._slot(self.device_id, self.worker_boot_id)
+        before = (slot.data_sequence, dict(slot.pending_data), self.worker_ingress._state.closed)
+        with self.assertRaises(DelegationError):
+            self.worker_verifier.verify(
+                envelope, gateway_peer_certificate_pem=self.base.gateway_cert,
+                metadata=metadata, request_bytes=raw_request + b"changed",
+                expected_stream_generation=self.worker_registration.identity[3],
+                expected_frame_sequence=1, expected_lane="data")
+        self.assertEqual((slot.data_sequence, dict(slot.pending_data),
+                          self.worker_ingress._state.closed), before)
 
     def test_full_control_admission_does_not_create_logical_sequence_gap(self):
         request_id, session_id = new_id("req"), new_id("ses")
@@ -580,13 +599,6 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             metadata=metadata, request_bytes=b"cancel", message_id=b"Z" * 16)
         self.assertFalse(accepted)
         self.assertEqual(slot.control_sequence, 9)
-        with self.assertRaises(Exception):
-            self.worker_verifier.verify(
-                envelope, gateway_peer_certificate_pem=self.base.gateway_cert,
-                metadata=metadata, request_bytes=raw_request + b"changed",
-                expected_stream_generation=self.worker_registration.identity[3],
-                expected_frame_sequence=1, expected_lane="data")
-
     def test_policy_or_stream_expiry_rejects_queued_dispatch(self):
         (_fields, _request_id, _session_id, _operation_id, _metadata, _binding,
          _raw_request, guard, _envelope, _message_id) = self._open_request()
@@ -595,3 +607,7 @@ class GatewayRouterTwoHopTests(unittest.TestCase):
             self.router.assert_dispatch_live(
                 coordinator=self.coordinator_registration, worker=self.worker_registration,
                 route_guard=guard, method="OpenSession")
+
+    def _assert_base_tempfiles_removed(self):
+        for path in getattr(self, "_base_temp_paths", ()):
+            self.assertFalse(path.exists(), f"fixture-owned TLS tempfile leaked: {path}")
