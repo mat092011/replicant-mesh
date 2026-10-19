@@ -161,6 +161,7 @@ class C2HostServiceContractTests(unittest.TestCase):
         left, right = socket.socketpair()
         tls = object()
         service = object.__new__(C2HostService)
+        service._signal_stop = False
         service._traffic = object()
         channel = {"socket": left, "tls": tls, "driver": None}
         try:
@@ -257,6 +258,7 @@ class C2HostServiceNativeTests(unittest.IsolatedAsyncioTestCase):
                     owner_policy=fixture_case.owner_policy(),
                     component_allocations=fixture_case.allocations())
                 service = object.__new__(C2HostService)
+                service._signal_stop = False
                 service._runtime = runtime
                 service._lifecycle_lock = threading.Lock()
                 service._stop_requested = threading.Event()
@@ -274,6 +276,7 @@ class C2HostServiceNativeTests(unittest.IsolatedAsyncioTestCase):
 class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
     async def test_unresolved_startup_task_retains_every_owner(self):
         service = object.__new__(C2HostService)
+        service._signal_stop = False
         service._stopping = False
         service._ready = False
         service._stop_event = asyncio.Event()
@@ -334,6 +337,7 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
                 test_socket=True)
             pins = object()
             service = object.__new__(C2HostService)
+            service._signal_stop = False
             service._stopping = False
             service._ready = False
             service._stop_event = asyncio.Event()
@@ -354,6 +358,88 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
         finally:
             fixture.tearDown()
 
+    async def test_actual_uncertain_tls_cleanup_in_raw_channel_retains_pins(self):
+        from tests.security.test_gateway_ingress import GatewayIngressTests
+        from steamboat_security import channel_tls
+        import shutil
+
+        fixture = GatewayIngressTests()
+        fixture.setUp()
+        tls = fixture.tls_owner
+        private_directory = tls._private_directory
+        pins, runner = object(), object()
+        service = object.__new__(C2HostService)
+        service._signal_stop = False
+        service._stopping = False
+        service._ready = False
+        service._stop_event = asyncio.Event()
+        service._channels = [{"rpc": None, "stream": None, "driver": None,
+                              "socket": None, "tls": tls}]
+        service._uncertain_startup_tasks = []
+        service._runtime = None
+        service._child_pins = pins
+        service._runner = runner
+        service._close_error = None
+        service._shutdown_proven = False
+        try:
+            with mock.patch.object(channel_tls.shutil, "rmtree",
+                                   side_effect=OSError("credential removal uncertain")):
+                with self.assertRaisesRegex(C2HostServiceError,
+                                            "credential cleanup is uncertain"):
+                    await service._shutdown([])
+            self.assertTrue(tls.cleanup_uncertain)
+            self.assertEqual(tls.cleanup_status, "uncertain")
+            self.assertIs(service._child_pins, pins)
+            self.assertIs(service._runner, runner)
+            self.assertFalse(service._shutdown_proven)
+        finally:
+            shutil.rmtree(private_directory, ignore_errors=True)
+            fixture.tearDown()
+
+    async def test_raw_socket_close_uncertainty_is_not_retried_on_shutdown(self):
+        from tests.connector.test_channel_socket import ChannelSocketTests
+
+        fixture = ChannelSocketTests()
+        fixture.setUp()
+        class ReleaseThenRaiseSocket:
+            def __init__(self, sock):
+                self.sock = sock
+                self.close_calls = 0
+
+            def close(self):
+                self.close_calls += 1
+                self.sock.close()
+                raise OSError("raw close acknowledgement lost")
+
+        left, peer = fixture._connected_pair()
+        wrapper = ReleaseThenRaiseSocket(left)
+        pins = object()
+        service = object.__new__(C2HostService)
+        service._signal_stop = False
+        service._stopping = False
+        service._ready = False
+        service._stop_event = asyncio.Event()
+        service._channels = [{"rpc": None, "stream": None, "driver": None,
+                              "socket": wrapper, "tls": None}]
+        service._uncertain_startup_tasks = []
+        service._runtime = None
+        service._child_pins = pins
+        service._close_error = None
+        service._shutdown_proven = False
+        try:
+            with self.assertRaisesRegex(C2HostServiceError, "raw gateway socket close"):
+                await service._shutdown([])
+            self.assertEqual(service._channels[0]["_socket_close_status"], "uncertain")
+            self.assertEqual(wrapper.close_calls, 1)
+            self.assertIs(service._child_pins, pins)
+            self.assertFalse(service._shutdown_proven)
+            await service._shutdown([])
+            self.assertEqual(wrapper.close_calls, 1)
+            self.assertIs(service._child_pins, pins)
+        finally:
+            peer.close()
+            fixture.tearDown()
+
     async def test_false_runtime_close_retains_all_downstream_owners(self):
         class Runtime:
             _bridges = {}
@@ -362,6 +448,7 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
                 return False
 
         service = object.__new__(C2HostService)
+        service._signal_stop = False
         service._stopping = False
         service._ready = False
         service._stop_event = asyncio.Event()
@@ -395,6 +482,7 @@ class C2HostServiceCleanupTests(unittest.IsolatedAsyncioTestCase):
                 self.stopped = True
 
         service = object.__new__(C2HostService)
+        service._signal_stop = False
         rpc = Rpc()
         never = asyncio.Event()
         admitted = asyncio.create_task(never.wait())
@@ -432,6 +520,7 @@ class C2HostServiceTlsFactoryNativeTests(unittest.IsolatedAsyncioTestCase):
         fx = fixture.fx
         gateway = fixture._service(expected=((fx.device_id, fx.worker_boot_id),))
         service = object.__new__(C2HostService)
+        service._signal_stop = False
         service._channels = []
         service._uncertain_startup_tasks = []
         service._stop_requested = threading.Event()

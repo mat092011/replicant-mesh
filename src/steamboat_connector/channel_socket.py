@@ -77,6 +77,7 @@ class ChannelSocket:
         self._incoming_cleanup_mode = False
         self._closed = False
         self._socket_close_status = "open"
+        self._tls_close_status = "open"
         self._failure = None
         self._socket_sent = 0
         self._socket_received = 0
@@ -132,6 +133,11 @@ class ChannelSocket:
     def socket_close_status(self):
         """Sticky outcome of the driver's single socket-close attempt."""
         return self._socket_close_status
+
+    @property
+    def tls_close_status(self):
+        """Sticky outcome of the driver's single TLS-owner close attempt."""
+        return self._tls_close_status
 
     @property
     def tls_handshake_complete(self):
@@ -411,10 +417,14 @@ class ChannelSocket:
                 self._socket_close_status = "uncertain"
             else:
                 self._socket_close_status = "closed"
-        try:
-            self._tls.close()
-        except Exception:
-            pass
+        if self._tls_close_status == "open":
+            self._tls_close_status = "closing"
+            try:
+                self._tls.close()
+            except BaseException:
+                self._tls_close_status = "uncertain"
+            else:
+                self._tls_close_status = "closed"
         # Unsent ciphertext is discarded only after retiring the entire TLS stream.
         self._pending_ciphertext.clear()
         self._pending_plaintext = None

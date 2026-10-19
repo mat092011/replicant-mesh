@@ -42,6 +42,7 @@ from steamboat_connector.artifacts import MIN_DISK_HEADROOM_BYTES
 from steamboat_connector.storage import read_private_json
 from steamboat_connector.traffic_budget import TrafficBudget
 from steamboat_security.channel_policy import MAX_CHANNEL_POLICY_BYTES
+from steamboat_security.channel_tls import is_owned_worker_tls
 from steamboat_security.gateway_delegation import GatewayDelegationVerifier
 from steamboat_security.gateway_ingress import GatewayWorkerIngress
 from steamboat_security.files import safe_read
@@ -542,11 +543,10 @@ class C2HostService:
                     raise C2HostServiceError(
                         "stop requested during gateway connect; socket retained") from error
                 try:
-                    connected.close()
-                except OSError:
-                    raise C2HostServiceError("failed gateway socket close is uncertain") from error
-                if connected.fileno() != -1:
-                    raise C2HostServiceError("failed gateway socket close is uncertain") from error
+                    self._close_raw_socket_once(channel, connected)
+                except C2HostServiceError as close_error:
+                    raise C2HostServiceError(
+                        "failed gateway socket close is uncertain") from close_error
                 channel["socket"] = None
                 last_error = error
         raise C2HostServiceError("signed gateway endpoint could not be reached") from last_error
@@ -558,6 +558,45 @@ class C2HostService:
         channel["driver"] = driver
         channel["socket"] = None
         return driver
+
+    @staticmethod
+    def _close_raw_socket_once(channel, raw_socket):
+        status = channel.get("_socket_close_status", "open")
+        if status == "open":
+            channel["_socket_close_status"] = "closing"
+            try:
+                raw_socket.close()
+            except BaseException:
+                channel["_socket_close_status"] = "uncertain"
+            else:
+                channel["_socket_close_status"] = "closed"
+        if channel.get("_socket_close_status") != "closed":
+            raise C2HostServiceError("raw gateway socket close is uncertain")
+
+    @staticmethod
+    def _close_tls_owner_once(channel, tls):
+        if not is_owned_worker_tls(tls):
+            raise C2HostServiceError("gateway TLS owner is not the fixed worker TLS type")
+        driver = channel.get("driver")
+        if driver is not None:
+            attempt_status = getattr(driver, "tls_close_status", None)
+        else:
+            attempt_status = channel.get("_tls_close_status", "open")
+            if attempt_status == "open":
+                channel["_tls_close_status"] = "closing"
+                try:
+                    tls.close()
+                except BaseException:
+                    channel["_tls_close_status"] = "uncertain"
+                else:
+                    channel["_tls_close_status"] = "closed"
+                attempt_status = channel["_tls_close_status"]
+        if attempt_status != "closed":
+            raise C2HostServiceError("gateway TLS close attempt is uncertain")
+        status = getattr(tls, "cleanup_status", None)
+        uncertain = getattr(tls, "cleanup_uncertain", None)
+        if uncertain is not False or status != "removed":
+            raise C2HostServiceError("gateway TLS credential cleanup is uncertain")
 
     async def _pump_tls(self, driver):
         deadline = time.monotonic() + MAX_BOOTSTRAP_SECONDS
@@ -706,29 +745,20 @@ class C2HostService:
                 rpc.stop()
             elif channel.get("stream") is not None:
                 channel["stream"].close()
-            elif channel.get("driver") is not None:
-                channel["driver"].close()
+            driver = channel.get("driver")
+            if driver is not None:
+                driver.close()
+                if getattr(driver, "socket_close_status", None) != "closed":
+                    raise C2HostServiceError("owned gateway socket close is uncertain")
+                self._close_tls_owner_once(channel, driver._tls)
             else:
                 raw_socket = channel.get("socket")
                 if raw_socket is not None:
-                    raw_socket.close()
-                    if raw_socket.fileno() != -1:
-                        raise C2HostServiceError("raw gateway socket close is uncertain")
+                    self._close_raw_socket_once(channel, raw_socket)
                     channel["socket"] = None
                 tls = channel.get("tls")
                 if tls is not None:
-                    tls.close()
-                    if not getattr(tls, "_closed", False):
-                        raise C2HostServiceError("TLS owner close is uncertain")
-            driver = channel.get("driver")
-            if driver is not None:
-                if getattr(driver, "socket_close_status", None) != "closed":
-                    raise C2HostServiceError("owned gateway socket close is uncertain")
-                tls = driver._tls
-                if (getattr(tls, "cleanup_uncertain", False)
-                        or getattr(tls, "cleanup_status", None) in ("pending", "uncertain")
-                        or not getattr(tls, "_closed", False)):
-                    raise C2HostServiceError("owned TLS transport close is uncertain")
+                    self._close_tls_owner_once(channel, tls)
         current = asyncio.current_task()
         run_tasks = {channel.get("task") for channel in self._channels
                      if channel.get("task") is not None}
