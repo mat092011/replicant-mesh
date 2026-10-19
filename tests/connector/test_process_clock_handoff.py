@@ -306,6 +306,27 @@ class ProcessClockHandoffTests(unittest.TestCase):
             self.assertIs(legacy.clock, time.monotonic)
 
     def test_c2_configured_pin_and_verifier_must_share_backend_authority_clock(self):
+        class ProbeBridge:
+            instances = []
+            def __init__(self, _clock):
+                self.read_fd, self.write_fd = os.pipe()
+                self.begin_calls = 0
+                self.cancel_calls = 0
+                type(self).instances.append(self)
+            def begin_spawn(self):
+                self.begin_calls += 1
+                return self.read_fd
+            def cancel_spawn_without_child(self):
+                self.cancel_calls += 1
+                for name in ("read_fd", "write_fd"):
+                    fd = getattr(self, name)
+                    setattr(self, name, -1)
+                    if fd >= 0:
+                        os.close(fd)
+                return True
+            def stop(self):
+                return True
+
         with tempfile.TemporaryDirectory() as temporary:
             os.chmod(temporary, 0o700)
             with mock.patch("steamboat_connector.process_supervisor.sys.platform", "linux"):
@@ -321,7 +342,8 @@ class ProcessClockHandoffTests(unittest.TestCase):
                  mock.patch("steamboat_connector.process_supervisor.atomic_write_private",
                             side_effect=write_private), \
                  mock.patch("steamboat_connector.process_supervisor.read_private_json",
-                            side_effect=reader):
+                            side_effect=reader), \
+                 mock.patch("steamboat_connector.clock_bridge.OwnedClockBridge", ProbeBridge):
                 self.assertTrue(backend.configure_role("coordinator", _coordinator_config()))
                 with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as popen:
                     for pin_clock, verifier_clock in ((other, authority), (authority, other)):
@@ -330,7 +352,28 @@ class ProcessClockHandoffTests(unittest.TestCase):
                         verifier = SimpleNamespace(clock=verifier_clock)
                         backend._pinned_roles["coordinator"] = (pin, verifier, None)
                         self.assertIsNone(backend.spawn_owned_start("coordinator", _policy()))
+                    self.assertEqual(ProbeBridge.instances, [])
                     popen.assert_not_called()
+
+                matched_pin = SimpleNamespace(clock=authority,
+                    assert_open_descriptors=lambda: None)
+                matched_verifier = SimpleNamespace(clock=authority)
+                backend._pinned_roles["coordinator"] = (matched_pin, matched_verifier, None)
+                cancel = threading.Event()
+                reached_pre_popen = []
+                def check_before_popen():
+                    reached_pre_popen.append(True)
+                    cancel.set()
+                    return None
+                with mock.patch("steamboat_connector.process_supervisor.subprocess.Popen") as popen:
+                    self.assertIsNone(backend.spawn_owned_start("coordinator", _policy(),
+                        cancel_event=cancel,
+                        before_popen_check=check_before_popen))
+                    popen.assert_not_called()
+                self.assertEqual(reached_pre_popen, [True])
+                self.assertEqual(len(ProbeBridge.instances), 1)
+                self.assertEqual(ProbeBridge.instances[0].begin_calls, 1)
+                self.assertEqual(ProbeBridge.instances[0].cancel_calls, 1)
 
     def test_authority_clock_is_exact_idempotent_and_separate_from_deadline_callable(self):
         with tempfile.TemporaryDirectory() as temporary:
