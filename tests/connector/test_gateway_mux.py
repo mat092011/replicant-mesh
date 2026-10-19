@@ -322,6 +322,10 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
                          (message_id, wire.RESPONSE))
         self.assertEqual(mux.pending_counts, (0, 0))
         self.assertEqual(mux.pending_capture_bytes, (0, 0))
+        self.assertIn(message_id, mux._seen)
+        self._enqueue_open(message_id=message_id)
+        self._expect_mux_error("reused in this coordinator generation")
+        self.assertEqual(mux.pending_counts, (0, 0))
 
     def test_exact_worker_boot_is_selected_from_request_and_unknown_boot_fails_closed(self):
         mux = self._mux()
@@ -364,9 +368,12 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
         mux = self._mux()
         for index in range(1, 10):
             message_id = index.to_bytes(16, "big")
-            self._enqueue_open(message_id=message_id)
+            worker_index = index % 2
+            worker_boot_id = (self.fx.second_worker_boot_id if worker_index
+                              else self.fx.worker_boot_id)
+            self._enqueue_open(boot_id=worker_boot_id, message_id=message_id)
             self.fx.coordinator_client_stream.pump()
-            delivered = self._worker_message(0, message_id)
+            delivered = self._worker_message(worker_index, message_id)
             self.assertEqual((delivered.message_id, delivered.kind),
                              (message_id, wire.DATA))
         self.assertEqual(mux.pending_counts, (9, 0))
@@ -438,7 +445,7 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
         self.assertEqual(mux2.pending_counts, (1, 0))
         self.assertEqual(mux2.pending_capture_bytes, (_RELAY_CAPTURE_BYTES, 0))
 
-    def test_duplicate_wire_id_is_rejected_after_completion_history_boundary(self):
+    def test_mux_claims_all_captured_streams_globally(self):
         mux = self._mux()
         with self.assertRaisesRegex(GatewayMuxError, "already has a mux owner"):
             GatewayChannelMultiplexer(
@@ -457,15 +464,6 @@ class GatewayMuxActualStreamTests(unittest.TestCase):
                 router=self.fx.router,
                 data_capture_reservation_bytes=9 * _RELAY_CAPTURE_BYTES,
                 control_capture_reservation_bytes=8 * _CONTROL_CAPTURE_BYTES)
-        self.assertEqual(mux.pending_counts, (0, 0))
-        self.assertEqual(len(mux._seen), 0)
-        # ID history is intentionally generation-local and non-evicting; the
-        # admission path checks reuse before any decode or route operation.
-        mux._seen.add(b"D" * 16)
-        from types import SimpleNamespace
-        message = SimpleNamespace(message_id=b"D" * 16, kind=wire.DATA)
-        with self.assertRaisesRegex(GatewayMuxError, "reused"):
-            mux._reserve(message)
         self.assertEqual(mux.pending_counts, (0, 0))
 
 
