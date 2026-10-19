@@ -946,10 +946,13 @@ deadline probe passed with zero skips on a 437-file source overlay at
 `37c654a02be351caf9fdf6664741085e8caa634bef55ab01b3cac1d9175ffa1b`), in
 1.139 seconds. The component-30 combined inventory was not rerun after the
 subsequent two test-only instrumentation assertions. A separate,
-unintegrated owner-consent implementation passed a focused 14-test native
-probe after source review; it remains unintegrated and is not ready. Its earlier
-10-test probe had one failure and one error. The component record retains these
-outcomes and earlier deadline and gateway-mux failures.
+A separate owner-consent implementation passed a focused 14-test native probe
+after source review, then was privately integrated in commits `967ff7e`,
+`7b3664f` and `b39c4297cdda4d0aa69e30f0d494bf0f666781d5`. This remains outside
+the combined 770-test inventory and does not establish controller startup,
+role launch or READY. Its earlier 10-test probe had one fixture failure and one
+fixture error. The component record retains these outcomes and earlier deadline
+and gateway-mux failures.
 
 C2.1–C2.6 remain open. In particular, owner-consent/local startup, actual
 fixed-role enrollment and backend enforcement, the deployed dual-listener

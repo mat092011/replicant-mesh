@@ -257,9 +257,11 @@ all baked source matched and the container exited 0 without OOM. This is not the
 full repository or full C1 regression. Focused deadline controls passed on a
 later 437-file native source overlay, but the 770-case combined inventory was
 not rerun after two subsequent test-only instrumentation assertions. A separate
-unintegrated owner-consent implementation passed a focused 14-test native probe
-after source review; its earlier 10-test probe had one failure and one error.
-It is still not integrated or ready. See the
+owner-consent implementation passed a focused 14-test native probe after
+source review and was later privately integrated. This remains outside the
+combined inventory and does not establish controller startup, role launch or
+READY; its earlier 10-test probe had one fixture failure and one fixture error.
+See the
 [component evidence record](experiments/2026-10-19-participant-c2-components.md)
 for hashes, retained failures and exact scope. Every C2 task and its phase exit
 gate remain open; C3 has not advanced.

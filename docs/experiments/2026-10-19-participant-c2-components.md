@@ -734,10 +734,12 @@ corrected, including a boundary-specific duplicate-ID assertion; later mux
 coverage is part of the component-30 inventory. These historical counts are
 not additive to its 770 unique cases.
 
-Owner-consent remains a separate unintegrated path. Its first native probe ran
-10 tests: eight passed, one failed and one errored. The failure concerned
-concurrent role-change epoch observation; the error was an invalid empty-role
-fixture. A later focused native probe passed 13 tests with zero skips, log
+Owner-consent is a separate path from the combined inventory. Its first native
+probe ran 10 tests: eight passed, one failed and one errored. The failure concerned
+the fixture expecting epoch 4 where the correct result was 3; the error came
+from an empty role tuple, for which the correct exception was `ValueError`
+rather than the fixture's expected storage error. A later focused native probe
+passed 13 tests with zero skips, log
 SHA-256 `3b5328363a8cb2d3e4202dd7c169c4bf73324d02a84c6c4ed96b57d484d9618a`,
 on a 440-file source at `ef72979` with digest
 `eaa8fff820ba19787f73cfb1c8c1a4f95beb2b381988a889a52c6f6aeea62558`. The
@@ -745,14 +747,18 @@ latest focused probe passed 14 tests with zero skips/failures/errors in 0.028
 seconds on 440-file source head `a0da6a95` with digest
 `5047a68fa5f0fddb9098ad945dda39a78828f36de573aad8b7a6886e342b9810`; its log
 SHA-256 is `12e962ae29b2ec427dbe0984b00082fbcb6eb686c1880204106429aef9c83e07`.
-Independent source review cleared that change, but it is not integrated or
-ready. No startup/readiness claim follows from the component inventory or
-these focused probes.
+Independent source review cleared the 14-test source, which was later privately
+integrated in commits `967ff7e`, `7b3664f` and
+`b39c4297cdda4d0aa69e30f0d494bf0f666781d5`. This integration is outside the
+combined 770-test inventory and does not establish owner controller startup,
+role launch or READY. The earlier 13-test source-review-pending note is
+historical. No startup/readiness claim follows from these focused probes.
 
 ## Current C2 boundary after component 30
 
 C2 remains private and unaccepted, with every C2.1–C2.6 checkbox open. The
-combined suite does not establish actual owner-consent startup, fixed-role
+owner-consent store is privately integrated, but the combined suite does not
+establish controller startup, fixed-role
 backend enforcement, authenticated enrollment, deployed dual-listener gateway
 operation, aggregate selected-root startup, shared physical CPU/RAM/disk/
 traffic and session-queue enforcement, or CT-11/CT-13 laptop-to-ZimaBlade
