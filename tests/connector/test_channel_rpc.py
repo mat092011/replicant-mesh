@@ -121,12 +121,53 @@ class ChannelRpcRelayTests(unittest.IsolatedAsyncioTestCase):
 
     def test_worker_dispatcher_rejects_non_client_hello_and_bad_logical_sequence(self):
         from steamboat_connector.channel_rpc import WorkerChannelRpc
+        from types import SimpleNamespace
 
         with self.assertRaises(TypeError):
-            WorkerChannelRpc(stream=self.fx.worker_server_stream, bridge=object())
+            WorkerChannelRpc(
+                stream=self.fx.worker_server_stream, bridge=object(),
+                data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
+                control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
         for envelope in (b"", b"{}", b'{"payload":{"frame_sequence":true}}'):
             with self.subTest(envelope=envelope), self.assertRaises(ChannelRpcError):
                 _delegation_sequence(envelope)
+
+    def test_worker_preflight_rejects_near_limit_shape_before_protobuf_parse(self):
+        from types import SimpleNamespace
+        from steamboat_connector.channel_protobuf import ChannelProtobufError
+        from steamboat_connector.channel_rpc import WorkerChannelRpc
+
+        bridge = SimpleNamespace(authorizer_core=SimpleNamespace(
+            local_identity=SimpleNamespace(boot_id=self.fx.worker_boot_id)))
+        service = WorkerChannelRpc(
+            stream=self.fx.worker_client_stream, bridge=bridge,
+            data_capture_reservation_bytes=_DATA_LIMIT * _DATA_CAPTURE_BYTES,
+            control_capture_reservation_bytes=_CONTROL_LIMIT * _CONTROL_CAPTURE_BYTES)
+        _, _, binding = self.fx._binding_metadata(
+            "Describe", operation_id=new_id("op"), request_id=new_id("req"),
+            session_id="")
+        def encode_varint(value):
+            output = bytearray()
+            while value > 0x7f:
+                output.append((value & 0x7f) | 0x80)
+                value >>= 7
+            output.append(value)
+            return bytes(output)
+
+        packed = b"\x0a" + encode_varint(1_000_000) + b"\x00" * 1_000_000
+        # One packed repeated field with a million zero dimensions is under
+        # MAX_PROTOBUF_BYTES but must fail before generated protobuf expansion.
+        malicious = wire.encode_bundle(
+            "Describe", wire.REQUEST, fragment_kind=wire.DATA, binding=binding,
+            protobuf=b"\x6a" + encode_varint(len(packed)) + packed)
+        message = SimpleNamespace(kind=wire.DATA, message_id=b"Q" * 16,
+                                  payload=malicious)
+        from steamboat_connector import channel_rpc as rpc_module
+        with mock.patch.object(rpc_module, "parse_message",
+                               side_effect=AssertionError("protobuf parser was reached")) as parser:
+            with self.assertRaises(ChannelProtobufError):
+                service._admit(message)
+            parser.assert_not_called()
 
     async def test_worker_dispatch_uses_real_c1_bridge_and_worker_handler(self):
         from steamboat_connector.channel_rpc import WorkerChannelRpc

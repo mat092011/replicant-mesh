@@ -18,6 +18,7 @@ from steamboat_connector.channel_hello import (
     WorkerHelloServer, RegisteredWorker,
 )
 from steamboat_connector.channel_stream import ChannelStream
+from steamboat_connector.channel_protobuf import preflight_worker_protobuf
 from steamboat_runtime.protocol import METHODS, MAX_MESSAGE_BYTES
 from steamboat_connector.channel_wire import (
     MAX_BINDING_BYTES, MAX_CONTROL_PROTOBUF_BYTES, MAX_ENVELOPE_BYTES,
@@ -182,6 +183,8 @@ class WorkerChannelRpc:
             raise ChannelRpcError("RPC method arrived on the wrong lane")
         if len(decoded.protobuf) > MAX_MESSAGE_BYTES:
             raise ChannelRpcError("worker protobuf exceeds the protocol bound")
+        preflight_worker_protobuf(decoded.protobuf, response=False,
+                                  max_bytes=MAX_MESSAGE_BYTES)
         metadata, binding = _binding(decoded)
         request = parse_message(decoded.protobuf, Request, MAX_MESSAGE_BYTES)
         sequence = _delegation_sequence(decoded.envelope)
@@ -400,6 +403,8 @@ class GatewayChannelRelay:
         model_id = target_policy["model_id"]
         if fields.get("assignment_id", assignment_id) != assignment_id:
             raise ChannelRpcError("C1 assignment differs from selected policy worker")
+        preflight_worker_protobuf(decoded.protobuf, response=False,
+                                  max_bytes=MAX_MESSAGE_BYTES)
         request = parse_message(decoded.protobuf, Request, MAX_MESSAGE_BYTES)
         if serialize_message(request, MAX_MESSAGE_BYTES) != decoded.protobuf:
             raise ChannelRpcError("coordinator protobuf is not in canonical wire form")
@@ -436,6 +441,8 @@ class GatewayChannelRelay:
             raise ChannelRpcError("worker response has no exact pending method/message mapping")
         operation_id, method, request_id, _binding_bytes, route, request, is_control, capture_cost = entry
         route.assert_live()
+        preflight_worker_protobuf(decoded.protobuf, response=True,
+                                  max_bytes=MAX_MESSAGE_BYTES)
         protobuf = parse_message(decoded.protobuf, Response, MAX_MESSAGE_BYTES)
         validate_response(method, request, protobuf)
         self.router.complete(worker=self.worker, operation_id=operation_id,

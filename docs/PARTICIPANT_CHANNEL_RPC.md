@@ -63,6 +63,16 @@ configured RPC capture accounting, not Python allocator overhead, runtime
 fixed state or total process memory. Role-level resource accounting must sum
 co-located reservations and separately account for those costs.
 
+`channel_protobuf.preflight_worker_protobuf` scans each request/response wire
+payload before generated protobuf parsing. It uses a single memoryview and
+scalar scanner state, rejects unknown/duplicate singular fields, invalid wire
+types, nonminimal or overflowing varints and truncation, and limits nested
+TensorEnvelope shape expansion to three values before protobuf sees it. The
+conservative 8x data capture allowance remains the accounting target for
+protobuf decode, canonical-copy and serialization transients. It is not a
+measured allocator peak or a process RSS guarantee; the native focused run
+must measure/control the implementation on the pinned runtime.
+
 Heartbeat payloads use the fixed 13-byte `C2H1` PING/PONG contract. The worker
 service validates gateway PINGs against ingress generation and logical control
 sequence, while the gateway relay periodically enqueues PINGs through the
