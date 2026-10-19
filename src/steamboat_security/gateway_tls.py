@@ -8,7 +8,7 @@ It does not provide sockets, framing, enrollment, readiness, or aggregate quota.
 
 from __future__ import annotations
 
-import hashlib
+import ipaddress
 import os
 import re
 import shutil
@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
-from .certificates import certificate_sha256, public_key_sha256, serial_hex
 from .channel_certificates import verify_channel_certificate
 from .channel_policy import ChannelPolicyStore
 from .channel_tls import (MAX_CHUNK_BYTES, MAX_HANDSHAKE_BYTES,
@@ -67,6 +66,17 @@ def _bounded_pem(value, label):
     if type(value) is not bytes or not 1 <= len(value) <= 64 * 1024:
         raise GatewayWorkerTLSError(f"{label} input exceeds its bound")
     return value
+
+
+def _endpoint_ip(host):
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return None
+
+
+def _endpoint_dns(host):
+    return None if _endpoint_ip(host) is not None else host
 
 
 def _worker_uri_identity(cert):
@@ -128,7 +138,7 @@ def _write_private_files(entries):
         raise error
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class AuthenticatedWorkerChannel:
     gateway_id: str
     gateway_certificate_sha256: str
@@ -230,8 +240,7 @@ class OwnedGatewayWorkerTLS:
                 gateway_certificate_pem, cohort_ca_pem, kind="gateway",
                 expected_identity=gateway_id, now=sample.wall,
                 uncertainty_seconds=sample.uncertainty, required_eku={"client", "server"},
-                expected_dns=host if ":" not in host else None,
-                expected_ip=host if ":" in host else None)
+                expected_dns=_endpoint_dns(host), expected_ip=_endpoint_ip(host))
             if (profile.certificate_sha256 != gateway["certificate_sha256"]
                     or profile.public_key_sha256 != gateway["public_key_sha256"]
                     or profile.serial != gateway["serial"]):
@@ -276,7 +285,12 @@ class OwnedGatewayWorkerTLS:
             try:
                 shutil.rmtree(directory)
             except OSError:
-                owner._fault_locked()
+                owner._closed = True
+                owner._faulted = True
+                owner.__ssl = None
+                owner.__context = None
+                owner.__incoming = None
+                owner.__outgoing = None
                 owner._cleanup_status = "uncertain"
                 raise GatewayWorkerTLSError(
                     "gateway TLS credential cleanup is uncertain",
@@ -585,7 +599,10 @@ class OwnedGatewayWorkerTLS:
                 self._fault_locked()
                 raise GatewayWorkerTLSError("worker channel authorization was revoked")
             self._deadline = min(self._deadline,
-                                 sample.monotonic + worker["not_after"] - sample.latest_wall)
+                                 sample.monotonic + worker["not_after"] - sample.latest_wall,
+                                 sample.monotonic
+                                 + self._peer_cert.not_valid_after_utc.timestamp()
+                                 - sample.latest_wall)
             if (self._peer_cert is None
                     or sample.earliest_wall < self._peer_cert.not_valid_before_utc.timestamp()):
                 self._fault_locked()
