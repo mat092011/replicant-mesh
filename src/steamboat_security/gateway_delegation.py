@@ -15,6 +15,7 @@ import json
 import math
 import re
 import threading
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -144,7 +145,10 @@ def sign_gateway_delegation(payload, gateway_private_key_pem, gateway_certificat
 @dataclass
 class _LiveFence:
     deadline: float
+    verifier_token: object = field(repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    faulted: bool = False
+    minted: object = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -154,8 +158,12 @@ class VerifiedDelegation:
     gateway_certificate_pem: bytes
     actor_identity: tuple
     ingress_identity: tuple
-    deadline_monotonic: float
     _fence: _LiveFence = field(repr=False, compare=False)
+
+    @property
+    def deadline_monotonic(self):
+        with self._fence.lock:
+            return float("-inf") if self._fence.faulted else self._fence.deadline
 
     def assert_live(self, verifier):
         return verifier.assert_live(self)
@@ -181,6 +189,9 @@ class GatewayDelegationVerifier:
         if type(local_identity) is not LocalIdentity:
             raise TypeError("verifier requires the exact core LocalIdentity")
         self.policy_store, self.clock = policy_store, clock
+        self._mint_token = object()
+        self._mint_lock = threading.Lock()
+        self._minted = weakref.WeakValueDictionary()
         self.gateway_ca_pem, self.participant_ca_pem = gateway_ca_pem, participant_ca_pem
         self.local_identity = local_identity
         self.endpoint_host, self.endpoint_port = endpoint_host, endpoint_port
@@ -213,8 +224,7 @@ class GatewayDelegationVerifier:
         except (ValueError, TypeError) as error:
             raise DelegationError("delegation signature is noncanonical") from error
 
-        sample = self.clock.sample()
-        view = self.policy_store.current()
+        view, sample = self.policy_store.current_with_sample()
         gateway = view.gateway(payload["gateway_id"])
         if gateway is None:
             raise DelegationError("gateway is not in the current operator policy")
@@ -260,12 +270,14 @@ class GatewayDelegationVerifier:
                 or payload["frame_sequence"] != expected_frame_sequence):
             raise DelegationError("delegation is outside the active stream generation/sequence")
         fields = binding.fields
-        for key, val in (("coordinator_boot_id", payload["coordinator_boot_id"]),
-                         ("tenant_account_id", payload["tenant_account_id"]),
-                         ("target_device_id", payload["target_device_id"]),
-                         ("worker_boot_id", payload["worker_boot_id"]),
-                         ("assignment_id", payload["assignment_id"])):
-            if fields.get(key) != val:
+        for key, val in (
+            ("target_device_id", payload["target_device_id"]),
+            ("coordinator_boot_id", payload["coordinator_boot_id"]),
+            ("tenant_account_id", payload["tenant_account_id"]),
+            ("worker_boot_id", payload["worker_boot_id"]),
+            ("assignment_id", payload["assignment_id"]),
+        ):
+            if key in fields and fields[key] != val:
                 raise DelegationError("delegation does not match exact C1 binding")
         if fields.get("role") != "personal_coordinator":
             raise DelegationError("delegated actor must be a personal coordinator")
@@ -275,9 +287,6 @@ class GatewayDelegationVerifier:
             device_id=fields["device_id"], role="personal_coordinator")
         actor_hash = certificate_sha256(actor_cert)
         actor_serial = serial_hex(actor_cert.serial_number)
-        if (actor_hash != payload.get("_unused", actor_hash)
-                or actor_serial == ""):
-            raise DelegationError("actor certificate is invalid")
         route = view.route(
             gateway_id=payload["gateway_id"], account_id=fields["account_id"],
             device_id=fields["device_id"], actor_serial=actor_serial,
@@ -317,10 +326,15 @@ class GatewayDelegationVerifier:
         ingress = ("gateway-v1", channel.certificate_sha256, payload["stream_generation"])
         frozen = dict(payload)
         from types import MappingProxyType
-        return VerifiedDelegation(
+        fence = _LiveFence(deadline, self._mint_token)
+        verified = VerifiedDelegation(
             MappingProxyType(frozen), actor_pem, gateway_peer_certificate_pem,
             (fields["account_id"], fields["device_id"], fields["credential_epoch"]),
-            ingress, deadline, _LiveFence(deadline))
+            ingress, fence)
+        fence.minted = weakref.ref(verified)
+        with self._mint_lock:
+            self._minted[id(verified)] = verified
+        return verified
 
     @staticmethod
     def _pairs(pairs):
@@ -347,10 +361,22 @@ class GatewayDelegationVerifier:
     def assert_live(self, verified):
         if type(verified) is not VerifiedDelegation:
             raise DelegationError("verified delegation object is required")
+        fence = verified._fence
+        if type(fence) is not _LiveFence:
+            raise DelegationError("verified delegation object is not minted by this verifier")
+        with self._mint_lock:
+            is_minted = self._minted.get(id(verified)) is verified
+        if (fence.verifier_token is not self._mint_token
+                or fence.minted is None
+                or fence.minted() is not verified
+                or not is_minted):
+            raise DelegationError("verified delegation object is not minted by this verifier")
+        with fence.lock:
+            if fence.faulted:
+                raise DelegationError("delegation liveness fault is permanently latched")
         sample = None
         try:
-            sample = self.clock.sample()
-            view = self.policy_store.current()
+            view, sample = self.policy_store.current_with_sample()
             if (view.revision != verified.payload["policy_revision"]
                     or view.policy_digest != verified.payload["policy_digest"]):
                 raise DelegationError("delegation policy identity was replaced")
@@ -432,14 +458,16 @@ class GatewayDelegationVerifier:
                     raise DelegationError("delegation has expired")
             return True
         except DelegationError:
-            if sample is not None:
-                with verified._fence.lock:
+            with verified._fence.lock:
+                verified._fence.faulted = True
+                if sample is not None:
                     verified._fence.deadline = min(verified._fence.deadline,
                                                    sample.monotonic)
             raise
         except Exception as error:
-            if sample is not None:
-                with verified._fence.lock:
+            with verified._fence.lock:
+                verified._fence.faulted = True
+                if sample is not None:
                     verified._fence.deadline = min(verified._fence.deadline,
                                                    sample.monotonic)
             raise DelegationError("delegation liveness check failed closed") from error

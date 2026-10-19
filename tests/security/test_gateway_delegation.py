@@ -5,6 +5,8 @@ import copy
 import hashlib
 import json
 import unittest
+from dataclasses import replace
+from unittest.mock import patch
 from datetime import datetime, timezone
 
 from cryptography import x509
@@ -18,7 +20,7 @@ from steamboat_security.certificates import (certificate_sha256, generate_ca,
 from steamboat_security.channel_certificates import (issue_channel_certificate,
     make_channel_csr)
 from steamboat_security.channel_policy import ChannelPolicyStore, sign_channel_policy
-from steamboat_security.clock import Clock
+from steamboat_security.clock import Clock, ClockSample
 from steamboat_security.codec import METADATA_KEY, WORKER_SERVICE, encode_binding
 from steamboat_security.errors import SecurityError
 from steamboat_security.gateway_delegation import (DOMAIN, DelegationError,
@@ -112,7 +114,7 @@ class GatewayDelegationTests(unittest.TestCase):
                 "tenant_account_id": ACTOR_ACCOUNT,
                 "target_device_id": WORKER_DEVICE, "worker_boot_id": WORKER_BOOT,
                 "assignment_id": ASSIGNMENT, "model_id": MODEL,
-                "methods": ["OpenSession", "Step"]}],
+                "methods": ["Describe", "OpenSession", "Step"]}],
         }
         self.policy_bytes = sign_channel_policy(self.payload, private_pem(self.operator_key))
         self.policy_store = ChannelPolicyStore(public_pem(self.operator_key),
@@ -167,6 +169,44 @@ class GatewayDelegationTests(unittest.TestCase):
             ("gateway-v1", self.payload["gateways"][0]["certificate_sha256"], GENERATION))
         self.assertTrue(verified.assert_live(self.verifier))
         self.assertEqual(DOMAIN, b"steamboat-gateway-delegation-v1\0")
+
+    def test_describe_binding_accepts_both_schema_forms_and_still_pins_route(self):
+        base = {
+            "binding_version": 1,
+            "operation_id": "op_" + "a" * 32,
+            "account_id": ACTOR_ACCOUNT,
+            "device_id": ACTOR_DEVICE,
+            "role": "personal_coordinator",
+            "credential_epoch": 3,
+            "target_device_id": WORKER_DEVICE,
+        }
+        for optional in (False, True):
+            fields = dict(base)
+            if optional:
+                fields.update(worker_boot_id=WORKER_BOOT, assignment_id=ASSIGNMENT)
+            binding = encode_binding(WORKER_SERVICE, "Describe", fields)
+            metadata = [(METADATA_KEY, binding)]
+            envelope = self.make_delegation(
+                changes={
+                    "method": "Describe",
+                    "binding_sha256": hashlib.sha256(binding).hexdigest(),
+                }
+            )
+            with self.subTest(optional_worker_identity=optional):
+                verified = self.verify(envelope, metadata=metadata)
+                self.assertEqual(verified.payload["worker_boot_id"], WORKER_BOOT)
+                self.assertTrue(verified.assert_live(self.verifier))
+
+        mismatched = dict(base, worker_boot_id="f" * 32, assignment_id=ASSIGNMENT)
+        binding = encode_binding(WORKER_SERVICE, "Describe", mismatched)
+        envelope = self.make_delegation(
+            changes={
+                "method": "Describe",
+                "binding_sha256": hashlib.sha256(binding).hexdigest(),
+            }
+        )
+        with self.assertRaises(SecurityError):
+            self.verify(envelope, metadata=[(METADATA_KEY, binding)])
 
     def test_exact_binding_request_tls_gateway_and_stream_sequence_are_required(self):
         bads = [
@@ -225,6 +265,74 @@ class GatewayDelegationTests(unittest.TestCase):
         self.mono += 0.1
         with self.assertRaises(SecurityError):
             verified.assert_live(self.verifier)
+
+    def test_verify_uses_one_clock_sample_accepted_with_policy_view(self):
+        replacement = copy.deepcopy(self.payload)
+        replacement["revision"] = 2
+        replacement["issued_at"] = int(NOW)
+        replacement["expires_at"] = int(NOW + 15)
+        self.view = self.policy_store.install(
+            sign_channel_policy(replacement, private_pem(self.operator_key))
+        )
+        self.payload = replacement
+        narrow = ClockSample(NOW, self.mono, 0.0, object())
+        wide = ClockSample(NOW, self.mono + 0.1, 20.0, object())
+        samples = iter((narrow, wide))
+        envelope = self.make_delegation()
+        with patch.object(self.clock, "sample", side_effect=lambda: next(samples)) as sample_clock:
+            verified = self.verify(envelope)
+        sample_clock.assert_called_once_with()
+        self.assertGreater(verified.deadline_monotonic, self.mono)
+
+    def test_clock_provider_fault_permanently_kills_old_verified_object(self):
+        verified = self.verify()
+        prior_deadline = verified.deadline_monotonic
+
+        def broken_clock():
+            raise RuntimeError("clock source unavailable")
+
+        self.clock._uncertainty = broken_clock
+        with self.assertRaises(SecurityError):
+            verified.assert_live(self.verifier)
+        self.assertLess(verified.deadline_monotonic, prior_deadline)
+        self.assertEqual(verified.deadline_monotonic, float("-inf"))
+        self.clock._uncertainty = lambda: 0.0
+        self.clock.revalidate_after_resume(trusted_clock=True)
+        with self.assertRaises(SecurityError):
+            verified.assert_live(self.verifier)
+
+    def test_public_deadline_tracks_monotonic_tightening_and_stays_tight(self):
+        verified = self.verify()
+        initial = verified.deadline_monotonic
+        self.wall += 0.5
+        self.mono += 0.5
+        self.uncertainty = 0.5
+        self.assertTrue(verified.assert_live(self.verifier))
+        tightened = verified.deadline_monotonic
+        self.assertLess(tightened, initial)
+        self.wall += 0.1
+        self.mono += 0.1
+        self.uncertainty = 0.0
+        self.assertTrue(verified.assert_live(self.verifier))
+        self.assertLessEqual(verified.deadline_monotonic, tightened)
+
+    def test_verified_delegation_is_bound_to_minting_verifier_and_object(self):
+        verified = self.verify()
+        another_verifier = GatewayDelegationVerifier(
+            self.policy_store,
+            clock=self.clock,
+            gateway_ca_pem=self.gateway_ca,
+            participant_ca_pem=self.participant_ca,
+            local_identity=self.local_identity,
+            endpoint_host="gateway.example.net",
+            endpoint_port=443,
+        )
+        with self.assertRaises(SecurityError):
+            verified.assert_live(another_verifier)
+        fabricated = replace(verified)
+        with self.assertRaises(SecurityError):
+            fabricated.assert_live(self.verifier)
+        self.assertTrue(verified.assert_live(self.verifier))
 
     def test_policy_refresh_does_not_adopt_delegation(self):
         verified = self.verify()

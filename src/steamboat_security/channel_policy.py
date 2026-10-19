@@ -28,7 +28,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import (
 )
 
 from .certificates import public_key_sha256
-from .clock import Clock
+from .clock import Clock, ClockSample
 from .codec import canonical_json, WORKER_METHODS
 from .errors import SnapshotError
 from .ids import validate_boot, validate_id
@@ -735,6 +735,11 @@ class ChannelPolicyStore:
         self._view = view
 
     def current(self) -> ChannelPolicyView:
+        view, _sample = self.current_with_sample()
+        return view
+
+    def current_with_sample(self) -> tuple[ChannelPolicyView, ClockSample]:
+        """Return the live view and the exact clock sample that accepted it."""
         with self._lock:
             if self._installing:
                 raise SnapshotError("channel policy is unavailable during installation")
@@ -747,7 +752,7 @@ class ChannelPolicyStore:
                 or sample.monotonic >= view.deadline_monotonic
             ):
                 raise SnapshotError("channel policy has expired")
-            return view
+            return view, sample
 
     def _clip_live_view(self, view: ChannelPolicyView, sample) -> ChannelPolicyView:
         if sample.monotonic < view.published_monotonic:

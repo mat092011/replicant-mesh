@@ -18,7 +18,7 @@ from steamboat_security.channel_policy import (
     MAX_CHANNEL_POLICY_BYTES,
     sign_channel_policy,
 )
-from steamboat_security.clock import Clock
+from steamboat_security.clock import Clock, ClockSample
 from steamboat_security.codec import canonical_json
 from steamboat_security.certificates import public_key_sha256
 from steamboat_security.errors import SnapshotError
@@ -145,6 +145,15 @@ class ChannelPolicyTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             view.workers[("dev_" + "2" * 32, "4" * 32)]["model_id"] = "0" * 64
         self.assertIs(view, self.store.current())
+
+    def test_current_with_sample_returns_the_exact_single_acceptance_sample(self):
+        self.store.install(self.sign())
+        sample = ClockSample(1001.0, 51.0, 0.25, object())
+        with patch.object(self.clock, "sample", return_value=sample) as clock_sample:
+            view, accepted = self.store.current_with_sample()
+        self.assertIs(accepted, sample)
+        self.assertEqual(view.deadline_monotonic, 51.0 + (1100.0 - 1001.25))
+        clock_sample.assert_called_once_with()
 
     def test_domain_signature_low_s_and_canonical_envelope(self):
         signed = self.sign()
