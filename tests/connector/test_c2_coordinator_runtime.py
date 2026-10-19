@@ -293,4 +293,3 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
         from steamboat_security.errors import CredentialError
         await self._assert_anchor_fault_precedes_model_materialization(
             (CredentialError,))
-
