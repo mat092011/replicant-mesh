@@ -154,11 +154,11 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
 
                 coordinator = next(principal
                     for principal in fx.cohort_fixture.candidate.issuance_candidate.principals
-                    if principal.serial == worker_grant["actor_serial"])
+                    if principal.record["serial"] == worker_grant["actor_serial"])
                 coordinator_spec = next(spec
                     for spec in fx.cohort_fixture.candidate.new_launch_specs
                     if spec.identity == coordinator.identity)
-                describe_request = Request(protocol_version=1)
+                describe_request = Request(protocol_version=1, timeout_ms=1000)
                 describe_binding = encode_binding(WORKER_SERVICE, "Describe", {
                     "binding_version": 1,
                     "operation_id": "op_" + "1" * 32,
@@ -166,8 +166,7 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                     "device_id": coordinator_spec.device_id,
                     "role": "personal_coordinator",
                     "credential_epoch": coordinator_spec.credential_epoch,
-                    "target_device_id": runtime._authorizers[
-                        "worker-1"].local_identity.device_id,
+                    "target_device_id": bridge.target_device_id,
                 })
                 authorization = bridge.incoming_authorizer.authorize(
                     service=WORKER_SERVICE, method="Describe",
@@ -176,6 +175,7 @@ class C2HostRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
                     peer_certificate_pem=coordinator.certificate_pem)
                 try:
                     described = await bridge.handler.handle("Describe", describe_request)
+                    self.assertEqual(described.code, "OK", described.message)
                     self.assertTrue(described.ready)
                     authorization.complete(described)
                 finally:
