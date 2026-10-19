@@ -123,7 +123,8 @@ def _load_production_hard_expiry_probe(probe_time=None):
          "Authorizer", ("sweep",)),
         (_REPO_ROOT / "src" / "steamboat_runtime" / "secure_worker_runtime.py",
          "SecureWorkerRuntimeBridge",
-         ("_sweep_once", "_expire_drain", "_add_pending_notice", "_process_notices",
+         ("_check_runtime_guard", "_sweep_once", "_expire_drain",
+          "_add_pending_notice", "_process_notices",
           "_invalidate_owner", "_has_live_rpc", "_handler_owns_session",
           "_reconcile", "_remove_owner")),
         (_REPO_ROOT / "src" / "steamboat_runtime" / "worker_state.py",
@@ -462,6 +463,7 @@ class SecureFaultFixtureCleanupTests(unittest.IsolatedAsyncioTestCase):
                         self.assignment_id, self.session_id)
 
         class ProbeBridge:
+            _check_runtime_guard = methods["_check_runtime_guard"]
             _sweep_once = methods["_sweep_once"]
             _expire_drain = methods["_expire_drain"]
             _add_pending_notice = methods["_add_pending_notice"]
@@ -494,6 +496,8 @@ class SecureFaultFixtureCleanupTests(unittest.IsolatedAsyncioTestCase):
                 # The extracted production sweep still invokes the real method.
                 self._drain_deadline = None
                 self._drain_deadline_reached = False
+                self._runtime_guard = None
+                self._runtime_invalidated = threading.Event()
 
             @staticmethod
             def _fence(reason):
