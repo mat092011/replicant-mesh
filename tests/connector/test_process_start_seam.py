@@ -187,6 +187,159 @@ class ProcessStartSeamTests(unittest.TestCase):
         self.assertNotIn("process", self.owner)
         self.assertTrue(all(not group.exists() for group in self.cgroup.groups))
 
+    def test_pre_popen_callback_cancellation_prevents_process_creation(self):
+        cancelled = threading.Event()
+        calls = []
+
+        def check():
+            calls.append(True)
+            cancelled.set()
+            return None
+
+        with mock.patch.object(process_supervisor.subprocess, "Popen") as popen:
+            self.assertIsNone(self.backend.spawn_owned_start(
+                "host", sample_policy(), cancel_event=cancelled,
+                before_popen_check=check))
+        self.assertEqual(calls, [True])
+        popen.assert_not_called()
+        self.assertNotIn("host", self.backend._owned)
+        self.assertNotIn("host", self.backend._start_intents)
+
+    def test_cancel_published_during_owner_publication_prevents_popen(self):
+        cancelled = threading.Event()
+        real_owned = self.backend._owned
+
+        class CancelOnPublish(dict):
+            def __setitem__(self, key, value):
+                super().__setitem__(key, value)
+                cancelled.set()
+
+        self.backend._owned = CancelOnPublish()
+        try:
+            with mock.patch.object(process_supervisor.subprocess, "Popen") as popen:
+                self.assertIsNone(self.backend.spawn_owned_start(
+                    "host", sample_policy(), cancel_event=cancelled))
+            popen.assert_not_called()
+            self.assertNotIn("host", self.backend._owned)
+            self.assertNotIn("host", self.backend._start_intents)
+        finally:
+            self.backend._owned = real_owned
+
+    def test_gate_close_consumes_descriptor_before_close_attempt(self):
+        real_close = os.close
+        real_open = os.open
+
+        for gate in ("read", "write"):
+            with self.subTest(gate=gate):
+                self.owner.clear()
+                captured_write = []
+
+                def capture_write(fd, data):
+                    if data == b"R":
+                        captured_write.append(fd)
+                        if gate == "write":
+                            target["fd"] = fd
+                    return len(data) if data == b"R" else 0
+
+                replacement = []
+                target = {"fd": None, "raised": False}
+
+                def close_then_reuse(fd):
+                    if fd == target["fd"] and not target["raised"]:
+                        target["raised"] = True
+                        real_close(fd)
+                        reused = real_open(os.devnull, os.O_RDONLY)
+                        replacement.append(reused)
+                        self.assertEqual(reused, fd)
+                        raise OSError("close reported failure after closing")
+                    real_close(fd)
+
+                def spawn_capture(*args, **kwargs):
+                    child = FakeProcess(args[0], kwargs, self.cgroup)
+                    self.owner["process"] = child
+                    if gate == "read":
+                        target["fd"] = int(args[0][-1])
+                    return child
+
+                with mock.patch.object(process_supervisor.os, "write",
+                                       side_effect=capture_write), mock.patch.object(
+                        process_supervisor.os, "close", side_effect=close_then_reuse), \
+                        mock.patch.object(process_supervisor.subprocess, "Popen",
+                                          side_effect=spawn_capture):
+                    pending = self.backend.spawn_owned_start("host", sample_policy())
+                self.assertIsNone(pending)
+                self.assertEqual(len(replacement), 1)
+                os.fstat(replacement[0])
+                real_close(replacement[0])
+
+    def _assert_fence_during_final_poll(self, fence):
+        handle = self.backend.spawn_owned_start("host", sample_policy())
+        process = self.owner["process"]
+        original_poll = process.poll
+        entered, release = threading.Event(), threading.Event()
+
+        def blocked_poll():
+            if not entered.is_set():
+                entered.set()
+                release.wait(1)
+            return original_poll()
+
+        process.poll = blocked_poll
+        result = {}
+        observer = threading.Thread(target=lambda: result.setdefault(
+            "ready", self.backend.observe_owned_ready(handle, timeout_seconds=1)))
+        observer.start()
+        self.assertTrue(entered.wait(1))
+        if fence == "stop":
+            self.assertTrue(self.backend.request_stop(["host"])["host"])
+        else:
+            self.assertTrue(self.backend.request_drain(["host"])["host"])
+        release.set()
+        observer.join(1)
+        self.assertFalse(observer.is_alive())
+        self.assertFalse(result["ready"])
+        self.assertFalse(self.backend.status().get("host", {}).get("ready", False))
+        self.assertTrue(self.backend.stop(["host"], 0.5)["host"])
+
+    def test_stop_fence_during_final_poll_cannot_publish_ready(self):
+        self._assert_fence_during_final_poll("stop")
+
+    def test_drain_fence_during_final_poll_cannot_publish_ready(self):
+        self._assert_fence_during_final_poll("drain")
+
+    def test_old_observer_cannot_remove_replacement_generation_handle(self):
+        old_handle = self.backend.spawn_owned_start("host", sample_policy())
+        old_process = self.owner["process"]
+        entered, release = threading.Event(), threading.Event()
+
+        def delay_old_ready(process, timeout, cancelled=None):
+            if process is old_process:
+                entered.set()
+                release.wait(1)
+            return True
+
+        outcome = {}
+        with mock.patch.object(ProcessRoleBackend, "_read_ready",
+                               side_effect=delay_old_ready):
+            observer = threading.Thread(target=lambda: outcome.setdefault(
+                "ready", self.backend.observe_owned_ready(old_handle)))
+            observer.start()
+            self.assertTrue(entered.wait(1))
+            self.assertTrue(self.backend.stop(["host"], 0.5)["host"])
+            new_handle = self.backend.spawn_owned_start("host", sample_policy())
+            self.assertIsNotNone(new_handle)
+            new_process = self.owner["process"]
+            self.assertIsNot(new_process, old_process)
+            self.assertIs(self.backend._pending_starts["host"], new_handle)
+            release.set()
+            observer.join(1)
+            self.assertFalse(observer.is_alive())
+            self.assertFalse(outcome["ready"])
+            self.assertIs(self.backend._owned["host"].process, new_process)
+            self.assertIs(self.backend._pending_starts["host"], new_handle)
+            self.assertTrue(self.backend.observe_owned_ready(new_handle))
+        self.assertTrue(self.backend.stop(["host"], 0.5)["host"])
+
     def test_invalid_ready_timeouts_are_rejected_before_consuming_handle(self):
         handle = self.backend.spawn_owned_start("host", sample_policy())
         for invalid in (True, -1, 30.01, float("inf"), float("nan"), "1", 10 ** 1000):

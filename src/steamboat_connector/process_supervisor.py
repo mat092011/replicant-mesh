@@ -770,9 +770,19 @@ class ProcessRoleBackend:
                         raise TypeError("before_popen_check must be synchronous")
                     if checked is not None:
                         raise TypeError("before_popen_check must return None")
+                if (self._cancelled(intent, cancel_event)
+                        or self._start_intents.get(role) is not intent):
+                    return None
                 owned = _OwnedProcess(role, None, Path(group), self.clock(),
                                       start_intent=intent, artifact_pin=pin)
                 self._owned[role] = owned
+                if (self._cancelled(intent, cancel_event)
+                        or self._start_intents.get(role) is not intent
+                        or self._owned.get(role) is not owned):
+                    if self._owned.get(role) is owned:
+                        del self._owned[role]
+                    owned = None
+                    return None
                 try:
                     if pin_metadata is not None:
                         # From entering Popen onward, a failed return is not
@@ -799,8 +809,8 @@ class ProcessRoleBackend:
                         self._watchdog_kill(owned)
                     else:
                         self._signal_owned_term(owned)
-            os.close(read_fd)
-            read_fd = -1
+            fd, read_fd = read_fd, -1
+            os.close(fd)
             self._attach_child_safely(group, process)
             owned.attached = True
             with self._lock:
@@ -812,8 +822,8 @@ class ProcessRoleBackend:
                 if not intent.final_stop_requested:
                     self._stop_owned(owned, STOP_GRACE_MAX_SECONDS)
                 return None
-            os.close(write_fd)
-            write_fd = -1
+            fd, write_fd = write_fd, -1
+            os.close(fd)
             with self._lock:
                 if (self._owned.get(role) is not owned or owned.stopping
                         or self._cancelled(intent, cancel_event)
@@ -851,13 +861,15 @@ class ProcessRoleBackend:
             return None
         finally:
             if read_fd >= 0:
+                fd, read_fd = read_fd, -1
                 try:
-                    os.close(read_fd)
+                    os.close(fd)
                 except OSError:
                     pass
             if write_fd >= 0:
+                fd, write_fd = write_fd, -1
                 try:
-                    os.close(write_fd)
+                    os.close(fd)
                 except OSError:
                     pass
             intent.finished = True
@@ -897,7 +909,8 @@ class ProcessRoleBackend:
                 if (owned is not handle._owned
                         or owned.start_intent is not handle._intent):
                     handle._state = "consumed"
-                    self._pending_starts.pop(handle._role, None)
+                    if self._pending_starts.get(handle._role) is handle:
+                        del self._pending_starts[handle._role]
                     return False
                 handle._state = "observing"
             intent = handle._intent
@@ -914,17 +927,31 @@ class ProcessRoleBackend:
                 cancelled = (self._owned.get(handle._role) is not owned
                              or owned.stopping
                              or self._cancelled(intent, handle._cancel_event))
+                process_live = False
                 if not cancelled:
-                    owned.starting = False
                     with owned.escalation_lock:
                         process_live = owned.process.poll() is None
                         if not process_live:
                             owned.leader_reaped = True
                             owned.reaped_event.set()
-                    owned.ready = bool(ready and process_live)
+                    cancelled = (self._owned.get(handle._role) is not owned
+                                 or owned.stopping
+                                 or self._cancelled(intent, handle._cancel_event))
+                    if not cancelled:
+                        owned.starting = False
+                        owned.ready = bool(ready and process_live)
+                        # Stop/drain are lock-free fences. Recheck after the
+                        # readiness write so a fence racing the poll cannot
+                        # be overwritten by this observation.
+                        cancelled = (self._owned.get(handle._role) is not owned
+                                     or owned.stopping
+                                     or self._cancelled(intent, handle._cancel_event))
+                        if cancelled:
+                            owned.ready = False
                 result = bool(not cancelled and owned.ready)
                 handle._state = "consumed"
-                self._pending_starts.pop(handle._role, None)
+                if self._pending_starts.get(handle._role) is handle:
+                    del self._pending_starts[handle._role]
             if not result:
                 self._cancel_intent(intent)
                 if not intent.final_stop_requested:
