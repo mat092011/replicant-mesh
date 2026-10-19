@@ -21,18 +21,26 @@ The pre-decoder bootstrap incrementally reads one complete HELLO frame into a
 preallocated 56 + 4,096 byte scratch buffer and rejects a bad header as soon as
 all 56 bytes arrive. It rejects other kinds, wrong counters/generation,
 duplicate JSON keys, unknown fields, noncanonical/trailing JSON, incomplete or
-oversized frames. Each genuine TLS owner can be claimed only once for a worker
-or server bootstrap. Consumed worker boot/generation pairs remain in a bounded
-process replay table; exhaustion fails closed. DATA is not admitted before ACK.
+oversized frames. Each genuine TLS owner can be claimed only once for a worker,
+coordinator, or server bootstrap. Consumed worker boot/generation and
+coordinator actor/boot/nonce pairs remain in bounded process replay tables;
+exhaustion fails closed. DATA is not admitted before ACK.
 After HELLO validation, each endpoint creates its normal decoder with explicit
 capacity sufficient for the maximum inference bundle, feeds the accepted
 bootstrap at sequence one, and exposes the decoder reservation size. The
-caller constructs its normal writer with initial sequence 2 only after ACK
-commit. A registered-worker capability is immutable, identity-only, and
+each committed bootstrap exposes initial sequence 2 for normal writer
+construction. A registered-worker capability is immutable, identity-only, and
 rechecks the exact genuine server TLS owner and authenticated channel on use;
 it does not indicate loaded readiness or authorize an application round trip.
 Reconnection, policy change, or owner replacement requires a new bootstrap.
-Coordinator-side HELLO remains pending.
+
+Coordinator egress uses the same bounded bootstrap with a fresh nonce generated
+inside the genuine `GatewayCoordinatorEgress` owner. The gateway compares the
+announced actor, boot, tenant, and policy fields against its actual
+`AuthenticatedCoordinatorChannel`. The server TLS connection nonce remains a
+separate value from that coordinator wire nonce. Coordinator registration is
+also identity-only and does not prove work readiness or authorize an
+application round trip.
 
 The focused tests use the existing actual mutual-TLS MemoryBIO component fixture.
 They do not establish sockets, gateway forwarding, readiness, inference
