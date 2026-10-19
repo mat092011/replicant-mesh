@@ -131,11 +131,10 @@ class ArtifactInstaller:
             self._check_root_entries(state)
         else:
             with self._mutating():
-                with self._locked():
-                    state = self._load_state(create=True, allow_legacy=True)
-                    if state["version"] == 2:
-                        self._recover_reservations(state)
-                    self._check_root_entries(state)
+                state = self._load_state(create=True, allow_legacy=True)
+                if state["version"] == 2:
+                    self._recover_reservations(state)
+                self._check_root_entries(state)
 
     def _locked(self):
         return FileLock(self.root / INSTALL_LOCK_FILENAME, uid=self.uid,
@@ -147,7 +146,11 @@ class ArtifactInstaller:
             raise ArtifactInstallError("read-only artifact view cannot mutate its store")
         from .artifact_pin import ArtifactPinBusy, artifact_store_mutation
         try:
-            with artifact_store_mutation(self.root, uid=self.uid):
+            # Serialize mutations on the existing bounded installer gate. The
+            # global EX probe MUST remain nonblocking: a runtime may already
+            # hold global SH while waiting for this installer gate. On that
+            # race we refuse mutation and release the gate for the runtime.
+            with self._locked(), artifact_store_mutation(self.root, uid=self.uid):
                 yield
         except ArtifactPinBusy as error:
             raise ArtifactInstallBusy("artifact store is pinned by a runtime") from error
@@ -284,7 +287,7 @@ class ArtifactInstaller:
 
     def migrate_state_v1(self):
         """Explicitly migrate the legacy singleton-host state under the pin guard."""
-        with self._mutating(), self._locked():
+        with self._mutating():
             try:
                 state = read_private_json(self._state_path(), maximum_size=65_536, uid=self.uid)
             except (FileNotFoundError, StorageError) as error:
@@ -413,7 +416,7 @@ class ArtifactInstaller:
         renamed_to_final = False
         ambiguous_final = False
         state_commit_started = False
-        with self._mutating(), self._locked():
+        with self._mutating():
             if self.monotonic_clock() >= deadline:
                 raise ArtifactInstallError("artifact install deadline exceeded")
             catalog, assignment = self._verify_current_time(
@@ -631,7 +634,7 @@ class ArtifactInstaller:
     def deactivate(self, role, *, compute_stopped):
         if role not in {"host", "coordinator"} or type(compute_stopped) is not bool or not compute_stopped:
             raise ArtifactInstallError("role must be stopped before deactivation")
-        with self._mutating(), self._locked():
+        with self._mutating():
             state = self._load_state()
             if role == "host":
                 state["host_slots"] = {name: None for name in state["host_slots"]}
@@ -641,7 +644,7 @@ class ArtifactInstaller:
     def remove_installation(self, assignment_id, *, compute_stopped):
         if not valid_typed_id(assignment_id, "asg") or type(compute_stopped) is not bool or not compute_stopped:
             raise ArtifactInstallError("explicit stopped-compute confirmation is required for removal")
-        with self._mutating(), self._locked():
+        with self._mutating():
             state = self._load_state()
             record = state["installations"].get(assignment_id)
             if record is None:

@@ -1,7 +1,7 @@
 import asyncio
 import builtins
 import copy
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import errno
 import hashlib
 import os
@@ -1237,6 +1237,69 @@ assert not any(name == "torch" or name.startswith("torch.") for name in sys.modu
         self.assertEqual(errors, [])
         self.assertEqual(len(results), 2)
         self.assertEqual(len(self.installer._load_state()["installations"]), 2)
+
+    def test_runtime_shared_pin_waiting_on_installer_gate_cannot_deadlock_mutation(self):
+        from steamboat_connector import artifact_pin
+        gate_held = threading.Event()
+        runtime_pinned = threading.Event()
+        permit_probe = threading.Event()
+        results = []
+        failures = []
+        original_gate = self.installer._locked
+
+        @contextmanager
+        def gate():
+            with original_gate():
+                if threading.current_thread().name == "fixture-mutator":
+                    gate_held.set()
+                    if not permit_probe.wait(2):
+                        raise RuntimeError("runtime pin barrier timed out")
+                yield
+
+        def mutate():
+            try:
+                with self.installer._mutating():
+                    failures.append(AssertionError("mutation crossed a runtime pin"))
+            except ArtifactInstallBusy:
+                results.append("busy")
+            except BaseException as error:
+                failures.append(error)
+
+        def runtime():
+            descriptor = None
+            try:
+                descriptor = artifact_pin._lock(
+                    self.root, artifact_pin.GLOBAL_LOCK, os.getuid(),
+                    artifact_pin.fcntl.LOCK_SH)
+                runtime_pinned.set()
+                with self.installer._locked():
+                    results.append("runtime-verified")
+            except BaseException as error:
+                failures.append(error)
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+
+        mutator = threading.Thread(target=mutate, name="fixture-mutator")
+        reader = threading.Thread(target=runtime, name="fixture-runtime")
+        with mock.patch.object(self.installer, "_locked", gate):
+            try:
+                mutator.start()
+                self.assertTrue(gate_held.wait(2))
+                reader.start()
+                self.assertTrue(runtime_pinned.wait(2))
+                permit_probe.set()
+                mutator.join(1)
+                reader.join(1)
+                self.assertFalse(mutator.is_alive())
+                self.assertFalse(reader.is_alive())
+                self.assertEqual(failures, [])
+                self.assertCountEqual(results, ["busy", "runtime-verified"])
+            finally:
+                permit_probe.set()
+                mutator.join(6)
+                if reader.ident is not None:
+                    reader.join(6)
 
     def test_failed_commit_preserves_previous_active_install(self):
         first_inputs = self._install_input(assignment_id=f"asg_{'a' * 32}")
