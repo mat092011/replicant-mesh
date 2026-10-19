@@ -16,6 +16,7 @@ from steamboat_connector.channel_writer import writer_reservation_overhead_bytes
 from steamboat_connector.gateway_service import (
     GatewayService, GatewayServiceError, required_communication_memory_bytes,
 )
+from steamboat_connector import gateway_service as gateway_service_module
 from steamboat_runtime.protocol import PROTOCOL_VERSION
 from steamboat_runtime.protocol.wire import Request, Response, serialize_message
 from steamboat_security.gateway_egress import GatewayCoordinatorEgress
@@ -103,6 +104,20 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                    "socket": client_socket}
         self._client_cleanup[id(driver)] = cleanup
         self.addCleanup(self._close_client, cleanup)
+        cleanup["worker_boot_id"] = boot_id
+        self.clients.append((owner, driver, None, None, client_socket, None))
+        return owner, driver, None, None
+
+    def _ensure_worker_hello(self, owner, driver):
+        index = next(i for i, item in enumerate(self.clients) if item[1] is driver)
+        current = self.clients[index]
+        if current[2] is not None:
+            return current[2], current[5]
+        if (not owner.handshake_complete or driver.pending_plaintext_bytes
+                or driver.pending_ciphertext_bytes or owner.pending_encrypted_bytes):
+            return None, None
+        fx = self.fx
+        boot_id = self._client_cleanup[id(driver)]["worker_boot_id"]
         verifier = GatewayDelegationVerifier(
             fx.base.policy_store, clock=fx.base.clock,
             gateway_ca_pem=fx.base.gateway_ca,
@@ -114,8 +129,8 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
             owner, verifier=verifier, sessions=SessionBindings(clock=fx.base.clock),
             gateway_id="gw-east")
         hello = WorkerHelloClient(ingress, owner, reassembly_capacity=wire.MAX_BUNDLE_BYTES)
-        self.clients.append((owner, driver, hello, None, client_socket, ingress))
-        return owner, driver, hello, ingress
+        self.clients[index] = (owner, driver, hello, current[3], current[4], ingress)
+        return hello, ingress
 
     def _coordinator_client(self):
         fx = self.fx
@@ -169,6 +184,13 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                         and not driver.pending_plaintext_bytes
                         and not driver.pending_ciphertext_bytes
                         and not owner.pending_encrypted_bytes):
+                    if hello is None and self._client_cleanup[id(driver)].get("worker_boot_id"):
+                        hello, ingress = self._ensure_worker_hello(owner, driver)
+                        self.clients[index] = (owner, driver, hello, stream, sock, ingress)
+                if (stream is None and hello is not None and owner.handshake_complete
+                        and not driver.pending_plaintext_bytes
+                        and not driver.pending_ciphertext_bytes
+                        and not owner.pending_encrypted_bytes):
                     common = dict(
                         writer_reservation_bytes=(writer_reservation_overhead_bytes()
                             + wire.MAX_BUNDLE_BYTES
@@ -201,7 +223,8 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                                   if type(item[2]) is CoordinatorHelloClient)
         fx.coordinator_client_stream = coordinator_client
         fx.worker_client_streams = worker_streams
-        fx.worker_ingresses = tuple(item[3] for item in worker_clients)
+        fx.worker_ingresses = tuple(
+            item[5] for item in self.clients if type(item[2]) is WorkerHelloClient)
         self.assertTrue(service.route_connected)
         self.assertEqual(set(service._workers), {
             (fx.device_id, fx.worker_boot_id),
@@ -484,6 +507,7 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
             service.pump_once()
             if not owner.handshake_complete:
                 driver.pump()
+            hello, _ingress = self._ensure_worker_hello(owner, driver)
             pending = next((item for item in service._accepted
                             if item.purpose == "worker"), None)
             if (pending is not None and pending.stream is not None
@@ -575,7 +599,11 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                              or driver.pending_ciphertext_bytes
                              or owner.pending_encrypted_bytes)):
                     driver.pump()
-                if (stream is None and owner.handshake_complete
+                if hello is None and self._client_cleanup[id(driver)].get("worker_boot_id"):
+                    hello, ingress = self._ensure_worker_hello(owner, driver)
+                    if hello is not None:
+                        self.clients[index] = (owner, driver, hello, stream, sock, ingress)
+                if (stream is None and hello is not None and owner.handshake_complete
                         and not driver.pending_plaintext_bytes
                         and not driver.pending_ciphertext_bytes
                         and not owner.pending_encrypted_bytes):
@@ -603,10 +631,15 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                             "genuine worker HELLO did not reach router registration")
             service.stop()
             self.assertFalse(service._resources_closed)
-            release.set()
-            service_thread.join(2.0)
+            accepted_at = service._accepted[0].accepted_at
+            with patch.object(gateway_service_module.time, "monotonic",
+                              return_value=accepted_at + 5.01):
+                release.set()
+                service_thread.join(2.0)
         self.assertFalse(service_thread.is_alive())
-        self.assertEqual(errors, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], GatewayServiceError)
+        self.assertIn("five seconds", str(errors[0]))
         self.assertTrue(service._resources_closed)
         self.assertEqual(service._workers, {})
         self.assertIsNone(service.multiplexer)
@@ -654,7 +687,9 @@ class GatewayServiceLoopbackTests(unittest.TestCase):
                 service.pump_once()
                 if not owner.handshake_complete or stream is None:
                     driver.pump()
-                if (stream is None and owner.handshake_complete
+                if hello is None:
+                    hello, _ingress = self._ensure_worker_hello(owner, driver)
+                if (stream is None and hello is not None and owner.handshake_complete
                         and not driver.pending_plaintext_bytes
                         and not driver.pending_ciphertext_bytes
                         and not owner.pending_encrypted_bytes):

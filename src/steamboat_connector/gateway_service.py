@@ -244,6 +244,10 @@ class GatewayService:
         self.stop()
         raise GatewayServiceError(reason)
 
+    def _check_bootstrap_deadline(self, pending):
+        if time.monotonic() - pending.accepted_at > MAX_BOOTSTRAP_SECONDS:
+            self._fail("TLS and HELLO bootstrap exceeded five seconds")
+
     def _close_listener_once(self, listener):
         marker = id(listener)
         with self._listener_lock:
@@ -326,9 +330,11 @@ class GatewayService:
                 self._stuck.append((pending, error))
             raise
         pending.owner = owner
+        self._check_bootstrap_deadline(pending)
         pending.driver = ChannelSocket(
             pending.sock, owner, self.traffic_budget,
             role="coordinator", boot_id=self.gateway_traffic_boot_id)
+        self._check_bootstrap_deadline(pending)
 
     def _make_stream(self, pending):
         if pending.purpose == "worker":
@@ -338,27 +344,33 @@ class GatewayService:
             hello = CoordinatorHelloServer.from_tls(
                 pending.owner, reassembly_capacity=self._coordinator_capacity)
         pending.hello = hello
+        self._check_bootstrap_deadline(pending)
         pending.stream = ChannelStream(
             pending.driver, hello,
             writer_reservation_bytes=WRITER_CAPACITY,
             decoded_byte_capacity=DECODED_CAPACITY,
             tls_owner_reservation_bytes=TLS_OWNER_MIN_RESERVATION_BYTES)
+        self._check_bootstrap_deadline(pending)
         if pending.stream.reservation_bound_bytes > _STREAM_BOUND:
             self._fail("actual stream exceeds its pre-reserved communication slot")
 
     def _finish_hello(self, pending):
         stream = pending.stream
-        if not stream.transport_bootstrap_complete:
+        complete = stream.transport_bootstrap_complete
+        self._check_bootstrap_deadline(pending)
+        if not complete:
             return False
         if not self._accepting:
             return False
         registration = stream.registration
+        self._check_bootstrap_deadline(pending)
         if not self._accepting:
             return False
         if pending.purpose == "worker":
             if type(registration) is not RegisteredWorker:
                 self._fail("worker HELLO did not produce a genuine registration")
             identity = registration.identity
+            self._check_bootstrap_deadline(pending)
             if not self._accepting:
                 return False
             key = identity[1:3]
@@ -374,12 +386,14 @@ class GatewayService:
             # still retired by the finalizer.
             pending.registration = registration
             self.router.register_worker(stream)
+            self._check_bootstrap_deadline(pending)
             if not self._accepting:
                 return False
         else:
             if type(registration) is not RegisteredCoordinator:
                 self._fail("coordinator HELLO did not produce a genuine registration")
             identity = registration.identity
+            self._check_bootstrap_deadline(pending)
             if not self._accepting:
                 return False
             if (identity[2] != self.coordinator_boot_id
@@ -392,14 +406,21 @@ class GatewayService:
         with self._stop_lock:
             if not self._accepting:
                 return False
-            if pending.purpose == "worker":
-                self._workers[key] = (registration, stream, pending)
+            expired = (time.monotonic() - pending.accepted_at
+                       > MAX_BOOTSTRAP_SECONDS)
+            if not expired:
+                if pending.purpose == "worker":
+                    self._workers[key] = (registration, stream, pending)
+                else:
+                    self._coordinator = (registration, stream, pending)
+                self._accepted.remove(pending)
+                make_mux = (self._coordinator is not None
+                            and len(self._workers) == len(self.expected_workers)
+                            and self.multiplexer is None)
             else:
-                self._coordinator = (registration, stream, pending)
-            self._accepted.remove(pending)
-            make_mux = (self._coordinator is not None
-                        and len(self._workers) == len(self.expected_workers)
-                        and self.multiplexer is None)
+                make_mux = False
+        if expired:
+            self._fail("TLS and HELLO bootstrap exceeded five seconds")
         if make_mux:
             with self._stop_lock:
                 if not self._accepting:
@@ -416,7 +437,15 @@ class GatewayService:
             # A factory can return after Stop; capture its ownership before
             # allowing the pump to quiesce so the finalizer can retire it.
             with self._stop_lock:
+                expired = (time.monotonic() - pending.accepted_at
+                           > MAX_BOOTSTRAP_SECONDS)
+                if expired:
+                    self._failed = "TLS and HELLO bootstrap exceeded five seconds"
+                    self._accepting = False
                 self.multiplexer = mux
+            if expired:
+                self.stop()
+                raise GatewayServiceError("TLS and HELLO bootstrap exceeded five seconds")
         return True
 
     def _make_multiplexer(self, **kwargs):
@@ -437,23 +466,30 @@ class GatewayService:
             self._accept_ready(self.coordinator_listener, "coordinator")
             if not self._accepting:
                 return False
-            now = time.monotonic()
             for pending in tuple(self._accepted):
-                if now - pending.accepted_at > MAX_BOOTSTRAP_SECONDS:
-                    self._fail("TLS and HELLO bootstrap exceeded five seconds")
+                self._check_bootstrap_deadline(pending)
                 if pending.driver is None:
                     self._make_owner_and_driver(pending)
                     if not self._accepting:
                         return False
-                if (not pending.owner.handshake_complete or pending.stream is None):
+                handshake_complete = pending.owner.handshake_complete
+                self._check_bootstrap_deadline(pending)
+                if not handshake_complete or pending.stream is None:
                     pending.driver.pump()
-                if (pending.owner.handshake_complete and pending.stream is None
-                        and not pending.driver.pending_plaintext_bytes
-                        and not pending.driver.pending_ciphertext_bytes
-                        and not pending.owner.pending_encrypted_bytes):
+                    self._check_bootstrap_deadline(pending)
+                handshake_complete = pending.owner.handshake_complete
+                self._check_bootstrap_deadline(pending)
+                can_make_stream = (handshake_complete and pending.stream is None
+                                   and not pending.driver.pending_plaintext_bytes
+                                   and not pending.driver.pending_ciphertext_bytes
+                                   and not pending.owner.pending_encrypted_bytes)
+                self._check_bootstrap_deadline(pending)
+                if can_make_stream:
                     self._make_stream(pending)
+                    self._check_bootstrap_deadline(pending)
                 if pending.stream is not None:
                     pending.stream.pump()
+                    self._check_bootstrap_deadline(pending)
                     # Stop may run while TLS/HELLO processing is inside the
                     # stream pump. Do not publish a registration, create the
                     # mux, or dispatch after that pump returns to a frozen service.
