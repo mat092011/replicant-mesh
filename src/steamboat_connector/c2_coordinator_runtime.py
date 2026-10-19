@@ -26,6 +26,12 @@ class C2CoordinatorRuntimeError(StorageError):
     """Coordinator model assembly or confirmed shutdown failed closed."""
 
 
+def _exit_owned_binding_lease(lease):
+    """Run the exact trusted context-manager exit away from the event loop."""
+    lease.__exit__(None, None, None)
+    return True
+
+
 def _validate_coordinator(binding, child_pins, installer, owner_policy):
     from steamboat_connector.artifact_pin import InheritedArtifactPin, RuntimeAssignmentGuard
     from steamboat_connector.resources import _fit
@@ -54,6 +60,8 @@ def _validate_coordinator(binding, child_pins, installer, owner_policy):
     guard.check()
 
     settings = load_c2_coordinator_settings(binding)
+    if settings.assignment.assignment_id != guard.assignment_id:
+        raise CredentialError("selected coordinator assignment differs from inherited pin")
     # The signed selected settings choose the artifact store too.  Never let a
     # caller-supplied installer silently redirect that selection.
     if os.path.normcase(os.path.abspath(settings.artifact_root)) != os.path.normcase(
@@ -168,6 +176,7 @@ class C2CoordinatorRuntime:
         self._close_lock = asyncio.Lock()
         self._cleanup_tasks = []
         self._model_close_task = None
+        self._lease_exit_task = None
         binding.subscribe_teardown(self._binding_invalidated)
 
     @property
@@ -320,12 +329,39 @@ class C2CoordinatorRuntime:
                     self._retryable_drain = True
                     raise C2CoordinatorRuntimeError(
                         "assigned coordinator CPU work did not drain")
+                # Context-manager exit takes the selected-root store lock
+                # synchronously. Run the one exact trusted lease exit off-loop
+                # and retain its task so timeout/caller cancellation cannot
+                # cancel or repeat the ownership transition.
+                lease_task = self._lease_exit_task
+                if lease_task is None:
+                    lease_task = asyncio.create_task(asyncio.to_thread(
+                        _exit_owned_binding_lease, self._lease))
+                    self._lease_exit_task = lease_task
+                remaining = deadline - self._loop.time()
+                if remaining <= 0:
+                    self._retryable_drain = True
+                    raise C2CoordinatorRuntimeError(
+                        "coordinator lease retirement exceeded the close budget")
+                _done, lease_pending = await asyncio.wait((lease_task,), timeout=remaining)
+                if lease_pending:
+                    self._retryable_drain = True
+                    raise C2CoordinatorRuntimeError(
+                        "coordinator lease retirement remains in progress")
+                if lease_task.cancelled():
+                    raise C2CoordinatorRuntimeError(
+                        "coordinator lease retirement task was cancelled")
+                lease_error = lease_task.exception()
+                if lease_error is not None:
+                    raise C2CoordinatorRuntimeError(
+                        "coordinator lease retirement failed") from lease_error
+                if lease_task.result() is not True:
+                    raise C2CoordinatorRuntimeError(
+                        "coordinator lease retirement did not confirm")
                 if task in self._cleanup_tasks:
                     self._cleanup_tasks.remove(task)
                 self._model_close_task = None
-                # Retire the selected-root lease before dropping any owner.
-                # If it faults, retain model, pin set, and binding strongly.
-                self._lease.__exit__(None, None, None)
+                self._lease_exit_task = None
                 self._model = None
                 self._lease = None
                 self._binding = None

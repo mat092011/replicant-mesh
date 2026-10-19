@@ -156,9 +156,9 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
             catalog_sha256=hashlib.sha256(catalog_bytes).hexdigest(),
             catalog_public_key_sha256=hashlib.sha256(verifier.public_key).hexdigest(),
             assignment_sha256=hashlib.sha256(assignment_bytes).hexdigest())
-        if self._testMethodName.endswith("_bad_selected_catalog_key"):
+        if "bad_selected_catalog_key" in self._testMethodName:
             settings["catalog_public_key_hex"] = "04" + "11" * 64
-        elif self._testMethodName.endswith("_bad_valid_selected_catalog_key"):
+        elif "bad_valid_selected_catalog_key" in self._testMethodName:
             from cryptography.hazmat.primitives.asymmetric import ec
             alternate = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
                 serialization.Encoding.X962,
@@ -166,11 +166,11 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
             settings["catalog_public_key_hex"] = alternate.hex()
             settings["assignment"]["catalog_public_key_sha256"] = hashlib.sha256(
                 alternate).hexdigest()
-        elif self._testMethodName.endswith("_bad_selected_artifact_root"):
+        elif "bad_selected_artifact_root" in self._testMethodName:
             settings["artifact_root"] = str(store_path / "different-root")
-        elif self._testMethodName.endswith("_bad_selected_assignment_digest"):
+        elif "bad_selected_assignment_digest" in self._testMethodName:
             settings["assignment"]["assignment_sha256"] = "f" * 64
-        elif self._testMethodName.endswith("_bad_selected_assignment_id"):
+        elif "bad_selected_assignment_id" in self._testMethodName:
             settings["assignment"]["assignment_id"] = "asg_" + "b" * 32
         settings_bytes = canonical_json(settings)
 
@@ -410,6 +410,44 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
             runtime._close_lock.release()
         self.assertTrue(await runtime.close(grace_seconds=5))
 
+    async def test_child_lease_lock_wait_is_off_loop_bounded_and_observed_once(self):
+        import threading
+
+        runtime = self.runtime = await build_c2_coordinator_runtime(
+            self.child_owner, self.child_pins, self.installer,
+            owner_policy=self.owner_policy(1 << 30, sessions=2))
+        model, lease, pins = runtime._model, runtime._lease, runtime._child_pins
+        held, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def hold_owner_lock():
+            with self.child_owner._lock:
+                held.set()
+                if not release.wait(5):
+                    raise RuntimeError("test owner-lock release deadline elapsed")
+
+        holder = threading.Thread(target=hold_owner_lock, name="test-child-owner-lock")
+        holder.start()
+        self.assertTrue(await asyncio.to_thread(held.wait, 2))
+        try:
+            started = asyncio.get_running_loop().time()
+            with self.assertRaises(C2CoordinatorRuntimeError):
+                await runtime.close(grace_seconds=0.05)
+            self.assertLess(asyncio.get_running_loop().time() - started, 0.5)
+            self.assertIs(runtime._model, model)
+            self.assertIs(runtime._lease, lease)
+            self.assertIs(runtime._child_pins, pins)
+            await asyncio.sleep(0)
+            self.assertIsNotNone(runtime._lease_exit_task)
+            retirement = runtime._lease_exit_task
+        finally:
+            release.set()
+            await asyncio.to_thread(holder.join, 2)
+        self.assertTrue(await runtime.close(grace_seconds=5))
+        self.assertTrue(retirement.done())
+        self.assertIsNone(runtime._lease)
+        self.assertIsNone(runtime._lease_exit_task)
+
     async def _assert_anchor_fault_precedes_model_materialization(self, accepted_errors):
         from steamboat_runtime.assigned_artifacts import AssignedArtifactView
         with mock.patch.object(AssignedArtifactView, "load_coordinator_model",
@@ -439,5 +477,10 @@ class C2CoordinatorRuntimeNativeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bad_selected_assignment_id_fails_before_weight_loading(self):
         from steamboat_security.errors import CredentialError
-        await self._assert_anchor_fault_precedes_model_materialization(
-            (CredentialError,))
+        from steamboat_connector.artifacts import ArtifactInstaller
+        with mock.patch.object(ArtifactInstaller, "open_view",
+                side_effect=AssertionError("wrong assignment reached installer view")) as opener:
+            with self.assertRaises(CredentialError):
+                await build_c2_coordinator_runtime(self.child_owner, self.child_pins,
+                    self.installer, owner_policy=self.owner_policy(1 << 30))
+            opener.assert_not_called()

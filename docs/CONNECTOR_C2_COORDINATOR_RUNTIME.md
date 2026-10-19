@@ -18,7 +18,9 @@ one-token finite-shape health check. Model operations use the assigned
 coordinator model's bounded CPU executor. Caller cancellation or request timeout
 does not release an executing future. Shutdown has a shared maximum five-second
 budget, including close-lock contention, and is successful only after the actual
-model confirms its CPU work has drained and the selected-root lease exits. A
+model confirms its CPU work has drained and the selected-root lease exits. The
+exact lease exit runs once off the event loop and remains strongly owned while
+waiting for its lock. A
 timed-out drain remains fenced and retains the model, child-binding lease, and
 pin-set references; after actual CPU work finishes, a later bounded close can
 confirm reclamation. A faulted lease exit retains all references for
