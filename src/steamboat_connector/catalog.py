@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass
 import hashlib
+import math
 import re
+import threading
 import time
 
 from cryptography.exceptions import InvalidSignature
@@ -105,9 +107,53 @@ class VerifiedDocument:
 
 
 class CatalogVerifier:
-    def __init__(self, pinned_public_key):
+    def __init__(self, pinned_public_key, *, clock=None):
         self.public_key = bytes(pinned_public_key)
         self.key_id = key_id_for(self.public_key)
+        # Legacy numeric clocks remain useful for the isolated artifact fixtures.
+        # An executing connector must inject the same conservative Clock used by
+        # its C1 authorization owner; caller-supplied `now` cannot override it.
+        if clock is not None:
+            from steamboat_security.clock import Clock
+            if type(clock) is not Clock:
+                raise TypeError("catalog security clock must be the core Clock")
+        self.clock = clock
+        self._time_lock = threading.RLock()
+        self._deadlines = {}
+
+    @staticmethod
+    def _authority_identity(verified):
+        return hashlib.sha256(json_bytes(
+            verified.payload, maximum_bytes=MAX_CATALOG_BYTES)).hexdigest()
+
+    def _validate_at(self, verified, validate, now, *, sample=None, maximum_deadline=None):
+        with self._time_lock:
+            if self.clock is None:
+                validate(now)
+                return verified
+            sample = self.clock.sample() if sample is None else sample
+            validate(math.floor(sample.earliest_wall))
+            if verified.payload["expires_at"] <= sample.latest_wall:
+                raise CatalogError("signed artifact authority expired within clock uncertainty")
+            # ECDSA signatures are randomized: authority identity is the signed
+            # payload, so re-signing it cannot acquire a later deadline/slot.
+            digest = self._authority_identity(verified)
+            previous = self._deadlines.get(digest)
+            deadline = sample.monotonic + verified.payload["expires_at"] - sample.latest_wall
+            if previous is not None:
+                deadline = min(deadline, previous[0])
+            if maximum_deadline is not None:
+                deadline = min(deadline, maximum_deadline)
+            if sample.monotonic >= deadline:
+                raise CatalogError("signed artifact authority exceeded its monotonic deadline")
+            # Clock rejects actual wall rollback. Unlike latest_wall, actual
+            # wall expiry stays expired after uncertainty decreases.
+            self._deadlines = {key: value for key, value in self._deadlines.items()
+                               if value[1] > sample.wall}
+            if digest not in self._deadlines and len(self._deadlines) >= 128:
+                raise CatalogError("bounded artifact authority deadline table is full")
+            self._deadlines[digest] = (deadline, verified.payload["expires_at"])
+            return verified
 
     def _verify_document(self, data, kind):
         maximum = MAX_CATALOG_BYTES if kind == "catalog" else MAX_ASSIGNMENT_BYTES
@@ -140,14 +186,29 @@ class CatalogVerifier:
 
     def verify_catalog(self, data, *, now=None):
         verified = self._verify_document(data, "catalog")
-        validate_catalog_payload(verified.payload, now=now)
-        return verified
+        return self._validate_at(verified,
+                                 lambda current: validate_catalog_payload(
+                                     verified.payload, now=current), now)
 
     def verify_assignment(self, data, catalog, *, account_id, device_id, role, now=None):
         verified = self._verify_document(data, "assignment")
-        validate_assignment_payload(verified.payload, catalog, account_id=account_id,
-                                    device_id=device_id, role=role, now=now)
-        return verified
+        if type(catalog) is not VerifiedDocument:
+            raise CatalogError("assignment requires its signed catalog")
+        with self._time_lock:
+            # Verify the parent's signature/scope and retained deadline in the
+            # same clock transaction. A previously verified object is not a
+            # perpetual capability and cannot outlive its original fence.
+            parent = self._verify_document(catalog.document_bytes, "catalog")
+            sample = self.clock.sample() if self.clock is not None else None
+            self._validate_at(parent, lambda current: validate_catalog_payload(
+                parent.payload, now=current), now, sample=sample)
+            parent_deadline = (self._deadlines[self._authority_identity(parent)][0]
+                               if self.clock is not None else None)
+            return self._validate_at(verified,
+                                     lambda current: validate_assignment_payload(
+                                         verified.payload, parent, account_id=account_id,
+                                         device_id=device_id, role=role, now=current), now,
+                                     sample=sample, maximum_deadline=parent_deadline)
 
 
 def _exact_object(value, keys, label):
