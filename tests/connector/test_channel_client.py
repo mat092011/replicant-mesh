@@ -2,6 +2,7 @@
 import asyncio
 import secrets
 import time
+import traceback
 import unittest
 from unittest import mock
 
@@ -384,8 +385,13 @@ class CoordinatorChannelClientTests(unittest.IsolatedAsyncioTestCase):
         short_wire = await self._server_request(short_call, description="short OpenSession")
         long_wire = await self._server_request(long_call, description="long OpenSession")
         self.fx.base.time_source.advance(3)
-        with self.assertRaises(SessionError):
+        with self.assertRaises(SessionError) as expired:
             await asyncio.wait_for(short_call, timeout=2)
+        self.assertIsNone(expired.exception.__cause__)
+        self.assertIsNone(expired.exception.__context__)
+        self.assertNotIn("_pump", tuple(
+            frame.f_code.co_name for frame, _line in traceback.walk_tb(
+                expired.exception.__traceback__)))
         self.assertFalse(self.client._unavailable,
                          "request-local expiry fenced channel: "
                          f"{self.client._unavailable_reason} "

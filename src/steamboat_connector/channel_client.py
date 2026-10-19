@@ -272,14 +272,17 @@ class CoordinatorChannelClient:
                     try:
                         entry["route"].assert_live()
                         await _maybe_await(entry["auth"].assert_live())
-                    except Exception as error:
+                    except SessionError:
                         # A request-scoped authorization can expire while
                         # another independent call remains valid on this stream.
                         future = entry["future"]
                         if not future.done():
-                            future.set_exception(error)
-                        if isinstance(error, SessionError):
-                            entry["abandon_response"] = True
+                            # Never hand another task the caught exception:
+                            # its traceback points into this suspended pump
+                            # frame, which secure_transport cleanup may clear.
+                            future.set_exception(SessionError(
+                                "outbound request authorization expired"))
+                        entry["abandon_response"] = True
                 self.stream.pump()
                 message = self.stream.pop_message()
                 if message is not None:
