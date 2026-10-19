@@ -82,27 +82,39 @@ def _memory_budget(*, store=None, policy=None, clock=None):
         clock_domain=DOMAIN, policy=policy or _policy()), store, clock
 
 
+def _linux_file_test_clock():
+    """Stable test clock for file/flock tests, without signed-wall semantics."""
+    monotonic = time.monotonic
+    return Clock(wall=lambda: 1_700_000_000.0 + monotonic(),
+                 monotonic=monotonic, uncertainty_seconds=lambda: 0.0)
+
+
 def _cross_process_reserve(state_path, role, boot_id, ready, release, result):
     # Actual file/lock interaction is Linux-only and intentionally prepared for
     # the parent's serialized platform run rather than asserted on Windows.
     from steamboat_connector.traffic_budget import TrafficBudget
-    from steamboat_security.clock import Clock
     from steamboat_runtime.protocol.clock import clock_identity
 
-    clock = Clock.system(uncertainty_seconds=lambda: 0.0)
+    clock = _linux_file_test_clock()
     deadline = time.monotonic() + 5
-    while True:
-        try:
-            budget = TrafficBudget(state_path, allocation_id=ALLOC, uid=os.getuid(),
-                                   clock=clock, clock_domain=clock_identity(),
-                                   policy=_policy(global_total=900))
-            budget.bind_role(role, boot_id)
-            break
-        except TrafficBudgetBusy:
-            if time.monotonic() >= deadline:
-                result.put(("busy", None))
-                return
-            time.sleep(0.005)
+    try:
+        while True:
+            try:
+                budget = TrafficBudget(state_path, allocation_id=ALLOC, uid=os.getuid(),
+                                       clock=clock, clock_domain=clock_identity(),
+                                       policy=_policy(global_total=900))
+                budget.bind_role(role, boot_id)
+                break
+            except TrafficBudgetBusy:
+                if time.monotonic() >= deadline:
+                    result.put(("init_busy", None))
+                    ready.set()
+                    return
+                time.sleep(0.005)
+    except BaseException as error:
+        result.put(("init_error", type(error).__name__, str(error)))
+        ready.set()
+        return
     ready.set()
     release.wait(5)
     while True:
@@ -112,11 +124,14 @@ def _cross_process_reserve(state_path, role, boot_id, ready, release, result):
             return
         except TrafficBudgetBusy:
             if time.monotonic() >= deadline:
-                result.put(("busy", None))
+                result.put(("reserve_busy", None))
                 return
             time.sleep(0.005)
         except TrafficBudgetDenied:
             result.put(("denied", None))
+            return
+        except BaseException as error:
+            result.put(("reserve_error", type(error).__name__, str(error)))
             return
 
 
@@ -156,7 +171,7 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
             from steamboat_runtime.protocol.clock import clock_identity
             budget = TrafficBudget.create_fresh(
                 state_path, allocation_id=ALLOC, uid=os.getuid(),
-                clock=Clock.system(uncertainty_seconds=lambda: 0.0),
+                clock=_linux_file_test_clock(),
                 clock_domain=clock_identity(), policy=_policy(global_total=900,
                                                               role_total=300))
             ctx = multiprocessing.get_context("fork")
@@ -170,10 +185,12 @@ class LinuxTrafficBudgetTests(unittest.TestCase):
             for process in processes:
                 process.start()
             try:
-                self.assertTrue(all(event.wait(5) for event in ready))
+                ready_results = [event.wait(5) for event in ready]
                 release.set()
-                outcomes = sorted(result.get(timeout=5)[0] for _ in processes)
-                self.assertEqual(outcomes, ["denied", "ok"])
+                outcomes = [result.get(timeout=5) for _ in processes]
+                self.assertTrue(all(ready_results), f"child initialization failed: {outcomes!r}")
+                self.assertEqual(sorted(item[0] for item in outcomes), ["denied", "ok"],
+                                 f"child outcomes: {outcomes!r}")
             finally:
                 release.set()
                 for process in processes:
@@ -555,6 +572,19 @@ class TrafficBudgetTests(unittest.TestCase):
         with self.assertRaises(TrafficBudgetError):
             allowance.assert_live()
         self.assertTrue(budget._faulted)
+
+    def test_wall_rollback_latches_budget_owner_without_revival(self):
+        budget, store, clock = _memory_budget()
+        budget.bind_role("host", BOOT_A)
+        clock.wall -= 10
+        with self.assertRaises(TrafficBudgetError):
+            budget.reserve("host", BOOT_A, "send", "data", 20)
+        self.assertTrue(budget._faulted)
+        clock.wall += 20
+        with self.assertRaises(TrafficBudgetError):
+            budget.reserve("host", BOOT_A, "send", "data", 20)
+        self.assertEqual(store.state["global"]["charged"]["data"], 0)
+        self.assertEqual(store.state["reservations"], [])
 
     def test_policy_reservations_must_fit_global_network_caps(self):
         policy = _policy(global_total=100, role_total=50)
