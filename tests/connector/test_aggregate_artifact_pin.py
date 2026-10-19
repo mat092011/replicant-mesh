@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from steamboat_connector.aggregate_artifact_pin import (
     AggregateArtifactPinError, _validate_group_record, _AssignmentSlice,
     _validated_worker_boot_mapping, validate_inherited_group_pin)
+from steamboat_connector.artifact_pin import ArtifactPinError
 
 
 def _record():
@@ -125,7 +126,7 @@ class AggregateArtifactPinRecordTests(unittest.TestCase):
 
         with mock.patch("steamboat_connector.aggregate_artifact_pin.os.close",
                         side_effect=close_then_raise):
-            with self.assertRaises(AggregateArtifactPinError) as caught:
+            with self.assertRaises(ArtifactPinError) as caught:
                 validate_inherited_group_pin(
                     fd, fd, root="/irrelevant", uid=0, record_path="/irrelevant",
                     expected_record={}, component="worker-1", worker_boot_id="1" * 32,
@@ -133,7 +134,7 @@ class AggregateArtifactPinRecordTests(unittest.TestCase):
                     assignment_deadline=1, clock=None, signed_catalog=b"",
                     signed_assignment=b"", verifier=None)
             owner = caught.exception.pin_owner
-            with self.assertRaises(Exception):
+            with self.assertRaises(ArtifactPinError):
                 owner.close_after_failed_acquire()
         self.assertEqual(calls, [fd])
 
