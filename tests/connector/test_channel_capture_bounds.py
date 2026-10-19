@@ -1,15 +1,15 @@
 """Capture/parser bounds for the exact generated C2 Worker protobuf schema.
 
-These controls measure the parsers themselves. They do not represent the peak
-RSS of a worker or coordinator role, which also owns transport, TLS, queues,
-model state and other concurrent requests.
+These controls measure individual parser paths, not whole-role RSS. The Linux
+probe uses a fresh isolated CPython process for each fixture.
 """
 import json
 import os
+import site
 import subprocess
 import sys
+import sysconfig
 import unittest
-from unittest import mock
 
 from steamboat_connector import channel_wire
 from steamboat_connector.channel_protobuf import (
@@ -33,7 +33,6 @@ def _lf(field, payload):
 
 
 def _max_tensor_request():
-    # TensorEnvelope: shape=[1,1152,64], dtype/layout, byte_count and data.
     shape = _lf(1, b"\x01\x80\x09\x40")
     tensor = (shape + _lf(2, b"float32_le")
               + _lf(3, b"batch_sequence_hidden") + b"\x20\x80\x80\x12"
@@ -52,24 +51,28 @@ class ChannelCaptureBoundsTests(unittest.TestCase):
         self.assertEqual(request.tensor.byte_count, 1152 * 64 * 4)
         self.assertEqual(len(request.tensor.data), 1152 * 64 * 4)
 
-    def test_near_megabyte_shape_is_denied_before_parse_stage(self):
-        # A legal protobuf length-delimited field carrying 1 MiB zero varints
-        # can expand into millions of native repeated-field entries.
-        packed = b"\x00" * 900_000
-        nested = _lf(1, packed)
-        raw = _lf(13, nested)
+    def test_near_megabyte_shape_is_denied_by_preflight(self):
+        raw = _lf(13, _lf(1, b"\x00" * 900_000))
         self.assertLessEqual(len(raw), channel_wire.MAX_PROTOBUF_BYTES)
-        parse_stage = mock.Mock(side_effect=Request.FromString)
         with self.assertRaisesRegex(ChannelProtobufError, "shape exceeds"):
             preflight_worker_protobuf(raw, response=False)
-            parse_stage(raw)
-        parse_stage.assert_not_called()
 
-    def test_duplicate_and_nonminimal_wire_forms_fail_preflight(self):
+    def test_real_generated_parser_and_preflight_disagree_on_duplicate_singular(self):
+        duplicate = b"\x08\x01\x08\x01"
+        parsed = Request.FromString(duplicate)
+        self.assertEqual(parsed.protocol_version, 1)
+        with self.assertRaisesRegex(ChannelProtobufError, "duplicate singular"):
+            preflight_worker_protobuf(duplicate, response=False)
+        truncated = b"\x08\x80"
+        from google.protobuf.message import DecodeError
+        with self.assertRaises(DecodeError):
+            Request.FromString(truncated)
+        with self.assertRaises(ChannelProtobufError):
+            preflight_worker_protobuf(truncated, response=False)
+
+    def test_duplicate_nested_and_nonminimal_wire_forms_fail_preflight(self):
         malformed = (
-            (b"\x08\x01\x08\x01", "duplicate singular"),
             (b"\x08\x81\x00", "not minimally encoded"),
-            # Duplicate nested singular dtype field.
             (_lf(13, b"\x12\x01a\x12\x01b"), "duplicate singular"),
         )
         for raw, message in malformed:
@@ -77,26 +80,21 @@ class ChannelCaptureBoundsTests(unittest.TestCase):
                 with self.assertRaisesRegex(ChannelProtobufError, message):
                     preflight_worker_protobuf(raw, response=False)
 
-    def test_bounded_control_envelope_and_invalid_inputs(self):
-        # Keep the largest accepted envelope well-formed and close to its wire
-        # ceiling, exercising actual UTF-8 decode plus json.loads.
+    def test_bounded_control_envelope_and_protobuf(self):
         prefix = b'{"payload":{"frame_sequence":7,"padding":"'
         suffix = b'"}}'
         envelope = prefix + b"x" * (channel_wire.MAX_ENVELOPE_BYTES - len(prefix) - len(suffix)) + suffix
         self.assertEqual(len(envelope), channel_wire.MAX_ENVELOPE_BYTES)
         self.assertEqual(_delegation_sequence(envelope), 7)
-        # Exercise the control protobuf ceiling through bundle encoding,
-        # decoding, preflight and the actual generated Request parser.
         control_raw = _lf(13, _lf(5, b"z" * 8_186))
         self.assertEqual(len(control_raw), channel_wire.MAX_CONTROL_PROTOBUF_BYTES)
         preflight_worker_protobuf(control_raw, response=False,
                                   max_bytes=channel_wire.MAX_CONTROL_PROTOBUF_BYTES)
-        control_bundle = channel_wire.encode_bundle(
+        bundle = channel_wire.encode_bundle(
             "SessionStatus", channel_wire.REQUEST,
             fragment_kind=channel_wire.CONTROL, envelope=envelope,
             binding=b"b", protobuf=control_raw)
-        decoded = channel_wire.decode_bundle(
-            control_bundle, fragment_kind=channel_wire.CONTROL)
+        decoded = channel_wire.decode_bundle(bundle, fragment_kind=channel_wire.CONTROL)
         parsed = Request.FromString(decoded.protobuf)
         self.assertEqual(len(parsed.tensor.data), 8_186)
         for raw in (b"{", b"\xff", b"{}", b"[]", envelope + b"x",
@@ -106,16 +104,19 @@ class ChannelCaptureBoundsTests(unittest.TestCase):
                     _delegation_sequence(raw)
 
     @unittest.skipUnless(sys.platform == "linux", "native RSS probe requires Linux /proc and resource")
-    def test_fresh_linux_subprocess_reports_python_and_native_parser_peaks(self):
-        # Imports happen before both baselines, so module import RSS cannot be
-        # mistaken for target parser growth. Values are reported for evidence;
-        # pass/fail comes from semantic bounds above, not a brittle RSS cutoff.
-        program = r'''
+    def test_isolated_linux_parser_capture_peaks_fit_per_admission_reservations(self):
+        source_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+        paths = [source_root]
+        for path in (sysconfig.get_path("purelib"), sysconfig.get_path("platlib"),
+                     *site.getsitepackages()):
+            if path and path not in paths:
+                paths.append(path)
+        bootstrap = "sys.path[:0] = " + repr(paths) + "\n"
+        program = bootstrap + r'''
 import gc, json, resource, sys, tracemalloc
-from pathlib import Path
 from steamboat_connector import channel_wire
 from steamboat_connector.channel_protobuf import preflight_worker_protobuf, ChannelProtobufError
-from steamboat_connector.channel_rpc import _delegation_sequence, ChannelRpcError
+from steamboat_connector.channel_rpc import _delegation_sequence, _DATA_CAPTURE_BYTES, _CONTROL_CAPTURE_BYTES
 from steamboat_runtime.protocol.worker_pb2 import Request
 
 def v(x):
@@ -123,40 +124,89 @@ def v(x):
     while x>127: b.append((x&127)|128); x >>= 7
     b.append(x); return bytes(b)
 def lf(n,p): return v((n<<3)|2)+v(len(p))+p
-shape=lf(1,b"\x01\x80\x09\x40")
-tensor=shape+lf(2,b"float32_le")+lf(3,b"batch_sequence_hidden")+b"\x20\x80\x80\x12"+lf(5,bytes(1152*64*4))
-valid=lf(13,tensor)
-bad=lf(13,lf(1,bytes(900000)))
-prefix=b'{"payload":{"frame_sequence":7,"padding":"'; suffix=b'"}}'
-env=prefix+b'x'*(channel_wire.MAX_ENVELOPE_BYTES-len(prefix)-len(suffix))+suffix
+def rss_kib():
+    return int(next(x.split()[1] for x in open('/proc/self/status') if x.startswith('VmRSS:')))
+
+mode=sys.argv[1]
 gc.collect()
-rss_before=int(next(x.split()[1] for x in open('/proc/self/status') if x.startswith('VmRSS:')))
+rss_before=rss_kib()
 ru_before=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 tracemalloc.start()
-preflight_worker_protobuf(valid,response=False); obj=Request.FromString(valid)
-_delegation_sequence(env)
-try: preflight_worker_protobuf(bad,response=False)
-except ChannelProtobufError: pass
-else: raise AssertionError('malformed repeated shape accepted')
-current, peak=tracemalloc.get_traced_memory()
-rss_after=int(next(x.split()[1] for x in open('/proc/self/status') if x.startswith('VmRSS:')))
+owned=[]
+if mode == 'max_data':
+    shape=lf(1,b"\x01\x80\x09\x40")
+    tensor=shape+lf(2,b'float32_le')+lf(3,b'batch_sequence_hidden')+b'\x20\x80\x80\x12'+lf(5,bytes(1152*64*4))
+    raw=lf(13,tensor); env=b'{"payload":{"frame_sequence":7}}'
+    # Wire-only capture: binding bytes are a placeholder, no valid C1 signature
+    # or authorization is represented by this parser memory control.
+    bundle=channel_wire.encode_bundle('Step',channel_wire.REQUEST,fragment_kind=channel_wire.DATA,envelope=env,binding=b'b',protobuf=raw)
+    decoded=channel_wire.decode_bundle(bundle,fragment_kind=channel_wire.DATA)
+    preflight_worker_protobuf(decoded.protobuf,response=False)
+    parsed=Request.FromString(decoded.protobuf)
+    copied=Request(); copied.CopyFrom(parsed)
+    serialized=copied.SerializeToString(); roundtrip=Request.FromString(serialized)
+    owned.extend([raw,env,bundle,decoded,parsed,copied,serialized,roundtrip])
+    reservation=_DATA_CAPTURE_BYTES
+elif mode == 'malformed_shape':
+    raw=lf(13,lf(1,b'\x00'*900_000)); env=b'{"payload":{"frame_sequence":7}}'
+    bundle=channel_wire.encode_bundle('Step',channel_wire.REQUEST,fragment_kind=channel_wire.DATA,envelope=env,binding=b'b',protobuf=raw)
+    decoded=channel_wire.decode_bundle(bundle,fragment_kind=channel_wire.DATA)
+    try: preflight_worker_protobuf(decoded.protobuf,response=False)
+    except ChannelProtobufError as e:
+        if 'shape exceeds' not in str(e): raise
+        rejected=True
+    else: rejected=False
+    owned.extend([raw,env,bundle,decoded])
+    if not rejected: raise AssertionError('oversized repeated shape was accepted')
+    reservation=_DATA_CAPTURE_BYTES
+elif mode == 'control_density':
+    pre=b'{"payload":{"frame_sequence":7,"padding":['; post=b']}}'
+    entry=b'{"a":0}'
+    count=(channel_wire.MAX_ENVELOPE_BYTES-len(pre)-len(post)+1)//(len(entry)+1)
+    env=pre+b','.join([entry]*count)+post
+    env += b' '*(channel_wire.MAX_ENVELOPE_BYTES-len(env))
+    raw=lf(13,lf(5,b'z'*8186))
+    bundle=channel_wire.encode_bundle('SessionStatus',channel_wire.REQUEST,fragment_kind=channel_wire.CONTROL,envelope=env,binding=b'b',protobuf=raw)
+    decoded=channel_wire.decode_bundle(bundle,fragment_kind=channel_wire.CONTROL)
+    preflight_worker_protobuf(decoded.protobuf,response=False,max_bytes=channel_wire.MAX_CONTROL_PROTOBUF_BYTES)
+    sequence=_delegation_sequence(decoded.envelope)
+    parsed=Request.FromString(decoded.protobuf)
+    copied=Request(); copied.CopyFrom(parsed)
+    serialized=copied.SerializeToString(); roundtrip=Request.FromString(serialized)
+    if sequence != 7 or len(roundtrip.tensor.data) != 8186: raise AssertionError('control parse mismatch')
+    owned.extend([raw,env,bundle,decoded,parsed,copied,serialized,roundtrip])
+    reservation=_CONTROL_CAPTURE_BYTES
+else: raise AssertionError('unknown probe mode')
+current,python_peak=tracemalloc.get_traced_memory()
+rss_after=rss_kib()
 ru_after=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-print(json.dumps({'python_tracemalloc_current_bytes':current,'python_tracemalloc_peak_bytes':peak,
- 'linux_vm_rss_before_kib':rss_before,'linux_vm_rss_after_kib':rss_after,
- 'linux_ru_maxrss_before_kib':ru_before,'linux_ru_maxrss_after_kib':ru_after,
- 'valid_request_bytes':len(valid),'malformed_request_bytes':len(bad),'envelope_bytes':len(env),
- 'parsed_shape':list(obj.tensor.shape)}))
+# Linux ru_maxrss is KiB. The baseline may already include higher import RSS.
+highwater_informative=(ru_before <= rss_before and ru_after > ru_before)
+native_delta=(ru_after-ru_before)*1024 if highwater_informative else None
+if python_peak > reservation: raise AssertionError('Python traced peak exceeds per-admission capture reservation')
+if highwater_informative and native_delta > reservation: raise AssertionError('native high-water delta exceeds per-admission capture reservation')
+print(json.dumps({'mode':mode,'python_tracemalloc_current_bytes':current,'python_tracemalloc_peak_bytes':python_peak,
+ 'per_admission_reservation_bytes':reservation,'linux_vm_rss_before_kib':rss_before,'linux_vm_rss_after_kib':rss_after,
+ 'linux_vm_rss_delta_kib':rss_after-rss_before,'linux_ru_maxrss_before_kib':ru_before,'linux_ru_maxrss_after_kib':ru_after,
+ 'linux_native_peak_delta_bytes':native_delta,'linux_native_peak_status':'measured' if highwater_informative else 'unmeasured: baseline high-water masked or target did not advance it',
+ 'retained_owner_count':len(owned)}))
 '''
         env = os.environ.copy()
-        source_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
-        env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
-        result = subprocess.run([sys.executable, "-c", program], cwd=os.getcwd(), env=env,
-                                text=True, capture_output=True, check=True, timeout=30)
-        measurement = json.loads(result.stdout.strip().splitlines()[-1])
-        self.assertEqual(measurement["parsed_shape"], [1, 1152, 64])
-        self.assertGreater(measurement["python_tracemalloc_peak_bytes"], 0)
-        self.assertGreater(measurement["linux_ru_maxrss_after_kib"], 0)
-        print("capture parser subprocess measurement:", json.dumps(measurement, sort_keys=True))
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
+        for mode in ("max_data", "malformed_shape", "control_density"):
+            with self.subTest(mode=mode):
+                result = subprocess.run(
+                    [sys.executable, "-I", "-S", "-c", program, mode],
+                    cwd=os.getcwd(), env=env, text=True, capture_output=True,
+                    check=True, timeout=30)
+                measurement = json.loads(result.stdout.strip().splitlines()[-1])
+                self.assertLessEqual(measurement["python_tracemalloc_peak_bytes"],
+                                     measurement["per_admission_reservation_bytes"])
+                if measurement["linux_native_peak_status"] == "measured":
+                    self.assertLessEqual(measurement["linux_native_peak_delta_bytes"],
+                                         measurement["per_admission_reservation_bytes"])
+                print("capture parser subprocess measurement:", json.dumps(measurement, sort_keys=True))
 
 
 if __name__ == "__main__":
