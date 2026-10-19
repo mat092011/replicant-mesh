@@ -93,8 +93,12 @@ class AggregateArtifactPinRecordTests(unittest.TestCase):
                     worker_boot_id="1" * 32, clock_domain="x", captured_mono=0,
                     catalog_deadline=1, assignment_deadline=1, clock=None,
                     signed_catalog=b"", signed_assignment=b"", verifier=None)
-        self.assertEqual(os.fstat(replacement[0]).st_mode & 0o170000, 0o100000)
-        real_close(replacement[0])
+        try:
+            actual, expected = os.fstat(replacement[0]), os.stat(os.devnull)
+            self.assertEqual((actual.st_dev, actual.st_ino, actual.st_rdev),
+                             (expected.st_dev, expected.st_ino, expected.st_rdev))
+        finally:
+            real_close(replacement[0])
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "inherited descriptors require Linux")
     def test_invalid_descriptor_values_are_not_closed(self):
