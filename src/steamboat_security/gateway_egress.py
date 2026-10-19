@@ -150,14 +150,16 @@ class GatewayCoordinatorEgress:
             authorizer.local_identity.certificate_pem)
         self._configured_coordinator_certificate_der = _certificate_der(
             self._configured_coordinator_certificate_pem)
-        host_dns, host_ip = _endpoint_names(self._gateway_policy["endpoint_host"])
+        host_dns, host_ip = _endpoint_names(
+            self._gateway_policy["coordinator_endpoint_host"])
         try:
             self._tls = OwnedWorkerTLS.connect(
                 worker_certificate_pem=self._configured_coordinator_certificate_pem,
                 worker_private_key_pem=coordinator_private_key_pem,
                 gateway_ca_pem=gateway_ca_pem,
-                endpoint_host=self._gateway_policy["endpoint_host"],
-                endpoint_port=self._gateway_policy["endpoint_port"], clock=self.clock)
+                endpoint_host=self._gateway_policy["coordinator_endpoint_host"],
+                endpoint_port=self._gateway_policy["coordinator_endpoint_port"],
+                clock=self.clock)
         except OwnedWorkerTLSError as error:
             if error.cleanup_status == "uncertain":
                 raise GatewayEgressError(
@@ -212,7 +214,8 @@ class GatewayCoordinatorEgress:
                 or worker["model_id"] != target.model_id
                 or worker["gateway_id"] != self.gateway_id):
             raise GatewayEgressError("channel policy worker differs from the immutable C1 target")
-        host_dns, host_ip = _endpoint_names(self._gateway_policy["endpoint_host"])
+        host_dns, host_ip = _endpoint_names(
+            self._gateway_policy["coordinator_endpoint_host"])
         if host_dns is None and host_ip is None:
             raise GatewayEgressError("gateway endpoint is invalid")
 
@@ -318,6 +321,25 @@ class GatewayCoordinatorEgress:
     def _assert_transport_live_locked(self):
         if self._closed or self._faulted or not is_owned_worker_tls(self._tls):
             raise GatewayEgressError("gateway egress generation is closed or faulted")
+        if not self._tls.handshake_complete:
+            try:
+                pending_view = self.policy_store.current()
+                pending_gateway = pending_view.gateway(self.gateway_id)
+                if (pending_view.revision != self._view.revision
+                        or pending_view.policy_digest != self._view.policy_digest
+                        or pending_gateway is None
+                        or pending_gateway["coordinator_endpoint_host"]
+                        != self._gateway_policy["coordinator_endpoint_host"]
+                        or pending_gateway["coordinator_endpoint_port"]
+                        != self._gateway_policy["coordinator_endpoint_port"]):
+                    raise GatewayEgressError(
+                        "coordinator gateway endpoint or policy changed; reconnect required")
+            except Exception as error:
+                self._fault_locked()
+                if isinstance(error, GatewayEgressError):
+                    raise
+                raise GatewayEgressError(
+                    "coordinator gateway policy is no longer live") from error
         try:
             if not self._tls.handshake_complete:
                 self._tls.do_handshake()
@@ -344,6 +366,14 @@ class GatewayCoordinatorEgress:
             if (view.revision != self._view.revision
                     or view.policy_digest != self._view.policy_digest):
                 raise GatewayEgressError("channel policy changed; reconnect required")
+            current_gateway = view.gateway(self.gateway_id)
+            if (current_gateway is None
+                    or current_gateway["coordinator_endpoint_host"]
+                    != self._gateway_policy["coordinator_endpoint_host"]
+                    or current_gateway["coordinator_endpoint_port"]
+                    != self._gateway_policy["coordinator_endpoint_port"]):
+                raise GatewayEgressError(
+                    "coordinator gateway endpoint changed; reconnect required")
             if view.deadline_monotonic < self._view.deadline_monotonic:
                 object.__setattr__(self, "_view", view)
             if sample.monotonic >= self._view.deadline_monotonic:

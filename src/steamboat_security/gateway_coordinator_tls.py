@@ -291,7 +291,7 @@ class OwnedGatewayCoordinatorTLS:
             gateway = policy_view.gateway(gateway_id)
             if gateway is None:
                 raise GatewayCoordinatorTLSError("gateway is absent from current channel policy")
-            dns, ip = _endpoint_names(gateway["endpoint_host"])
+            dns, ip = _endpoint_names(gateway["coordinator_endpoint_host"])
             profile = verify_channel_certificate(
                 gateway_certificate_pem, gateway_ca_pem, kind="gateway",
                 expected_identity=gateway_id, now=sample.wall,
@@ -416,16 +416,7 @@ class OwnedGatewayCoordinatorTLS:
             if sample.monotonic >= self._started + MAX_HANDSHAKE_SECONDS:
                 self._fault_locked()
                 raise GatewayCoordinatorTLSError("TLS handshake deadline exceeded")
-            try:
-                current = self.policy_store.current()
-            except Exception as error:
-                self._fault_locked()
-                raise GatewayCoordinatorTLSError("current channel policy is unavailable") from error
-            if (current.revision != self._policy_view.revision
-                    or current.policy_digest != self._policy_view.policy_digest):
-                self._fault_locked()
-                raise GatewayCoordinatorTLSError(
-                    "channel policy changed during TLS handshake")
+            self._assert_policy_endpoint_current_locked()
             return False
 
     @property
@@ -473,6 +464,7 @@ class OwnedGatewayCoordinatorTLS:
                 if sample.monotonic >= self._started + MAX_HANDSHAKE_SECONDS:
                     self._fault_locked()
                     raise GatewayCoordinatorTLSError("TLS handshake deadline exceeded")
+                self._assert_policy_endpoint_current_locked()
             if self.__outgoing.pending > MAX_PENDING_BIO_BYTES:
                 self._fault_locked()
                 raise GatewayCoordinatorTLSError("TLS output BIO exceeds its bound")
@@ -486,6 +478,8 @@ class OwnedGatewayCoordinatorTLS:
             self._require_open_locked()
             if self._handshake_done:
                 self._assert_live_locked()
+            else:
+                self._assert_policy_endpoint_current_locked()
             if type(data) is not bytes or not data or len(data) > MAX_CHUNK_BYTES:
                 self._fault_locked()
                 raise GatewayCoordinatorTLSError("TLS input chunk is empty or exceeds its bound")
@@ -509,6 +503,8 @@ class OwnedGatewayCoordinatorTLS:
     def do_handshake(self):
         with self._lock:
             self._require_open_locked()
+            if not self._handshake_done:
+                self._assert_policy_endpoint_current_locked()
             self._drive_handshake_locked()
             return self._handshake_done
 
@@ -557,6 +553,29 @@ class OwnedGatewayCoordinatorTLS:
             except GatewayCoordinatorTLSError:
                 self._fault_locked()
                 return True
+
+    def _assert_policy_endpoint_current_locked(self):
+        try:
+            current = self.policy_store.current()
+        except Exception as error:
+            self._fault_locked()
+            raise GatewayCoordinatorTLSError(
+                "current channel policy is unavailable") from error
+        if (current.revision != self._policy_view.revision
+                or current.policy_digest != self._policy_view.policy_digest):
+            self._fault_locked()
+            raise GatewayCoordinatorTLSError(
+                "channel policy changed during coordinator TLS handshake")
+        endpoint = current.gateway(self.gateway_id)
+        if (endpoint is None
+                or endpoint["coordinator_endpoint_host"]
+                != self._gateway_record["coordinator_endpoint_host"]
+                or endpoint["coordinator_endpoint_port"]
+                != self._gateway_record["coordinator_endpoint_port"]):
+            self._fault_locked()
+            raise GatewayCoordinatorTLSError(
+                "coordinator gateway endpoint changed during TLS handshake")
+        return current
 
     def authorize_route(self, channel, *, method, target_device_id,
                         worker_boot_id, assignment_id, model_id):
@@ -796,6 +815,15 @@ class OwnedGatewayCoordinatorTLS:
                 or policy.policy_digest != self._policy_view.policy_digest):
             self._fault_locked()
             raise GatewayCoordinatorTLSError("channel policy changed; reconnect required")
+        endpoint = policy.gateway(self.gateway_id)
+        if (endpoint is None
+                or endpoint["coordinator_endpoint_host"]
+                != self._gateway_record["coordinator_endpoint_host"]
+                or endpoint["coordinator_endpoint_port"]
+                != self._gateway_record["coordinator_endpoint_port"]):
+            self._fault_locked()
+            raise GatewayCoordinatorTLSError(
+                "coordinator gateway endpoint changed; reconnect required")
         if (actor.role != "personal_coordinator"
                 or actor.account_id != self.tenant_account_id
                 or actor.device_id != self._channel.actor_device_id

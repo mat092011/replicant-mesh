@@ -80,12 +80,13 @@ class GatewayEgressTests(unittest.TestCase):
             now=identity_tests.NOW - 3600)
         self.gateway_key = generate_private_key_pem()
         csr = make_channel_csr(self.gateway_key, kind="gateway",
-            identity="gw-east", dns_names=("gateway.example",))
+            identity="gw-east", dns_names=("worker.gateway.example",
+                                            "coordinator.gateway.example"))
         self.gateway_cert = issue_channel_certificate(
             self.gateway_ca, self.gateway_ca_key, csr, kind="gateway",
             identity="gw-east", now=datetime.fromtimestamp(
                 identity_tests.NOW - 30, timezone.utc), lifetime_seconds=350,
-            dns_names=("gateway.example",))
+            dns_names=("worker.gateway.example", "coordinator.gateway.example"))
         gateway = x509.load_pem_x509_certificate(self.gateway_cert)
         actor = self.fx.records["coordinator"]
         host = self.fx.records["host"]
@@ -94,7 +95,7 @@ class GatewayEgressTests(unittest.TestCase):
             _public_pem(self.policy_key), clock=self.clock,
             durable_commit=lambda *_: None)
         self.policy_payload = {
-            "version": 1, "revision": 1,
+            "version": 2, "revision": 1,
             "issued_at": identity_tests.NOW,
             "expires_at": identity_tests.NOW + 300,
             "gateways": [{
@@ -103,7 +104,9 @@ class GatewayEgressTests(unittest.TestCase):
                 "public_key_sha256": public_key_sha256(gateway.public_key()),
                 "not_before": identity_tests.NOW - 30,
                 "not_after": identity_tests.NOW + 320,
-                "endpoint_host": "gateway.example", "endpoint_port": 443,
+                "endpoint_host": "worker.gateway.example", "endpoint_port": 443,
+                "coordinator_endpoint_host": "coordinator.gateway.example",
+                "coordinator_endpoint_port": 444,
             }],
             "workers": [{
                 "account_id": host["account_id"], "device_id": host["device_id"],
@@ -246,6 +249,9 @@ class GatewayEgressTests(unittest.TestCase):
             lease_token="", max_positions=32, lifetime_ms=20_000, idle_lease_ms=10_000)
 
     def test_route_guard_reuses_c1_scope_and_checks_live_gateway_on_completion(self):
+        self.assertEqual(self.egress._tls.endpoint_host,
+                         "coordinator.gateway.example")
+        self.assertEqual(self.egress._tls.endpoint_port, 444)
         guard = self.egress.mint_route_guard(
             method="OpenSession", trusted_request_context=self.context)
         auth = self.adapter.authorize_gateway_outbound(
@@ -326,12 +332,13 @@ class GatewayEgressTests(unittest.TestCase):
     def test_wrong_gateway_leaf_wrong_context_and_clock_fault_fail_closed(self):
         wrong_key = generate_private_key_pem()
         wrong_csr = make_channel_csr(wrong_key, kind="gateway",
-            identity="gw-west", dns_names=("gateway.example",))
+            identity="gw-west", dns_names=("worker.gateway.example",
+                                            "coordinator.gateway.example"))
         wrong_cert = issue_channel_certificate(
             self.gateway_ca, self.gateway_ca_key, wrong_csr, kind="gateway",
             identity="gw-west", now=datetime.fromtimestamp(
                 identity_tests.NOW - 30, timezone.utc), lifetime_seconds=350,
-            dns_names=("gateway.example",))
+            dns_names=("worker.gateway.example", "coordinator.gateway.example"))
         wrong_egress = GatewayCoordinatorEgress.connect(
             authorizer=self.adapter, policy_store=self.policy_store,
             logical_host_certificate_pem=self.fx.credentials["host"]["certificate"],
@@ -410,6 +417,41 @@ class GatewayEgressTests(unittest.TestCase):
         with self.assertRaises(GatewayEgressError):
             self.egress.take_encrypted()
         self.assertTrue(self.egress._faulted)
+
+    def test_coordinator_endpoint_replacement_retires_same_gateway_identity(self):
+        original = dict(self.policy_payload["gateways"][0])
+        payload = dict(self.policy_payload)
+        payload["revision"] += 1
+        payload["gateways"] = [dict(original,
+            coordinator_endpoint_host="alternate.coordinator.gateway.example")]
+        self.policy_store.install(sign_channel_policy(
+            payload, _private_pem(self.policy_key)))
+        self.assertEqual(payload["gateways"][0]["certificate_sha256"],
+                         original["certificate_sha256"])
+        with self.assertRaises(GatewayEgressError):
+            self.egress.assert_transport_live()
+        self.assertTrue(self.egress._faulted)
+
+    def test_coordinator_endpoint_hostname_must_match_gateway_leaf_san(self):
+        payload = dict(self.policy_payload)
+        payload["revision"] += 1
+        payload["gateways"] = [dict(payload["gateways"][0],
+            coordinator_endpoint_host="unlisted.coordinator.gateway.example")]
+        self.policy_store.install(sign_channel_policy(
+            payload, _private_pem(self.policy_key)))
+        egress = GatewayCoordinatorEgress.connect(
+            authorizer=self.adapter, policy_store=self.policy_store,
+            logical_host_certificate_pem=self.fx.credentials["host"]["certificate"],
+            gateway_id="gw-east", gateway_ca_pem=self.gateway_ca,
+            coordinator_private_key_pem=self.fx.credentials["coordinator"]["key"])
+        server, temporary = self._make_server()
+        try:
+            with self.assertRaises((GatewayEgressError, OwnedWorkerTLSError)):
+                self._finish_handshake(egress, server, temporary)
+        finally:
+            egress.close()
+            for path in temporary[2]:
+                Path(path).unlink(missing_ok=True)
 
     def test_terminal_cleanup_grace_is_method_limited_and_bootstrap_is_not_double_spent(self):
         self.context = self._make_context(hard_lifetime=0.05)

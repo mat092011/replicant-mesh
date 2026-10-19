@@ -64,7 +64,7 @@ class GatewayCoordinatorTLSOwnerTests(unittest.TestCase):
             worker_certificate_pem=credential["certificate"],
             worker_private_key_pem=credential["key"],
             gateway_ca_pem=self.fixture.gateway_ca,
-            endpoint_host="gateway.example", endpoint_port=443,
+            endpoint_host="coordinator.gateway.example", endpoint_port=444,
             clock=self.fixture.clock)
 
     def _handshake(self, client, server):
@@ -131,6 +131,9 @@ class GatewayCoordinatorTLSOwnerTests(unittest.TestCase):
         return {"certificate": cert, "key": key}
 
     def test_actual_c1_coordinator_peer_mints_identity_and_route_guard(self):
+        self.assertEqual(self.server._gateway_record["coordinator_endpoint_host"],
+                         "coordinator.gateway.example")
+        self.assertEqual(self.server._gateway_record["coordinator_endpoint_port"], 444)
         channel = self.server.authenticated_channel
         self.assertIs(type(channel), AuthenticatedCoordinatorChannel)
         self.assertTrue(is_authenticated_coordinator_channel(channel))
@@ -278,6 +281,30 @@ class GatewayCoordinatorTLSOwnerTests(unittest.TestCase):
             channel.assert_live()
         with self.assertRaises(GatewayCoordinatorTLSError):
             guard.assert_live()
+
+    def test_coordinator_endpoint_replacement_retires_same_gateway_identity(self):
+        channel = self.server.authenticated_channel
+        payload = dict(self.fixture.policy_payload)
+        payload["revision"] += 1
+        payload["gateways"] = [dict(payload["gateways"][0],
+            coordinator_endpoint_port=445)]
+        self.fixture.policy_store.install(egress_tests.sign_channel_policy(
+            payload, egress_tests._private_pem(self.fixture.policy_key)))
+        self.assertEqual(payload["gateways"][0]["certificate_sha256"],
+                         self.fixture.policy_payload["gateways"][0]["certificate_sha256"])
+        self.assertTrue(self.server.poll_unavailable())
+        with self.assertRaises(GatewayCoordinatorTLSError):
+            channel.assert_live()
+
+    def test_coordinator_listener_rejects_worker_only_gateway_certificate_san(self):
+        payload = dict(self.fixture.policy_payload)
+        payload["revision"] += 1
+        payload["gateways"] = [dict(payload["gateways"][0],
+            coordinator_endpoint_host="unlisted.coordinator.gateway.example")]
+        self.fixture.policy_store.install(egress_tests.sign_channel_policy(
+            payload, egress_tests._private_pem(self.fixture.policy_key)))
+        with self.assertRaises(GatewayCoordinatorTLSError):
+            self._new_server()
 
     def _assert_policy_change_during_real_tls_flight_rejected(self, *, replace_pin):
         server = self._new_server()

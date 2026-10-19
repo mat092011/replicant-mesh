@@ -48,7 +48,7 @@ class ChannelPolicyTests(unittest.TestCase):
         )
         self.key = ec.generate_private_key(ec.SECP256R1())
         self.payload = {
-            "version": 1,
+            "version": 2,
             "revision": 1,
             "issued_at": 1000,
             "expires_at": 1100,
@@ -62,6 +62,8 @@ class ChannelPolicyTests(unittest.TestCase):
                     "not_after": 1500,
                     "endpoint_host": "gateway.example.net",
                     "endpoint_port": 443,
+                    "coordinator_endpoint_host": "coordinator.example.net",
+                    "coordinator_endpoint_port": 444,
                 }
             ],
             "workers": [
@@ -120,6 +122,11 @@ class ChannelPolicyTests(unittest.TestCase):
     def test_install_view_is_immutable_and_lookup_matches_full_route(self):
         view = self.store.install(self.sign())
         self.assertEqual(view.gateway("gw-east")["serial"], "ab12")
+        self.assertEqual(view.gateway("gw-east")["endpoint_host"], "gateway.example.net")
+        self.assertEqual(view.gateway("gw-east")["endpoint_port"], 443)
+        self.assertEqual(view.gateway("gw-east")["coordinator_endpoint_host"],
+                         "coordinator.example.net")
+        self.assertEqual(view.gateway("gw-east")["coordinator_endpoint_port"], 444)
         self.assertEqual(
             view.worker("dev_" + "2" * 32, "4" * 32)["assignment_id"], "asg_" + "5" * 32
         )
@@ -164,10 +171,15 @@ class ChannelPolicyTests(unittest.TestCase):
         self.assertLessEqual(
             s, 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551 // 2
         )
-        # A valid signature from another domain is rejected.
+        self.assertEqual(DOMAIN, b"steamboat-channel-policy-v2\0")
+        # A valid signature from the previous domain is rejected.
         alternate = self.key.sign(
-            canonical_json(self.payload), ec.ECDSA(hashes.SHA256())
-        )
+            b"steamboat-channel-policy-v1\0" + canonical_json(self.payload),
+            ec.ECDSA(hashes.SHA256()))
+        ar, ass = decode_dss_signature(alternate)
+        order = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+        if ass > order // 2:
+            alternate = encode_dss_signature(ar, order - ass)
         envelope["signature"] = base64.b64encode(alternate).decode("ascii")
         with self.assertRaises(SnapshotError):
             self.new_store().install(canonical_json(envelope))
@@ -182,10 +194,23 @@ class ChannelPolicyTests(unittest.TestCase):
             self.new_store().install(b" " + signed)
         self.assertTrue(DOMAIN.endswith(b"\0"))
 
+    def test_v1_policy_and_ambiguous_or_invalid_endpoints_are_rejected(self):
+        with self.assertRaises(SnapshotError):
+            self.sign({**self.payload, "version": 1})
+        gateway = self.payload["gateways"][0]
+        for changes in (
+                {"coordinator_endpoint_host": "bad name"},
+                {"coordinator_endpoint_port": 65536},
+                {"coordinator_endpoint_host": gateway["endpoint_host"],
+                 "coordinator_endpoint_port": gateway["endpoint_port"]}):
+            invalid = {**self.payload, "gateways": [{**gateway, **changes}]}
+            with self.subTest(changes=changes), self.assertRaises(SnapshotError):
+                self.sign(invalid)
+
     def test_rejects_duplicate_nonfinite_unknown_and_oversize_before_crypto(self):
         signed = self.sign()
         duplicate = signed.decode().replace(
-            b'"version":1,'.decode(), b'"version":1,"version":1,'.decode(), 1
+            b'"version":2,'.decode(), b'"version":2,"version":2,'.decode(), 1
         )
         for raw in (
             duplicate.encode(),

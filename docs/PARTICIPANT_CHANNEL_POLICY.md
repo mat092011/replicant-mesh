@@ -16,28 +16,37 @@ gateway or worker participants.
 
 ## Encoding and limits
 
-`sign_channel_policy(payload, private_key_pem)` validates the closed v1 schema
+`sign_channel_policy(payload, private_key_pem)` validates the closed v2 schema
 and returns canonical UTF-8 JSON containing exactly `payload` and a base64
 DER `signature`. The signature is ECDSA P-256/SHA-256 over
-`b"steamboat-channel-policy-v1\0" + canonical_json(payload)`. Signatures use
+`b"steamboat-channel-policy-v2\0" + canonical_json(payload)`. Signatures use
 canonical base64 and low-S DER. The entire envelope is limited to 64 KiB.
 Verification rejects duplicate JSON keys, non-finite values, noncanonical
 bytes, unknown or missing fields, noncanonical signature encodings, and
-oversized input.
+oversized input. Version 1 and the previous signature domain are rejected with
+no fallback. This private C2 experiment protocol change does not change C1
+snapshots, grants, or credentials.
+See [the endpoint split record](PARTICIPANT_CHANNEL_ENDPOINTS_V2.md) for its
+purpose-specific behavior and current integration limits.
 
 The payload has exactly these top-level fields:
 
 ```json
-{"version":1,"revision":1,"issued_at":1000,"expires_at":1100,"gateways":[],"workers":[],"routes":[]}
+{"version":2,"revision":1,"issued_at":1000,"expires_at":1100,"gateways":[],"workers":[],"routes":[]}
 ```
 
 The policy lifetime is positive and at most 300 seconds. There may be at most
 4 gateways, 8 workers, and 32 routes. Lists are sorted and unique. Every
 gateway record contains exactly `gateway_id`, `serial`, `certificate_sha256`,
-`public_key_sha256`, `not_before`, `not_after`, `endpoint_host`, and
-`endpoint_port`. Gateway IDs use the channel certificate gateway identity
-grammar. Endpoint hosts are fixed canonical lowercase DNS names or canonical
-IPv4/IPv6 literals; wildcards and URLs are rejected. Ports are 1–65535.
+`public_key_sha256`, `not_before`, `not_after`, `endpoint_host`, `endpoint_port`,
+`coordinator_endpoint_host`, and `coordinator_endpoint_port`. `endpoint_*` pins
+the worker-initiated TLS listener; `coordinator_endpoint_*` pins the separate
+coordinator mTLS listener. Both endpoint hosts are fixed canonical lowercase
+DNS names or canonical IPv4/IPv6 literals; wildcards and URLs are rejected.
+Ports are 1–65535. The complete host/port pairs must differ so one TCP endpoint
+cannot serve both TLS purposes. Each listener checks the shared gateway
+certificate against its purpose-specific endpoint. When the certificate is
+shared, its SANs must cover both names.
 
 Every worker record contains exactly `account_id`, `device_id`, `host_serial`,
 `host_credential_epoch`, `host_certificate_sha256`, `worker_boot_id`,

@@ -80,23 +80,26 @@ class GatewayDelegationTests(unittest.TestCase):
 
         self.gateway_key = generate_private_key_pem()
         gateway_csr = make_channel_csr(self.gateway_key, kind="gateway",
-            identity="gw-east", dns_names=("gateway.example.net",))
+            identity="gw-east", dns_names=("gateway.example.net",
+                                           "coordinator.example.net"))
         self.gateway_pem = issue_channel_certificate(self.gateway_ca,
             self.gateway_ca_key, gateway_csr, kind="gateway", identity="gw-east",
             now=datetime.fromtimestamp(NOW - 20, timezone.utc), lifetime_seconds=600,
-            dns_names=("gateway.example.net",))
+            dns_names=("gateway.example.net", "coordinator.example.net"))
         gateway_cert = x509.load_pem_x509_certificate(self.gateway_pem)
         actor_cert = x509.load_pem_x509_certificate(self.actor_pem)
         host_cert = x509.load_pem_x509_certificate(self.host_pem)
         self.payload = {
-            "version": 1, "revision": 1, "issued_at": int(NOW - 10),
+            "version": 2, "revision": 1, "issued_at": int(NOW - 10),
             "expires_at": int(NOW + 270),
             "gateways": [{"gateway_id": "gw-east",
                 "serial": serial_hex(gateway_cert.serial_number),
                 "certificate_sha256": certificate_sha256(gateway_cert),
                 "public_key_sha256": public_key_sha256(gateway_cert.public_key()),
                 "not_before": int(NOW - 20), "not_after": int(NOW + 280),
-                "endpoint_host": "gateway.example.net", "endpoint_port": 443}],
+                "endpoint_host": "gateway.example.net", "endpoint_port": 443,
+                "coordinator_endpoint_host": "coordinator.example.net",
+                "coordinator_endpoint_port": 444}],
             "workers": [{"account_id": WORKER_ACCOUNT, "device_id": WORKER_DEVICE,
                 "host_serial": serial_hex(host_cert.serial_number),
                 "host_credential_epoch": 2,

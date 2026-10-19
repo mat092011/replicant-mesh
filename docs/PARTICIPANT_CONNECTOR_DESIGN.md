@@ -45,6 +45,11 @@ purpose-specific channel certificate profile under the pinned cohort CA:
 
 Both profiles use P-256, SHA-256, exact key-usage/extension/SAN constraints and a
 maximum 900-second lifetime. Gateway clients retain fixed DNS/IP verification.
+A C2 channel-policy v2 record pins separate worker and coordinator TLS endpoint
+pairs. Worker TLS factories use only the worker endpoint; coordinator TLS
+factories use only the coordinator endpoint. Both listeners retain fixed
+certificate profiles, and any policy revision changing either endpoint retires
+existing generations.
 A valid channel certificate alone confers no enrollment, readiness, revocation
 status, work permission or delegation authority. Explicit operator policy must
 pin its identity and certificate and authorize its purpose. C1 leaves cannot

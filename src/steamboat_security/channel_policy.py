@@ -36,7 +36,7 @@ from .ids import validate_boot, validate_id
 MAX_CHANNEL_POLICY_BYTES = 64 * 1024
 MAX_CHANNEL_POLICY_LIFETIME_SECONDS = 300
 MAX_CHANNEL_LIFETIME_SECONDS = 900
-DOMAIN = b"steamboat-channel-policy-v1\0"
+DOMAIN = b"steamboat-channel-policy-v2\0"
 _HEX64 = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
 _SERIAL = re.compile(r"^[1-9a-f][0-9a-f]{0,39}$", re.ASCII)
 _GATEWAY = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$", re.ASCII)
@@ -62,6 +62,8 @@ _GATEWAY_FIELDS = {
     "not_after",
     "endpoint_host",
     "endpoint_port",
+    "coordinator_endpoint_host",
+    "coordinator_endpoint_port",
 }
 _WORKER_FIELDS = {
     "account_id",
@@ -170,7 +172,7 @@ def _endpoint(value):
 def _validate_payload(payload, signer_hash):
     if type(payload) is not dict or set(payload) != _POLICY_FIELDS:
         raise SnapshotError("channel policy has unknown or missing fields")
-    if _integer(payload["version"], "version", 1) != 1:
+    if _integer(payload["version"], "version", 1) != 2:
         raise SnapshotError("unsupported channel policy version")
     revision = _integer(payload["revision"], "revision", 1)
     issued = _integer(payload["issued_at"], "issued_at")
@@ -220,6 +222,14 @@ def _validate_payload(payload, signer_hash):
         port = _integer(item["endpoint_port"], "endpoint_port", 1)
         if port > 65535:
             raise SnapshotError("channel policy endpoint port is invalid")
+        _endpoint(item["coordinator_endpoint_host"])
+        coordinator_port = _integer(
+            item["coordinator_endpoint_port"], "coordinator_endpoint_port", 1)
+        if coordinator_port > 65535:
+            raise SnapshotError("channel policy coordinator endpoint port is invalid")
+        if (item["endpoint_host"], port) == (
+                item["coordinator_endpoint_host"], coordinator_port):
+            raise SnapshotError("worker and coordinator TLS endpoints must be distinct")
         gateways[gid] = (serial, cert, key, start, stop)
     workers = {}
     prior = None
@@ -410,7 +420,7 @@ def _verification_key(pem):
 
 
 def sign_channel_policy(payload: dict, private_key_pem: bytes) -> bytes:
-    """Validate and sign a v1 payload using a dedicated operator policy key."""
+    """Validate and sign a v2 payload using a dedicated operator policy key."""
     key = _signing_key(private_key_pem)
     _validate_payload(payload, public_key_sha256(key.public_key()))
     signed = DOMAIN + canonical_json(payload)
@@ -643,6 +653,16 @@ class ChannelPolicyStore:
                         ),
                         "endpoint_port": next(
                             x["endpoint_port"]
+                            for x in payload["gateways"]
+                            if x["gateway_id"] == k
+                        ),
+                        "coordinator_endpoint_host": next(
+                            x["coordinator_endpoint_host"]
+                            for x in payload["gateways"]
+                            if x["gateway_id"] == k
+                        ),
+                        "coordinator_endpoint_port": next(
+                            x["coordinator_endpoint_port"]
                             for x in payload["gateways"]
                             if x["gateway_id"] == k
                         ),
