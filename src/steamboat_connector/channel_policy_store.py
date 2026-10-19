@@ -647,6 +647,18 @@ class PersistentChannelPolicyStore:
             return self._store.current_with_sample()
 
     @property
+    def core_store(self):
+        """Return the exact guarded core view for APIs that require its type.
+
+        The persistent owner must remain alive for the full lifetime of every
+        consumer. Access is serialized with normal operations and verifies the
+        durable namespace before exposing the core object.
+        """
+        with self._operation():
+            self._store.current()
+            return self._store
+
+    @property
     def faulted(self):
         return self._faulted or self._store._faulted
 
