@@ -597,4 +597,3 @@ class C2CoordinatorChannelFixture:
                     _RETAINED.remove(self._retention)
         else:
             self._retention["state"] = "uncertain"
-
