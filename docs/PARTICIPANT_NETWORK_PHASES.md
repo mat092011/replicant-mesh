@@ -208,9 +208,11 @@ Begin C4 integration and optional C8 UI scaffolding; no community pilot yet.
 
 **Implementation resumed, 2026-10-19:** the maintainer authorized continuing C2
 after completed C1 publication. The [component record](experiments/2026-10-19-participant-c2-components.md)
-records 87 passing, skip-free Docker component tests, including same-container
-assigned-handler numerical parity. Actual daemon enforcement and the authenticated
-outbound split-host route remain incomplete; every C2 checkbox remains open.
+records a 299-case, skip-free Docker component gate, including same-container
+assigned-handler numerical parity and real worker stream-loss cleanup. A separate
+ZimaBlade OS probe verified task-scoped CPU/RAM enforcement. Actual combined
+daemon enforcement, both authenticated gateway hops and the outbound split-host
+route remain incomplete; every C2 checkbox remains open.
 The [connector design](PARTICIPANT_CONNECTOR_DESIGN.md) freezes the required gates.
 
 ## C3 — Validate one GPU execution path

@@ -862,4 +862,16 @@ cause is established. The full run was on the laptop; it does not replace or
 change the separately frozen split-host evidence. C2–C9 and research P0–P8
 statuses remain unchanged. Work stops after C1 as requested.
 
-**C2 resumed, 2026-10-19:** the maintainer explicitly authorized further C2 implementation after the completed C1 stop point. C1 remains accepted and published at `89ea4b1`. The [C2 component record](experiments/2026-10-19-participant-c2-components.md) records 87 unique Docker cases passed with zero skips, including actual assigned-handler forced-logit comparisons and interleaved cache cleanup on one container. This is component evidence only. C2.1–C2.6 and its exit gate remain open pending real daemon/resource/ownership integration, authenticated gateway/delegation, and actual split-host outbound inference/lifecycle validation. C2 remains unpublished; C3 and research gate statuses are unchanged. Work continues on the available laptop and ZimaBlade, stopping if additional hardware is required.
+**C2 resumed, 2026-10-19:** the maintainer authorized further implementation
+after the completed C1 stop point. C1 remains accepted and published at `89ea4b1`.
+The [C2 component record](experiments/2026-10-19-participant-c2-components.md)
+records a 299-case, skip-free Docker gate: shared-store assigned-handler numerical
+comparison, real process ownership, explicit gateway admission and actual
+`WorkerHandler` stream-loss cleanup. A separate bounded ZimaBlade OS probe
+measured kernel CPU throttling and a role memory-limit OOM kill, with task
+cleanup. These are component results. C2.1–C2.6 and its exit gate remain open
+pending actual daemon/resource integration, both authenticated gateway hops,
+bounded socket transport and shared metering, and the split-host outbound
+numerical/lifecycle gate. C2 is unpublished; C3 and research gate statuses are
+unchanged. Work uses the laptop and ZimaBlade and stops if additional hardware
+is required.
