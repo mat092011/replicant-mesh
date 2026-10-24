@@ -8,7 +8,8 @@ requested a direct commit to `main`. The starting main commit was `2a63036`.
 Renamed the Python package to `replicant_mesh`, environment prefix to
 `REPLICANT_MESH_`, RPC namespace to `replicant.mesh.v1`, and local Docker
 images/projects/scripts to Replicant Mesh names. Updated current documentation,
-tests and module commands. Historical experiment JSON, source-freeze records,+image digests, numerical results and source commits remain unchanged. Dated
+tests and module commands. Historical experiment JSON, source-freeze records,
+image digests, numerical results and source commits remain unchanged. Dated
 Markdown records now identify their historical context. See the
 [migration guide](../RENAMING.md).
 
