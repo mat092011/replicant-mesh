@@ -107,7 +107,8 @@ def main():
                'history_commits': int(commit_count), 'source_files': len(names),
                'history_findings': len(history), 'source_findings': len(current),
                'rules': dict(Counter(item['RuleID'] for item in history + current)),
-               'redacted': True, 'allowlist': 'five exact public artifact identities',
+               'redacted': True,
+               'allowlist': 'exact public artifact identities and reviewed synthetic test/code markers',
                'inline_allow_comments_disabled': True, 'positive_control_passed': True}
     (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(summary, indent=2))

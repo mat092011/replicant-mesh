@@ -10,8 +10,7 @@ third-party software and model artifacts retain their own terms.
 
 Existing checkouts and lab deployments should follow the
 [rename and migration guide](docs/RENAMING.md) before upgrading.
-The project is now Replicant Mesh; the GitHub repository address remains
-`mat092011/steamboat_net` until the owner completes the repository-settings rename.
+The canonical GitHub repository is `mat092011/replicant-mesh`.
 
 The primary question is whether sharing resources is useful after communication,
 scheduling and verification costs. Faster generation for one user is a separate
@@ -110,7 +109,7 @@ change the owned PyTorch manifest.
 Clone the public source if you do not already have a checkout:
 
 ```powershell
-git clone https://github.com/mat092011/steamboat_net.git replicant-mesh
+git clone https://github.com/mat092011/replicant-mesh.git
 cd replicant-mesh
 ```
 

@@ -3,6 +3,11 @@
 Date: 2026-10-24. The maintainer selected **Replicant Mesh** and explicitly
 requested a direct commit to `main`. The starting main commit was `2a63036`.
 
+**Follow-up:** the maintainer subsequently completed the hosting rename. See the
+[CI repair and hosting verification record](2026-10-24-ci-secret-scan.md) for the
+resolved history-scan findings and current repository links. The blocked hosting
+attempt and scan results below describe the initial rename work.
+
 ## Scope
 
 Renamed the Python package to `replicant_mesh`, environment prefix to

@@ -12,11 +12,10 @@ computation and activations do not provide prompt confidentiality.
 ## Private vulnerability reporting
 
 GitHub private vulnerability reporting is enabled and its repository setting was
-verified on 2026-10-17. No email address is required. Use
-[Report a vulnerability](https://github.com/mat092011/steamboat_net/security/advisories/new)
+verified again after the repository rename on 2026-10-24. No email address is required. Use
+[Report a vulnerability](https://github.com/mat092011/replicant-mesh/security/advisories/new)
 to submit a private GitHub report to the maintainer.
-This link uses the current repository address while its hosting rename is pending;
-the verification script resolves the live repository name by its stable GitHub ID.
+The verification script resolves the live repository name by its stable GitHub ID.
 
 The maintainer can recheck the live setting with:
 

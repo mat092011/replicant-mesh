@@ -1,9 +1,10 @@
 # Migrating to Replicant Mesh
 
 On 2026-10-24 the project was renamed from Steamboat Net to **Replicant Mesh**.
-The planned repository name is `mat092011/replicant-mesh`. Its current address is
-[mat092011/steamboat_net](https://github.com/mat092011/steamboat_net); the hosting
-rename remains pending because the connected integration cannot change repository settings.
+The canonical repository is
+[mat092011/replicant-mesh](https://github.com/mat092011/replicant-mesh).
+The maintainer completed the GitHub hosting rename, verified on 2026-10-24
+against stable repository ID `1416538470`.
 This is a coordinated source/runtime rename. All clients, workers and coordinators
 must be upgraded together; the old Python imports, environment variables and RPC
 service paths are not compatibility aliases.
@@ -13,7 +14,7 @@ service paths are not compatibility aliases.
 | Surface | Previous name | Current name |
 | --- | --- | --- |
 | Project | Steamboat Net / `steamboat_net` | Replicant Mesh |
-| GitHub repository | `mat092011/steamboat_net` | `mat092011/replicant-mesh` (hosting rename pending) |
+| GitHub repository | `mat092011/steamboat_net` | `mat092011/replicant-mesh` |
 | Python package and module commands | `steamboat_runtime` | `replicant_mesh` |
 | Runtime environment prefix | `STEAMBOAT_` | `REPLICANT_MESH_` |
 | Worker RPC service | `steamboat.v1.Worker` | `replicant.mesh.v1.Worker` |
@@ -52,7 +53,7 @@ model identifiers, revisions, dependency locks and numerical tolerances are unch
 
    A local checkout directory can keep its existing name or be renamed to
    `replicant-mesh` after leaving that directory. New clones use the new name.
-   After the hosting rename below, update the remote to its new address:
+   Update the remote to its new address:
 
    ```powershell
    git remote set-url origin https://github.com/mat092011/replicant-mesh.git
@@ -80,19 +81,12 @@ an old experiment continuation plan with the renamed source: source fingerprints
 Compose hashes and image identities change, so start a new run and retain the
 earlier evidence separately.
 
-## Complete the GitHub hosting rename
+## GitHub hosting rename
 
-The API rejected the repository name/description update with HTTP 403
-(`Resource not accessible by integration`). Source writes are available, but
-repository-settings changes are not available to this connection. The owner can
-finish this step in [repository settings](https://github.com/mat092011/steamboat_net/settings):
-set **Repository name** to `replicant-mesh` and select **Rename**. Set the About
-description to “Replicant Mesh: cooperative LLM inference across consumer devices,
-pooling memory and spare compute. Experimental research prototype.”
-
-Once the server rename succeeds, replace the transitional old-slug links and
-clone URL in README/SECURITY with the new address and mark this hosting step
-complete. GitHub's security-setting verifier follows the live name automatically.
+The maintainer completed the hosting rename after the connected integration's
+settings update was rejected with HTTP 403. Current clone and security-reporting
+links now use `mat092011/replicant-mesh`. The security-setting verifier follows
+the live name automatically using the unchanged repository ID.
 
 ## Historical records
 

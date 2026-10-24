@@ -74,7 +74,9 @@ and reflogs plus a copy of tracked/unignored candidate files. It traverses up to
 three archive levels and five decoding levels without a file-size cutoff.
 Fetched remote branches/tags are included. Initial generic-key findings were
 reviewed as five public checkpoint/tokenizer identifiers; `.gitleaks.toml` allows
-only those exact values. No project path-wide exclusions, fingerprint suppression or
+those five exact artifact identities and three reviewed public code/synthetic
+fixture markers; see the [CI repair record](experiments/2026-10-24-ci-secret-scan.md).
+No project path-wide exclusions, fingerprint suppression or
 inline allow comments hide findings. Full redacted outputs remain ignored.
 
 `scripts/reproduce_release.py` creates a fresh local clone of HEAD, overlays the

@@ -59,13 +59,15 @@ The new correctness/smoke checks do not extend the performance envelope;
 all P0–P8 research statuses remain unchanged.
 
 **Project rename, 2026-10-24:** the source project is now **Replicant Mesh**,
-with planned repository name `mat092011/replicant-mesh`, Python package `replicant_mesh`,
+with repository `mat092011/replicant-mesh`, Python package `replicant_mesh`,
 environment prefix `REPLICANT_MESH_` and RPC namespace `replicant.mesh.v1`.
 The [migration guide](RENAMING.md) covers coordinated upgrades and fresh Compose
 volumes. Historical experiment identities remain preserved. Research phase
 statuses and measured performance claims are unchanged by the rename.
-The hosting rename is pending: the GitHub integration returned HTTP 403 for
-repository-settings updates, so the current address remains `mat092011/steamboat_net`.
+The maintainer completed the hosting rename; the new repository name was verified
+against stable GitHub repository ID `1416538470`. The follow-up
+[CI repair record](experiments/2026-10-24-ci-secret-scan.md) explains the exact
+synthetic-marker exceptions needed when scanning all branch histories.
 
 ## Questions to answer
 
