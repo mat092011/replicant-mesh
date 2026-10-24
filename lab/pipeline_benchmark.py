@@ -152,7 +152,7 @@ async def run_remote_bench(args, report, *, client=None):
     if not math.isfinite(timeout) or not 0 < timeout <= 300:
         raise ValueError("Request timeout must be finite and in (0, 300] seconds")
     if client is None:
-        from steamboat_runtime.remote_client import RemoteClient
+        from replicant_mesh.remote_client import RemoteClient
         client = RemoteClient(getattr(args, "coordinator", "coordinator:50052"), private_network=True)
     report.update(client_model_parameter_bytes=0, retry_policy="no automatic retries",
                   timing="monotonic client wall time from RPC submission; includes admission; loading, tokenization and warm-up excluded",

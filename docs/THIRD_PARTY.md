@@ -33,7 +33,7 @@ contents and need distribution-specific review.
 | Owned runtime Python dependencies | [Installed inventory](third_party/dependencies-owned.json) | 38 locked application packages match installed versions; pip is a separate base tool; 165 installed notice files fingerprinted | Source-only scope; preserve complete native/bundled notices before image/wheel distribution |
 | Historical baseline dependencies | [Installed inventory](third_party/dependencies-legacy.json) | 68 packages and 100 notice files recorded from the actual preserved Petals image | Rebuilds may resolve differently; review the actual distributed image |
 | Container base and OS packages | Both installed inventories | 112 owned-stack and 172 legacy OS packages recorded with available copyright-file hashes | OS/copyleft obligations remain separate from the Apache project license |
-| Generated Protobuf binding | [Generation record](../src/steamboat_runtime/protocol/README.md) | Compiler/runtime identities and regeneration command are recorded | Review generated/runtime material alongside the distribution inventory |
+| Generated Protobuf binding | [Generation record](../src/replicant_mesh/protocol/README.md) | Compiler/runtime identities and regeneration command are recorded | Review generated/runtime material alongside the distribution inventory |
 
 Primary sources inspected on the review date:
 
@@ -78,14 +78,15 @@ direct source metadata, lock-version mismatches and Debian package versions.
 Full extracted notice text remains ignored; compact inventories live under
 `docs/third_party/` for inclusion in the source preview.
 
-The owned-image command executed from the repository root was:
+To repeat the owned-image inventory from the repository root with the current
+image name (the historical inventory predates the [rename](RENAMING.md)):
 
 ```powershell
-docker.exe run --rm --network none --mount "type=bind,source=$PWD,target=/review" --entrypoint python steamboat-pytorch:cpu /review/scripts/audit_dependencies.py --output /review/.lab/release/licenses/owned.json --notices-output /review/.lab/release/licenses/owned-notices.json
+docker.exe run --rm --network none --mount "type=bind,source=$PWD,target=/review" --entrypoint python replicant-mesh-pytorch:cpu /review/scripts/audit_dependencies.py --output /review/.lab/release/licenses/owned.json --notices-output /review/.lab/release/licenses/owned-notices.json
 ```
 
-The baseline command used image `steamboat-net-lab:cpu`, added `--stack legacy`,
-and wrote `legacy.json` / `legacy-notices.json` in the same ignored directory.
+For the baseline, use image `replicant-mesh-lab:cpu`, add `--stack legacy`,
+and write `legacy.json` / `legacy-notices.json` in the same ignored directory.
 Inspect image IDs before repeating these commands; tags alone do not establish
 that a later inventory describes the same historical image.
 

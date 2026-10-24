@@ -30,7 +30,7 @@ writes four safetensors artifacts plus `modelmanifest.json`. Reusing an existing
 artifact directory verifies it; incomplete or corrupted directories fail explicitly.
 Use a new output directory after changing the manifest contract.
 
-The project `steamboat-pytorch-m1` owns separate model-cache and artifact volumes.
+The project `replicant-mesh-pytorch-m1` owns separate model-cache and artifact volumes.
 Tests and comparisons mount both read-only with networking disabled. Each process
 has two CPUs, two Torch threads, a 6 GiB container memory limit and no public ports.
 Reports go to ignored `.lab/pytorch-results/` with unique names. The test JSON is
@@ -75,7 +75,7 @@ The eight legacy `rotary_emb.inv_freq` checkpoint buffers are checked against th
 pinned configuration and omitted explicitly; current Transformers derives them.
 Unknown weights or missing learned parameters are rejected.
 
-`steamboat_runtime.interfaces.InferenceSession` defines `step`, `close`, `position`,
+`replicant_mesh.interfaces.InferenceSession` defines `step`, `close`, `position`,
 `diagnostics` and context-manager cleanup. `PipelineModel.open_session(max_length)`
 reserves a context budget and generates an opaque local session ID. `step` accepts
 CPU int64 token IDs shaped `[1,T]`; it returns last-position logits by default or

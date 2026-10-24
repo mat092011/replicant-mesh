@@ -25,7 +25,7 @@ class MatchedControlTests(unittest.TestCase):
         args = SimpleNamespace(prompt_tokens=128, new_tokens=64, concurrency=3,
                                requests=100, backend='matched', mode='pipeline')
         report = {}
-        with patch('steamboat_runtime.remote_client.RemoteClient', client), patch('lab.pipeline_benchmark.run_remote_bench', measure):
+        with patch('replicant_mesh.remote_client.RemoteClient', client), patch('lab.pipeline_benchmark.run_remote_bench', measure):
             run_bench(args, report)
         self.assertTrue(report['success'])
 
@@ -43,12 +43,12 @@ class MatchedControlTests(unittest.TestCase):
         self.assertEqual(pool.in_flight, [2, 1, 1, 1])
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1", "runtime opt-in")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1", "runtime opt-in")
 class ReplicaExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_retains_session_until_compute_drains(self):
         import torch
         from lab.matched_control import ReplicaService
-        from steamboat_runtime.remote_client import encode_json
+        from replicant_mesh.remote_client import encode_json
         entered, release = threading.Event(), threading.Event()
         observed = {}
         def step(session, ids):
@@ -59,7 +59,7 @@ class ReplicaExecutionTests(unittest.IsolatedAsyncioTestCase):
             return torch.zeros(1, 1, 8)
         context = SimpleNamespace(cancelled=lambda: False)
         model = SimpleNamespace(config=SimpleNamespace(vocab_size=8, max_position_embeddings=1152))
-        with patch("steamboat_runtime.manifest.load_manifest", return_value={}), patch("lab.benchmark.LocalSession.step", step):
+        with patch("replicant_mesh.manifest.load_manifest", return_value={}), patch("lab.benchmark.LocalSession.step", step):
             service = ReplicaService(model, None)
             request = encode_json(dict(input_ids=[1], new_tokens=1, timeout_seconds=5, capture_logits=False))
             task = asyncio.create_task(service.generate_rpc(request, context))
@@ -84,7 +84,7 @@ class ReplicaExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_deadline_drains_compute_then_reports_failure(self):
         import torch
         from lab.matched_control import ReplicaService
-        from steamboat_runtime.remote_client import encode_json
+        from replicant_mesh.remote_client import encode_json
         def step(session, ids):
             time.sleep(.05)
             self.assertFalse(session.closed)
@@ -95,7 +95,7 @@ class ReplicaExecutionTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError(message)
         context = SimpleNamespace(cancelled=lambda: False, abort=abort)
         model = SimpleNamespace(config=SimpleNamespace(vocab_size=8, max_position_embeddings=1152))
-        with patch("steamboat_runtime.manifest.load_manifest", return_value={}), patch("lab.benchmark.LocalSession.step", step):
+        with patch("replicant_mesh.manifest.load_manifest", return_value={}), patch("lab.benchmark.LocalSession.step", step):
             service = ReplicaService(model, None)
             request = encode_json(dict(input_ids=[1], new_tokens=1, timeout_seconds=.01, capture_logits=False))
             with self.assertRaises(RuntimeError):

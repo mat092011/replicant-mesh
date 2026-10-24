@@ -1,7 +1,7 @@
-name: steamboat-net-lab
+name: replicant-mesh-lab
 
 x-common: &common
-  image: steamboat-net-lab:cpu
+  image: replicant-mesh-lab:cpu
   build:
     context: .
     dockerfile: docker/Dockerfile
@@ -10,7 +10,7 @@ x-common: &common
   environment: &environment
     MODEL_ID: ${MODEL_ID:-Maykeye/TinyLLama-v0}
     MODEL_REVISION: ${MODEL_REVISION:-298338802ab94432b917bcce11382aa151aee50f}
-    LAB_DHT_PREFIX: steamboat-local-v1
+    LAB_DHT_PREFIX: replicant-mesh-local-v1
     HF_HUB_OFFLINE: "1"
     TRANSFORMERS_OFFLINE: "1"
     OMP_NUM_THREADS: "2"

@@ -11,7 +11,7 @@ import threading
 import time
 import unittest
 
-from steamboat_runtime.remote_client import (
+from replicant_mesh.remote_client import (
     MAX_GENERATE_BYTES, MAX_TEXT_BYTES, RemoteError, decode_json, encode_json,
     validate_generate, validate_text,
 )
@@ -20,7 +20,7 @@ from steamboat_runtime.remote_client import (
 class ServiceProtocolTests(unittest.TestCase):
     def test_trace_sample_is_bounded_while_counters_cover_all_dispatches(self):
         from types import SimpleNamespace
-        from steamboat_runtime.coordinator_service import RequestMetrics
+        from replicant_mesh.coordinator_service import RequestMetrics
         metrics = RequestMetrics()
         for sequence in range(100):
             metrics.record({"event": "stage_dispatch", "worker": 1, "sequence": sequence,
@@ -68,24 +68,24 @@ class ServiceProtocolTests(unittest.TestCase):
 
     def test_remote_client_module_does_not_import_torch_or_transformers(self):
         result = subprocess.run([sys.executable, "-c",
-            "import sys; import steamboat_runtime.remote_client; "
+            "import sys; import replicant_mesh.remote_client; "
             "assert 'torch' not in sys.modules; assert 'transformers' not in sys.modules"],
             capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
-ENABLED = os.environ.get("STEAMBOAT_SERVICE_TESTS") == "1"
+ENABLED = os.environ.get("REPLICANT_MESH_SERVICE_TESTS") == "1"
 
 
-@unittest.skipUnless(ENABLED, "Set STEAMBOAT_SERVICE_TESTS=1 for M5 service checks")
+@unittest.skipUnless(ENABLED, "Set REPLICANT_MESH_SERVICE_TESTS=1 for M5 service checks")
 class CoordinatorServiceTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         import torch
-        from steamboat_runtime.coordinator import Coordinator, SchedulerLimits
-        from steamboat_runtime.coordinator_service import CoordinatorService, create_server
-        from steamboat_runtime.remote_client import RemoteClient
-        from steamboat_runtime.worker_state import WorkerHandler
+        from replicant_mesh.coordinator import Coordinator, SchedulerLimits
+        from replicant_mesh.coordinator_service import CoordinatorService, create_server
+        from replicant_mesh.remote_client import RemoteClient
+        from replicant_mesh.worker_state import WorkerHandler
         prefix = f"{__package__}." if __package__ else ""
         support = importlib.import_module(prefix + "test_worker_state")
         model = importlib.import_module(prefix + "test_coordinator")
@@ -169,7 +169,7 @@ class CoordinatorServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_raw_malformed_rpc_is_rejected_before_scheduler_admission(self):
         import grpc
-        from steamboat_runtime.remote_client import SERVICE
+        from replicant_mesh.remote_client import SERVICE
         huge_timeout = encode_json({"input_ids": [9], "new_tokens": 1,
                                     "capture_logits": False, "timeout_seconds": 10 ** 400})
         for data in (b'{"input_ids":[1],"input_ids":[2]}', b"x" * (MAX_GENERATE_BYTES + 1),
@@ -259,11 +259,11 @@ class CoordinatorServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.counters["transport_stalls"], 1)
 
 
-@unittest.skipUnless(ENABLED, "Set STEAMBOAT_SERVICE_TESTS=1 for M5 watchdog checks")
+@unittest.skipUnless(ENABLED, "Set REPLICANT_MESH_SERVICE_TESTS=1 for M5 watchdog checks")
 class CoordinatorModelWatchdogTests(unittest.IsolatedAsyncioTestCase):
     async def test_publish_precedes_compute_and_cancel_retains_actual_thread_deadline(self):
         import torch
-        from steamboat_runtime.coordinator_service import supervised_model_class
+        from replicant_mesh.coordinator_service import supervised_model_class
         prefix = f"{__package__}." if __package__ else ""
         manifest = importlib.import_module(prefix + "test_manifest").sample_manifest()
         model = supervised_model_class()(manifest, torch.nn.Identity(), None)
@@ -295,7 +295,7 @@ class CoordinatorModelWatchdogTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.to_thread(model._executor.shutdown, wait=True)
 
     async def test_supervisor_kills_coordinator_child_with_cancelled_stuck_model(self):
-        from steamboat_runtime.supervisor import ProcessSupervisor
+        from replicant_mesh.supervisor import ProcessSupervisor
         records = []
         fixture = Path(__file__).with_name("coordinator_service_fixture.py")
         parent = ProcessSupervisor([sys.executable, "-u", str(fixture)],
@@ -307,7 +307,7 @@ class CoordinatorModelWatchdogTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(item.get("reason") == "compute_cancel_grace_exceeded" for item in records), records)
 
     async def test_long_shutdown_grace_does_not_extend_compute_deadline_grace(self):
-        from steamboat_runtime.supervisor import ProcessSupervisor
+        from replicant_mesh.supervisor import ProcessSupervisor
         records = []
         fixture = Path(__file__).with_name("coordinator_service_fixture.py")
         parent = ProcessSupervisor([sys.executable, "-u", str(fixture), "deadline"],

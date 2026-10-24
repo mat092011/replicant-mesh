@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from steamboat_runtime.manifest import (
+from replicant_mesh.manifest import (
     MODEL_ID, MODEL_REVISION, LAYER_RANGES, SOURCE_HASHES, PINNED_CONFIG,
     ResourceLimits, artifact_path, cache_bytes, expected_tensors, fingerprint,
     load_manifest, safe_path, sha256_file, validate_manifest,

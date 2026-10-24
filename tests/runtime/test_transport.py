@@ -5,16 +5,16 @@ import os
 import unittest
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1",
-                     "Set STEAMBOAT_PROTOCOL_TESTS=1 in the pinned PyTorch image")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1",
+                     "Set REPLICANT_MESH_PROTOCOL_TESTS=1 in the pinned PyTorch image")
 class TransportTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         import grpc
         import torch
-        from steamboat_runtime.protocol.codec import encode_tensor
-        from steamboat_runtime.protocol.errors import ProtocolError
-        from steamboat_runtime.protocol.transport import InMemoryTransport, GrpcClient, create_server
-        from steamboat_runtime.protocol.worker_pb2 import Request, Response
+        from replicant_mesh.protocol.codec import encode_tensor
+        from replicant_mesh.protocol.errors import ProtocolError
+        from replicant_mesh.protocol.transport import InMemoryTransport, GrpcClient, create_server
+        from replicant_mesh.protocol.worker_pb2 import Request, Response
         self.grpc, self.ProtocolError = grpc, ProtocolError
         self.InMemoryTransport, self.GrpcClient, self.create_server = InMemoryTransport, GrpcClient, create_server
         self.Request, self.Response = Request, Response
@@ -107,7 +107,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_malformed_and_unknown_wire_fields_never_reach_handler(self):
         _, port = await self.connect()
         async with self.grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
-            method = channel.unary_unary("/steamboat.v1.Worker/Step")
+            method = channel.unary_unary("/replicant.mesh.v1.Worker/Step")
             for payload in (b"\xff", self.request().SerializeToString() + b"\xf8\x3e\x01"):
                 raw = await method(payload, timeout=1)
                 result = self.Response.FromString(raw)
@@ -117,7 +117,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_grpc_core_caps_payload_before_application_parsing(self):
         _, port = await self.connect(max_bytes=512)
         async with self.grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
-            method = channel.unary_unary("/steamboat.v1.Worker/Step")
+            method = channel.unary_unary("/replicant.mesh.v1.Worker/Step")
             with self.assertRaises(self.grpc.aio.AioRpcError) as caught:
                 await method(b"x" * 513, timeout=1)
             self.assertEqual(caught.exception.code(), self.grpc.StatusCode.RESOURCE_EXHAUSTED)
@@ -140,7 +140,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.tensor.data, self.payload.data)
 
     async def test_private_endpoint_validation_rejects_public_and_malformed_addresses(self):
-        from steamboat_runtime.protocol.transport import validate_endpoint
+        from replicant_mesh.protocol.transport import validate_endpoint
         for endpoint in ("worker-1:50051", "10.0.0.2:50051", "172.16.0.1:1",
                          "192.168.1.2:65535"):
             self.assertEqual(validate_endpoint(endpoint, private_network=True), endpoint)

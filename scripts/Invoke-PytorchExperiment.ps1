@@ -29,7 +29,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $compose = Join-Path $repo 'compose.pytorch.yaml'
-$project = 'steamboat-pytorch-m1'
+$project = 'replicant-mesh-pytorch-m1'
 $docker = (Get-Command docker -CommandType Application | Select-Object -First 1).Source
 $composeArgs = @('compose','-f',$compose,'-p',$project)
 $shaper = Join-Path $PSScriptRoot 'Set-NetworkProfile.ps1'
@@ -169,7 +169,7 @@ $sourceManifest = ($sourceFiles | ForEach-Object {
         (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 }) -join "`n"
 $sourceFingerprint = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($sourceManifest))).ToLowerInvariant()
-$imageReference = 'steamboat-pytorch:cpu'
+$imageReference = 'replicant-mesh-pytorch:cpu'
 if (-not $ExpectedImage) {
     $ExpectedImage = (& $docker image inspect $imageReference --format '{{.Id}}' 2>$null | Select-Object -First 1)
     if ($LASTEXITCODE -ne 0 -or -not $ExpectedImage) {
@@ -286,7 +286,7 @@ try {
     # Re-establish numerical/lifecycle correctness for this exact running service
     # before collecting any benchmark or installing a shaped network profile.
     $null = Invoke-Docker ($composeArgs + @('run','--rm','--no-deps','service-check',
-        'python','-m','steamboat_runtime.service_check','--coordinator','coordinator:50052',
+        'python','-m','replicant_mesh.service_check','--coordinator','coordinator:50052',
         '--output',"/results/$runId")) (Join-Path $directory 'correctness-gate.log')
     for ($index=0; $index -lt $cases.Count; $index++) {
         $case = $cases[$index]

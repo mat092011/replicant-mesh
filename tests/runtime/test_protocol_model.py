@@ -1,6 +1,6 @@
 """M2 numerical checks through bounded Protobuf messages and isolated KV owners.
 
-These tests require STEAMBOAT_PROTOCOL_TESTS=1 and the offline artifact/reference
+These tests require REPLICANT_MESH_PROTOCOL_TESTS=1 and the offline artifact/reference
 paths. They execute three independent handlers inside one process. The additional
 loopback gRPC check exercises the binary RPC adapter; neither proves separate
 worker processes, network performance, a scheduler, or useful compute overlap.
@@ -16,9 +16,9 @@ import uuid
 
 
 ATOL = 1e-3
-ARTIFACT_DIR = os.environ.get("STEAMBOAT_ARTIFACT_DIR")
-REFERENCE_DIR = os.environ.get("STEAMBOAT_REFERENCE_DIR")
-ENABLED = os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1"
+ARTIFACT_DIR = os.environ.get("REPLICANT_MESH_ARTIFACT_DIR")
+REFERENCE_DIR = os.environ.get("REPLICANT_MESH_REFERENCE_DIR")
+ENABLED = os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1"
 
 
 class _Session:
@@ -90,23 +90,23 @@ class _Session:
 
 
 @unittest.skipUnless(ENABLED,
-                     "Set STEAMBOAT_PROTOCOL_TESTS=1 for offline real-model M2 checks")
+                     "Set REPLICANT_MESH_PROTOCOL_TESTS=1 for offline real-model M2 checks")
 class ProtocolModelTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         if not ARTIFACT_DIR or not REFERENCE_DIR:
-            raise RuntimeError("M2 checks need STEAMBOAT_ARTIFACT_DIR and STEAMBOAT_REFERENCE_DIR")
+            raise RuntimeError("M2 checks need REPLICANT_MESH_ARTIFACT_DIR and REPLICANT_MESH_REFERENCE_DIR")
         import torch
         from safetensors.torch import load_file
         from transformers import AutoModelForCausalLM, LlamaConfig
-        from steamboat_runtime.manifest import artifact_path, load_manifest
-        from steamboat_runtime.model import InputOutput
-        from steamboat_runtime.prepare import verify_snapshot
-        from steamboat_runtime.protocol import PROTOCOL_VERSION
-        from steamboat_runtime.protocol.codec import encode_tensor, decode_tensor
-        from steamboat_runtime.protocol.worker_pb2 import Request
-        from steamboat_runtime.protocol.transport import InMemoryTransport
-        from steamboat_runtime.worker_state import StageExecutor, WorkerHandler
+        from replicant_mesh.manifest import artifact_path, load_manifest
+        from replicant_mesh.model import InputOutput
+        from replicant_mesh.prepare import verify_snapshot
+        from replicant_mesh.protocol import PROTOCOL_VERSION
+        from replicant_mesh.protocol.codec import encode_tensor, decode_tensor
+        from replicant_mesh.protocol.worker_pb2 import Request
+        from replicant_mesh.protocol.transport import InMemoryTransport
+        from replicant_mesh.worker_state import StageExecutor, WorkerHandler
 
         cls.torch = torch
         cls.Request = Request
@@ -145,7 +145,7 @@ class ProtocolModelTests(unittest.IsolatedAsyncioTestCase):
 
     @classmethod
     def tearDownClass(cls):
-        output = os.environ.get("STEAMBOAT_PROTOCOL_REPORT")
+        output = os.environ.get("REPLICANT_MESH_PROTOCOL_REPORT")
         if output:
             path = Path(output)
             if path.suffix != ".json":
@@ -299,7 +299,7 @@ class ProtocolModelTests(unittest.IsolatedAsyncioTestCase):
                                            "action": "discard response; reject retry; close all affected reservations"}
 
     async def test_loopback_grpc_real_stage_matches_binary_in_memory_stage(self):
-        from steamboat_runtime.protocol.transport import GrpcClient, create_server
+        from replicant_mesh.protocol.transport import GrpcClient, create_server
 
         server, port = await create_server(self.handlers[0])
         client = GrpcClient(f"127.0.0.1:{port}")

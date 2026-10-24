@@ -1,4 +1,4 @@
-# steamboat_net
+# Replicant Mesh
 
 Cooperative LLM inference across consumer devices: a research prototype for
 testing whether pooled memory and otherwise idle compute can provide useful
@@ -7,6 +7,11 @@ access to larger models or additional inference capacity.
 **Status:** public experimental source preview; local CPU research lab.
 **License:** [Apache-2.0](LICENSE) for this project's code and documentation;
 third-party software and model artifacts retain their own terms.
+
+Existing checkouts and lab deployments should follow the
+[rename and migration guide](docs/RENAMING.md) before upgrading.
+The project is now Replicant Mesh; the GitHub repository address remains
+`mat092011/steamboat_net` until the owner completes the repository-settings rename.
 
 The primary question is whether sharing resources is useful after communication,
 scheduling and verification costs. Faster generation for one user is a separate
@@ -105,8 +110,8 @@ change the owned PyTorch manifest.
 Clone the public source if you do not already have a checkout:
 
 ```powershell
-git clone https://github.com/mat092011/steamboat_net.git
-cd steamboat_net
+git clone https://github.com/mat092011/steamboat_net.git replicant-mesh
+cd replicant-mesh
 ```
 
 Run these commands sequentially from the repository root in PowerShell:

@@ -18,9 +18,10 @@ docker compose -f compose.pytorch.yaml run --rm prepare
 docker compose -f compose.pytorch.yaml run --rm tests
 ```
 
-The Compose project retains its existing `steamboat-pytorch-m1` name and volumes.
+The Compose project is `replicant-mesh-pytorch-m1`; it owns its model/artifact
+volumes. Existing deployments must follow the [rename guide](RENAMING.md).
 Its test container has no external network; loopback sockets remain available.
-It sets `STEAMBOAT_PROTOCOL_TESTS=1` and both offline model paths. M2 integration
+It sets `REPLICANT_MESH_PROTOCOL_TESTS=1` and both offline model paths. M2 integration
 checks fail if those model paths are missing. Without that opt-in variable, M2
 tests skip so the historical Petals/dependency-free environment still works.
 
@@ -31,7 +32,7 @@ docker compose -f compose.pytorch.yaml run --rm tests python -m unittest discove
 ```
 
 Unique numerical observation reports appear under `.lab/pytorch-results/`.
-`STEAMBOAT_PROTOCOL_REPORT` can select a directory or an unused JSON filename;
+`REPLICANT_MESH_PROTOCOL_REPORT` can select a directory or an unused JSON filename;
 existing files are never overwritten. The test process exit status establishes
 suite success. See [the M2 validation record](experiments/2026-10-14-pytorch-m2.md).
 
@@ -40,8 +41,8 @@ three-handler test driver is a correctness fixture, not a coordinator scheduler.
 
 ## Wire contract
 
-The schema is [worker.proto](../src/steamboat_runtime/protocol/worker.proto).
-The [schema guide](../src/steamboat_runtime/protocol/README.md) records the pinned
+The schema is [worker.proto](../src/replicant_mesh/protocol/worker.proto).
+The [schema guide](../src/replicant_mesh/protocol/README.md) records the pinned
 compiler and regeneration command. No new runtime dependencies were required.
 
 Each request carries protocol version `1` and a bounded timeout. Session operations

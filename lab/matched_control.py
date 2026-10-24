@@ -10,7 +10,7 @@ from contextlib import aclosing
 import os
 import time
 
-from steamboat_runtime.remote_client import (SERVICE, MAX_MESSAGE_BYTES,
+from replicant_mesh.remote_client import (SERVICE, MAX_MESSAGE_BYTES,
     MAX_GENERATE_BYTES, MAX_TOKENIZE_BYTES, decode_json, encode_json,
     validate_generate, validate_text)
 
@@ -37,8 +37,8 @@ class ReplicaService:
         self.sessions = {}
         self.active_operations = self.queued_operations = 0
         self.execution_slots = asyncio.Semaphore(2)
-        from steamboat_runtime.manifest import load_manifest
-        self.manifest = load_manifest(os.environ.get("STEAMBOAT_ARTIFACT_DIR", "/artifacts"))
+        from replicant_mesh.manifest import load_manifest
+        self.manifest = load_manifest(os.environ.get("REPLICANT_MESH_ARTIFACT_DIR", "/artifacts"))
 
     async def describe_rpc(self, data, context):
         if decode_json(data, 64):
@@ -185,7 +185,7 @@ async def create_server(service, host):
 async def serve(artifacts, reference, host):
     import torch
     torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "2")))
-    from steamboat_runtime.backends import load_model
+    from replicant_mesh.backends import load_model
     model, tokenizer, loading = load_model("local", artifacts, reference)
     service = ReplicaService(model, tokenizer, loading)
     server = await create_server(service, host)
@@ -200,8 +200,8 @@ async def validate_replicas(artifacts, reference, endpoints, atol=1e-3):
     import torch
     from lab.benchmark import LocalSession, fixture_ids
     from lab.pipeline_benchmark import assert_matched_reclaimed
-    from steamboat_runtime.backends import load_model
-    from steamboat_runtime.remote_client import RemoteClient
+    from replicant_mesh.backends import load_model
+    from replicant_mesh.remote_client import RemoteClient
     model, tokenizer, loading = load_model("local", artifacts, reference)
     clients = [RemoteClient(endpoint, private_network=True) for endpoint in endpoints]
     pool = MatchedReplicaPool(clients)
@@ -325,7 +325,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["serve", "check"])
     parser.add_argument("--artifacts", default="/artifacts")
-    parser.add_argument("--reference", default=os.environ.get("STEAMBOAT_REFERENCE_DIR",
+    parser.add_argument("--reference", default=os.environ.get("REPLICANT_MESH_REFERENCE_DIR",
         "/cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f"))
     parser.add_argument("--host", default="0.0.0.0:50053")
     parser.add_argument("--replicas", nargs=4, default=[f"replica-{index}:50053" for index in range(1, 5)])

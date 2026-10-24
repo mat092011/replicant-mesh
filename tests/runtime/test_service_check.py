@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from steamboat_runtime.service_check import consume_checked
+from replicant_mesh.service_check import consume_checked
 
 
 class ScriptedClient:
@@ -40,7 +40,7 @@ class ServiceEvidenceTests(unittest.IsolatedAsyncioTestCase):
         expected = [SimpleNamespace(argmax=lambda **_: SimpleNamespace(item=lambda: 3))] * output_count
         fake_torch = SimpleNamespace(tensor=lambda value, **_: value, float32="float32")
         with patch.dict(sys.modules, {"torch": fake_torch}), \
-                patch("steamboat_runtime.service_check.compare_logits", side_effect=comparison_error):
+                patch("replicant_mesh.service_check.compare_logits", side_effect=comparison_error):
             try:
                 return await consume_checked(client, [7], expected, "test-case", evidence)
             finally:

@@ -295,9 +295,9 @@ async def run_validation(args, evidence):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifacts", default=os.environ.get("STEAMBOAT_ARTIFACT_DIR", "/artifacts"))
-    parser.add_argument("--reference", default=os.environ.get("STEAMBOAT_REFERENCE_DIR"),
-                        required=not os.environ.get("STEAMBOAT_REFERENCE_DIR"))
+    parser.add_argument("--artifacts", default=os.environ.get("REPLICANT_MESH_ARTIFACT_DIR", "/artifacts"))
+    parser.add_argument("--reference", default=os.environ.get("REPLICANT_MESH_REFERENCE_DIR"),
+                        required=not os.environ.get("REPLICANT_MESH_REFERENCE_DIR"))
     parser.add_argument("--workers", nargs=3, default=[f"worker-{index}:50051" for index in (1, 2, 3)])
     parser.add_argument("--output", default="/results", help="Directory for unique success/failure reports")
     args = parser.parse_args(argv)

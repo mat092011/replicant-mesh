@@ -58,6 +58,15 @@ repository, hosted CI and verified GitHub private reporting without email.
 The new correctness/smoke checks do not extend the performance envelope;
 all P0–P8 research statuses remain unchanged.
 
+**Project rename, 2026-10-24:** the source project is now **Replicant Mesh**,
+with planned repository name `mat092011/replicant-mesh`, Python package `replicant_mesh`,
+environment prefix `REPLICANT_MESH_` and RPC namespace `replicant.mesh.v1`.
+The [migration guide](RENAMING.md) covers coordinated upgrades and fresh Compose
+volumes. Historical experiment identities remain preserved. Research phase
+statuses and measured performance claims are unchanged by the rename.
+The hosting rename is pending: the GitHub integration returned HTTP 403 for
+repository-settings updates, so the current address remains `mat092011/steamboat_net`.
+
 ## Questions to answer
 
 1. Can partitioning preserve the model's computation and session state?

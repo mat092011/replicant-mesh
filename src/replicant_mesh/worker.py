@@ -140,7 +140,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == "serve":
         from .supervisor import run_supervised
-        child = [sys.executable, "-u", "-m", "steamboat_runtime.worker", "_serve-child",
+        child = [sys.executable, "-u", "-m", "replicant_mesh.worker", "_serve-child",
                  "--artifacts", args.artifacts, "--worker", args.worker, "--host", args.host]
         if args.private_network:
             child.append("--private-network")

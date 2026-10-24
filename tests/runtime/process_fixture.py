@@ -23,7 +23,7 @@ class Cache:
 
 class Executor:
     def __init__(self, artifacts, worker, block=False, delay_ms=0):
-        from steamboat_runtime.manifest import load_manifest
+        from replicant_mesh.manifest import load_manifest
         self.manifest = load_manifest(artifacts)
         start, end = self.manifest["components"][worker]["layer_range"]
         self.layers, self.block, self.delay_ms = end - start, block, delay_ms
@@ -50,14 +50,14 @@ def main():
     parser.add_argument("--delay-ms", type=int, default=0)
     args = parser.parse_args()
     if args.command == "supervise":
-        from steamboat_runtime.supervisor import run_supervised
+        from replicant_mesh.supervisor import run_supervised
         command = [sys.executable, "-u", __file__, "child", "--artifacts", args.artifacts,
                    "--host", args.host]
         if args.block:
             command.append("--block")
         command += ["--delay-ms", str(args.delay_ms)]
         return run_supervised(command)
-    from steamboat_runtime.worker import serve_child
+    from replicant_mesh.worker import serve_child
     return asyncio.run(serve_child(args.artifacts, "worker-1", args.host,
         executor_factory=lambda artifacts, worker: Executor(artifacts, worker, args.block, args.delay_ms)))
 

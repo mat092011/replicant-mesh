@@ -8,7 +8,7 @@ import json
 import math
 
 
-SERVICE = "steamboat.v1.Coordinator"
+SERVICE = "replicant.mesh.v1.Coordinator"
 MAX_MESSAGE_BYTES = 1024 * 1024
 MAX_GENERATE_BYTES = 32 * 1024
 MAX_TEXT_BYTES = 64 * 1024

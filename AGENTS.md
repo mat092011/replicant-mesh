@@ -2,7 +2,7 @@
 
 ## Project purpose
 
-`steamboat_net` investigates whether consumer devices connected over the internet
+Replicant Mesh investigates whether consumer devices connected over the internet
 can cooperate on useful large language model inference. Participants may later
 earn credits for accepted computation and spend them on inference for themselves.
 

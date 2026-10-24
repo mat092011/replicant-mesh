@@ -1,5 +1,9 @@
 # P3 continuation safety and bounded delay experiment
 
+> Historical Replicant Mesh experiment, recorded before the project rename.
+> Original image names, source paths and measurements are retained as evidence;
+> use the [migration guide](../RENAMING.md) for current commands and names.
+
 Date: 2026-10-16. This work extends P3 on the same laptop. Separate-device
 performance, the full performance envelope and pooled-GPU capacity remain
 unproven. P4–P8 gates are unchanged.

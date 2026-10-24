@@ -1,5 +1,9 @@
 # Source-release engineering validation
 
+> Historical Replicant Mesh experiment, recorded before the project rename.
+> Original image names, source paths and measurements are retained as evidence;
+> use the [migration guide](../RENAMING.md) for current commands and names.
+
 Date: 2026-10-17. This report records the pre-publication release tooling and
 existing CPU-lab checks, when the repository was private and changes uncommitted.
 The subsequent authorized publication is recorded [separately](2026-10-17-publication.md).

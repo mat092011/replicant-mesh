@@ -1,6 +1,6 @@
 """M1 numerical and ownership gates against an offline complete-model reference.
 
-Set STEAMBOAT_ARTIFACT_DIR to prepared slices and STEAMBOAT_REFERENCE_DIR to
+Set REPLICANT_MESH_ARTIFACT_DIR to prepared slices and REPLICANT_MESH_REFERENCE_DIR to
 the original checkpoint snapshot to run these integration tests. Neither path
 is fetched here. Without both paths the class is explicitly skipped, so the
 dependency-free tests remain runnable without installing the inference stack.
@@ -20,21 +20,21 @@ from unittest.mock import patch
 ATOL = 1e-3
 MAX_LENGTH = 1152
 ASSIGNMENTS = ((0, 3), (3, 6), (6, 8))
-ARTIFACT_DIR = os.environ.get("STEAMBOAT_ARTIFACT_DIR")
-REFERENCE_DIR = os.environ.get("STEAMBOAT_REFERENCE_DIR")
+ARTIFACT_DIR = os.environ.get("REPLICANT_MESH_ARTIFACT_DIR")
+REFERENCE_DIR = os.environ.get("REPLICANT_MESH_REFERENCE_DIR")
 
 
 @unittest.skipUnless(
     ARTIFACT_DIR and REFERENCE_DIR,
-    "Set STEAMBOAT_ARTIFACT_DIR and STEAMBOAT_REFERENCE_DIR for offline M1 checks",
+    "Set REPLICANT_MESH_ARTIFACT_DIR and REPLICANT_MESH_REFERENCE_DIR for offline M1 checks",
 )
 class PartitionedModelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import torch
         from transformers import AutoModelForCausalLM
-        from steamboat_runtime.model import PipelineModel
-        from steamboat_runtime.prepare import verify_snapshot
+        from replicant_mesh.model import PipelineModel
+        from replicant_mesh.prepare import verify_snapshot
 
         cls.torch = torch
         torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "2")))
@@ -58,7 +58,7 @@ class PartitionedModelTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.evidence["final_diagnostics"] = cls.pipeline.diagnostics()
-        output = os.environ.get("STEAMBOAT_TEST_REPORT")
+        output = os.environ.get("REPLICANT_MESH_TEST_REPORT")
         if output:
             path = Path(output)
             if path.suffix != ".json":

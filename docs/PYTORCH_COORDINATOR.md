@@ -79,10 +79,10 @@ private network listener. The following example assumes the pinned artifacts
 and tokenizer are already prepared, as in [PYTORCH_RUNTIME.md](PYTORCH_RUNTIME.md).
 
 ```python
-from steamboat_runtime.coordinator import Coordinator
-from steamboat_runtime.coordinator_model import CoordinatorModel
-from steamboat_runtime.manifest import load_manifest
-from steamboat_runtime.protocol.transport import GrpcClient
+from replicant_mesh.coordinator import Coordinator
+from replicant_mesh.coordinator_model import CoordinatorModel
+from replicant_mesh.manifest import load_manifest
+from replicant_mesh.protocol.transport import GrpcClient
 
 manifest = load_manifest("/artifacts")
 model = CoordinatorModel.from_artifacts("/artifacts")
@@ -144,7 +144,7 @@ The `coordinator-check` service is an offline test driver with the additional
 complete-model control loaded in its process. Its CPU and memory include that
 control and must not be mistaken for production coordinator measurements. Worker
 resources and private-network restrictions remain those documented for M3.
-No Petals component is required. `STEAMBOAT_COORDINATOR_TESTS=1` enables the
+No Petals component is required. `REPLICANT_MESH_COORDINATOR_TESTS=1` enables the
 real-model in-process coordinator integration tests in the offline test service.
 
 The remote driver writes a unique `*-m4-coordinator.json` report into ignored

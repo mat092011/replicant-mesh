@@ -6,8 +6,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from steamboat_runtime.manifest import ResourceLimits, SOURCE_HASHES, load_manifest
-from steamboat_runtime.prepare import prepare_artifacts, verify_snapshot
+from replicant_mesh.manifest import ResourceLimits, SOURCE_HASHES, load_manifest
+from replicant_mesh.prepare import prepare_artifacts, verify_snapshot
 
 
 class PreparationValidationTests(unittest.TestCase):
@@ -33,14 +33,14 @@ class PreparationValidationTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), "unrelated work")
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_TEST_SNAPSHOT"),
-                     "set STEAMBOAT_TEST_SNAPSHOT to the verified pinned snapshot for artifact integration")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_TEST_SNAPSHOT"),
+                     "set REPLICANT_MESH_TEST_SNAPSHOT to the verified pinned snapshot for artifact integration")
 class PreparationIntegrationTests(unittest.TestCase):
     def test_real_slices_are_reusable_and_detect_tampering(self):
         from safetensors import safe_open
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "artifacts"
-            manifest = prepare_artifacts(output, os.environ["STEAMBOAT_TEST_SNAPSHOT"])
+            manifest = prepare_artifacts(output, os.environ["REPLICANT_MESH_TEST_SNAPSHOT"])
             self.assertEqual(load_manifest(output), manifest)
             self.assertEqual(prepare_artifacts(output), manifest)
             with self.assertRaisesRegex(ValueError, "limits differ"):

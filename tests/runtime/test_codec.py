@@ -6,15 +6,15 @@ import unittest
 from unittest.mock import patch
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1",
-                     "Set STEAMBOAT_PROTOCOL_TESTS=1 in the pinned PyTorch image")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1",
+                     "Set REPLICANT_MESH_PROTOCOL_TESTS=1 in the pinned PyTorch image")
 class CodecTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import torch
-        from steamboat_runtime.protocol import codec, wire
-        from steamboat_runtime.protocol.errors import ProtocolError
-        from steamboat_runtime.protocol.worker_pb2 import Request, Response, TensorEnvelope
+        from replicant_mesh.protocol import codec, wire
+        from replicant_mesh.protocol.errors import ProtocolError
+        from replicant_mesh.protocol.worker_pb2 import Request, Response, TensorEnvelope
         cls.torch, cls.codec, cls.wire = torch, codec, wire
         cls.ProtocolError = ProtocolError
         cls.Request, cls.Response, cls.TensorEnvelope = Request, Response, TensorEnvelope
@@ -109,7 +109,7 @@ class CodecTests(unittest.TestCase):
             self.wire.serialize_message(request)
 
     def test_generated_service_matches_transport_operations(self):
-        from steamboat_runtime.protocol import METHODS
-        from steamboat_runtime.protocol.worker_pb2 import DESCRIPTOR
+        from replicant_mesh.protocol import METHODS
+        from replicant_mesh.protocol.worker_pb2 import DESCRIPTOR
         self.assertEqual(tuple(method.name for method in DESCRIPTOR.services_by_name["Worker"].methods),
                          METHODS)

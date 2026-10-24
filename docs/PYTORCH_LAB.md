@@ -33,7 +33,7 @@ interpreting configured delay and bandwidth limits.
 
 ## Coordinator service interface
 
-`steamboat.v1.Coordinator` uses gRPC with bounded UTF-8 JSON messages for `Describe`,
+`replicant.mesh.v1.Coordinator` uses gRPC with bounded UTF-8 JSON messages for `Describe`,
 `Tokenize` and streamed `Generate`. Worker-to-coordinator activations continue to
 use the binary Protobuf protocol. Generate accepts token IDs, a fixed output count,
 a deadline and optional forced feedback/logit capture for validation. Unknown
@@ -62,7 +62,7 @@ readiness. Restarts fail affected streams; no Step is replayed automatically.
 
 ```python
 from contextlib import aclosing
-from steamboat_runtime.remote_client import RemoteClient
+from replicant_mesh.remote_client import RemoteClient
 
 async with RemoteClient("coordinator:50052", private_network=True) as client:
     ids = await client.tokenize("A public test prompt")
@@ -152,9 +152,9 @@ Control probes explicitly use port 50054, separate from replica RPC port 50053.
 ## Shape and measure the network
 
 ```powershell
-.\scripts\Set-NetworkProfile.ps1 -ComposeFile compose.pytorch.yaml -ProjectName steamboat-pytorch-m1 -Services worker-1,worker-2,worker-3,coordinator -StatusOnly
-.\scripts\Set-NetworkProfile.ps1 -ComposeFile compose.pytorch.yaml -ProjectName steamboat-pytorch-m1 -Services worker-1,worker-2,worker-3,coordinator -Profile custom -DelayMs 10
-.\scripts\Set-NetworkProfile.ps1 -ComposeFile compose.pytorch.yaml -ProjectName steamboat-pytorch-m1 -Services worker-1,worker-2,worker-3,coordinator -Profile lan
+.\scripts\Set-NetworkProfile.ps1 -ComposeFile compose.pytorch.yaml -ProjectName replicant-mesh-pytorch-m1 -Services worker-1,worker-2,worker-3,coordinator -StatusOnly
+.\scripts\Set-NetworkProfile.ps1 -ComposeFile compose.pytorch.yaml -ProjectName replicant-mesh-pytorch-m1 -Services worker-1,worker-2,worker-3,coordinator -Profile custom -DelayMs 10
+.\scripts\Set-NetworkProfile.ps1 -ComposeFile compose.pytorch.yaml -ProjectName replicant-mesh-pytorch-m1 -Services worker-1,worker-2,worker-3,coordinator -Profile lan
 ```
 
 Always restore LAN conditions in `finally` when composing your own experiment.

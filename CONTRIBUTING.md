@@ -1,7 +1,7 @@
 # Contributing
 
-`steamboat_net` is an experimental inference-systems project preparing its first
-open-source release. Start with the [README](README.md),
+Replicant Mesh is an experimental inference-systems project available as a public
+source preview. Start with the [README](README.md),
 [research plan](docs/PLAN.md) and [development roadmap](docs/ROADMAP.md).
 The maintainer reviews scope and merges changes; no release/support cadence or
 public service is promised.
@@ -29,7 +29,7 @@ For code changes, run focused checks and the appropriate container integration
 gate. Model/protocol/scheduler changes need same-stack forced-token logit
 comparisons, isolation and cleanup checks before performance measurements.
 The Compose `tests` service configures artifacts and integration flags; record
-which checks actually ran and any skips. See the [protocol source guide](src/steamboat_runtime/protocol/README.md)
+which checks actually ran and any skips. See the [protocol source guide](src/replicant_mesh/protocol/README.md)
 before regenerating bindings.
 
 For documentation-only changes, check local links and consistency and run:

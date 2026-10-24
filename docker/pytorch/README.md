@@ -21,8 +21,8 @@ the Debian package repository and is separate from the hash-locked Python stack.
 From the repository root:
 
 ```powershell
-docker build --platform linux/amd64 -f docker/pytorch/Dockerfile -t steamboat-pytorch:cpu .
-docker run --rm --network none steamboat-pytorch:cpu python /opt/steamboat/verify_environment.py
+docker build --platform linux/amd64 -f docker/pytorch/Dockerfile -t replicant-mesh-pytorch:cpu .
+docker run --rm --network none replicant-mesh-pytorch:cpu python /opt/replicant-mesh/verify_environment.py
 ```
 
 The build runs `pip check` and an offline random-weight Llama eager-attention
@@ -67,13 +67,13 @@ locked new stack and CPU budget. These are in-process M1 runs; they provide no
 network or independent-worker performance evidence. Do not run the two controls
 simultaneously on the shared laptop. Reports are written to ignored
 `.lab/pytorch-results/`; tests default to a unique timestamped JSON file (override
-the directory or use an unused JSON filename through `STEAMBOAT_TEST_REPORT`).
+the directory or use an unused JSON filename through `REPLICANT_MESH_TEST_REPORT`).
 The original `compose.yaml` and its volumes remain
 independent. There is no `NET_ADMIN`, Docker socket mount, or exposed port here.
 
 To build only the dependency environment while developing source files, add
 `--target dependencies` and use a different tag such as
-`steamboat-pytorch:dependencies`. Bind the repository to `/app` for development;
+`replicant-mesh-pytorch:dependencies`. Bind the repository to `/app` for development;
 `PYTHONPATH` already includes `/app/src` and `/app`. Model cache paths are
 `/cache/huggingface` and `/cache/huggingface/hub`; prepared slices can be mounted
 at `/artifacts`. `PYTHONDONTWRITEBYTECODE=1` avoids cache writes into source mounts.

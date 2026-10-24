@@ -5,7 +5,7 @@ import json
 import subprocess
 
 
-REPOSITORY = 'mat092011/steamboat_net'
+REPOSITORY_ID = 1416538470
 
 
 def github(path, method='GET'):
@@ -15,13 +15,14 @@ def github(path, method='GET'):
 
 
 def verify(api=github, enable=False):
-    repository = api('repos/' + REPOSITORY)
-    report = {'repository': REPOSITORY, 'visibility': repository['visibility'],
-              'report_url': f'https://github.com/{REPOSITORY}/security/advisories/new'}
+    repository = api(f'repositories/{REPOSITORY_ID}')
+    repository_name = repository['full_name']
+    report = {'repository': repository_name, 'visibility': repository['visibility'],
+              'report_url': f'https://github.com/{repository_name}/security/advisories/new'}
     if repository['visibility'] != 'public':
         return {**report, 'verified': False, 'status': 'blocked_private_repository',
                 'reason': 'GitHub private vulnerability reporting requires a public repository'}
-    endpoint = 'repos/' + REPOSITORY + '/private-vulnerability-reporting'
+    endpoint = 'repos/' + repository_name + '/private-vulnerability-reporting'
     status = api(endpoint)
     if enable and not status.get('enabled'):
         api(endpoint, method='PUT')

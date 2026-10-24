@@ -1,5 +1,9 @@
 # P3 analysis and P4 preparation tools
 
+> Historical Replicant Mesh experiment, recorded before the project rename.
+> Original image names, source paths and measurements are retained as evidence;
+> use the [migration guide](../RENAMING.md) for current commands and names.
+
 Date: 2026-10-16. This extends the completed M0–M5 runtime implementation with
 evidence-review and capacity-planning tools. It does not complete the P3 or P4
 research gates. The user confirmed that only the current laptop is available.

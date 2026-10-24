@@ -8,17 +8,17 @@ import unittest
 from unittest.mock import patch
 
 
-ENABLED = os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1"
-ARTIFACTS = os.environ.get("STEAMBOAT_ARTIFACT_DIR")
-REFERENCE = os.environ.get("STEAMBOAT_REFERENCE_DIR")
+ENABLED = os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1"
+ARTIFACTS = os.environ.get("REPLICANT_MESH_ARTIFACT_DIR")
+REFERENCE = os.environ.get("REPLICANT_MESH_REFERENCE_DIR")
 
 
-@unittest.skipUnless(ENABLED, "Use the pinned PyTorch image with STEAMBOAT_PROTOCOL_TESTS=1")
+@unittest.skipUnless(ENABLED, "Use the pinned PyTorch image with REPLICANT_MESH_PROTOCOL_TESTS=1")
 class CoordinatorModelTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         import torch
-        from steamboat_runtime.coordinator_model import CoordinatorModel
+        from replicant_mesh.coordinator_model import CoordinatorModel
         cls.torch, cls.Model = torch, CoordinatorModel
 
     async def asyncSetUp(self):
@@ -155,9 +155,9 @@ class CoordinatorModelTests(unittest.IsolatedAsyncioTestCase):
                      "Set pinned artifact/reference paths for coordinator ownership checks")
 class CoordinatorArtifactTests(unittest.IsolatedAsyncioTestCase):
     async def test_only_input_output_weights_loaded_and_tokenizer_is_offline(self):
-        from steamboat_runtime.coordinator_model import CoordinatorModel
+        from replicant_mesh.coordinator_model import CoordinatorModel
         import torch
-        with patch("steamboat_runtime.model.LayerStage", side_effect=AssertionError("layer loaded")), \
+        with patch("replicant_mesh.model.LayerStage", side_effect=AssertionError("layer loaded")), \
                 patch("transformers.AutoModelForCausalLM.from_pretrained",
                       side_effect=AssertionError("complete model loaded")):
             model = CoordinatorModel.from_artifacts(ARTIFACTS, REFERENCE)
@@ -178,7 +178,7 @@ class CoordinatorArtifactTests(unittest.IsolatedAsyncioTestCase):
 
 class CoordinatorClientTests(unittest.IsolatedAsyncioTestCase):
     def fixture(self):
-        from steamboat_runtime.client import CoordinatorClient
+        from replicant_mesh.client import CoordinatorClient
 
         class Handle:
             def __init__(self):

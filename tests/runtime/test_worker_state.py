@@ -1,7 +1,7 @@
 """M2 lifecycle contracts with deterministic compute barriers and a fake clock.
 
 These checks need the isolated PyTorch/Protobuf environment, but no model files.
-Set STEAMBOAT_PROTOCOL_TESTS=1 to run them. Imports stay inside the opted-in
+Set REPLICANT_MESH_PROTOCOL_TESTS=1 to run them. Imports stay inside the opted-in
 class so the historical Petals and dependency-free suites remain runnable.
 """
 
@@ -71,15 +71,15 @@ class FakeExecutor:
         return hidden + 1
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1",
-                     "Set STEAMBOAT_PROTOCOL_TESTS=1 for M2 lifecycle checks")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1",
+                     "Set REPLICANT_MESH_PROTOCOL_TESTS=1 for M2 lifecycle checks")
 class WorkerStateTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         import torch
-        from steamboat_runtime.protocol import worker_pb2
-        from steamboat_runtime.protocol.codec import encode_tensor, decode_tensor
-        from steamboat_runtime.worker_state import WorkerHandler
+        from replicant_mesh.protocol import worker_pb2
+        from replicant_mesh.protocol.codec import encode_tensor, decode_tensor
+        from replicant_mesh.worker_state import WorkerHandler
 
         manifest_module = importlib.import_module(
             f"{__package__}.test_manifest" if __package__ else "test_manifest")
@@ -591,7 +591,7 @@ class WorkerStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.executor.caches[0].position, 0)
 
     async def test_periodic_reaper_reclaims_abandoned_session_without_another_request(self):
-        from steamboat_runtime.manifest import fingerprint
+        from replicant_mesh.manifest import fingerprint
 
         manifest = self.sample_manifest()
         manifest["limits"]["lease_check_interval_seconds"] = 1
@@ -616,7 +616,7 @@ class WorkerStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.handler.sessions), 0)
 
     async def test_grpc_caller_cancellation_reaches_worker_without_freeing_compute_cache(self):
-        from steamboat_runtime.protocol.transport import create_server, GrpcClient
+        from replicant_mesh.protocol.transport import create_server, GrpcClient
 
         await self.open()
         self.executor.block = True
@@ -652,7 +652,7 @@ class WorkerStateTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_result_encoding_cannot_commit_after_the_operation_deadline(self):
         from unittest.mock import patch
-        from steamboat_runtime import worker_state
+        from replicant_mesh import worker_state
 
         await self.open()
         original = worker_state.encode_tensor

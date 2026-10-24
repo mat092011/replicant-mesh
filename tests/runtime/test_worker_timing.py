@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 class ClockIdentityTests(unittest.TestCase):
     def test_clock_domain_depends_on_kernel_boot_and_monotonic_offset(self):
-        from steamboat_runtime.protocol.clock import clock_identity
+        from replicant_mesh.protocol.clock import clock_identity
         boot = "12345678-1234-1234-1234-123456789abc"
         try:
             identities = []
@@ -27,7 +27,7 @@ class ClockIdentityTests(unittest.TestCase):
             clock_identity.cache_clear()
 
     def test_missing_or_malformed_clock_evidence_never_verifies(self):
-        from steamboat_runtime.protocol.clock import clock_identity
+        from replicant_mesh.protocol.clock import clock_identity
         boot = "12345678-1234-1234-1234-123456789abc"
         try:
             for offsets in ("", "boottime 0 0", "monotonic 1", "monotonic 0 1000000000",
@@ -42,14 +42,14 @@ class ClockIdentityTests(unittest.TestCase):
             clock_identity.cache_clear()
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1",
-                     "Set STEAMBOAT_PROTOCOL_TESTS=1 in the pinned image")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1",
+                     "Set REPLICANT_MESH_PROTOCOL_TESTS=1 in the pinned image")
 class WorkerTimingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         import torch
-        from steamboat_runtime.worker_state import WorkerHandler
-        from steamboat_runtime.protocol.worker_pb2 import Request
-        from steamboat_runtime.protocol.codec import encode_tensor
+        from replicant_mesh.worker_state import WorkerHandler
+        from replicant_mesh.protocol.worker_pb2 import Request
+        from replicant_mesh.protocol.codec import encode_tensor
         from .test_manifest import sample_manifest
         from .test_worker_state import FakeExecutor
         self.manifest = sample_manifest()
@@ -78,7 +78,7 @@ class WorkerTimingTests(unittest.IsolatedAsyncioTestCase):
         return task
 
     async def test_describe_clock_sample_and_compute_span_are_bracketed(self):
-        from steamboat_runtime.protocol.clock import clock_identity
+        from replicant_mesh.protocol.clock import clock_identity
         start = time.monotonic_ns()
         response = await self.handler.handle("Describe", self.request())
         end = time.monotonic_ns()
@@ -106,9 +106,9 @@ class WorkerTimingTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(b.compute_ms, b.queue_ms)
 
     async def test_wire_rejects_incomplete_or_reversed_compute_timestamps(self):
-        from steamboat_runtime.protocol.worker_pb2 import Response
-        from steamboat_runtime.protocol.wire import validate_response
-        from steamboat_runtime.protocol.errors import ProtocolError
+        from replicant_mesh.protocol.worker_pb2 import Response
+        from replicant_mesh.protocol.wire import validate_response
+        from replicant_mesh.protocol.errors import ProtocolError
         for start, end, sample in ((0, 1, 2), (1, 0, 2), (3, 2, 4), (1, 3, 2)):
             with self.subTest(start=start, end=end, sample=sample), self.assertRaises(ProtocolError):
                 validate_response("Describe", self.request(), Response(protocol_version=1, code="OK",

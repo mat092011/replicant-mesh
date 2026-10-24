@@ -1,5 +1,5 @@
 syntax = "proto3";
-package steamboat.v1;
+package replicant.mesh.v1;
 
 // V1 only transports dense, contiguous little-endian float32 activations.
 // Each message is capped at 1 MiB before Protobuf parsing. The receiver checks

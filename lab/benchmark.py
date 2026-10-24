@@ -19,7 +19,7 @@ import uuid
 from lab.config import model_settings, percentile, read_peers, summarize_requests
 
 if TYPE_CHECKING:
-    from steamboat_runtime.interfaces import InferenceSession
+    from replicant_mesh.interfaces import InferenceSession
 
 FIXTURE = "A network of computers cooperates to calculate the next token. "
 MAX_SESSION_TOKENS = 1152
@@ -120,7 +120,7 @@ def load_model(mode, backend="petals", artifacts="/artifacts", reference=None):
 
     torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "2")))
     if backend == "pytorch":
-        from steamboat_runtime.backends import load_model as load_pytorch_model
+        from replicant_mesh.backends import load_model as load_pytorch_model
 
         return load_pytorch_model(mode, artifacts, reference)
     if backend != "petals":
@@ -137,7 +137,7 @@ def load_model(mode, backend="petals", artifacts="/artifacts", reference=None):
 
         model = AutoDistributedModelForCausalLM.from_pretrained(
             model_id, initial_peers=read_peers(),
-            dht_prefix=os.environ.get("LAB_DHT_PREFIX", "steamboat-local-v1"),
+            dht_prefix=os.environ.get("LAB_DHT_PREFIX", "replicant-mesh-local-v1"),
             use_server_to_server=False,
             request_timeout=30, connect_timeout=5,
             max_retries=int(os.environ.get("PETALS_MAX_RETRIES", "2")), **kwargs,
@@ -200,7 +200,7 @@ def run_bench(args, report):
         from lab.pipeline_benchmark import run_remote_bench
         if args.backend == "matched":
             from lab.matched_control import MatchedReplicaPool
-            from steamboat_runtime.remote_client import RemoteClient
+            from replicant_mesh.remote_client import RemoteClient
             endpoints = getattr(args, "replicas", None) or [
                 f"replica-{index}:50053" for index in range(1, 5)]
             report.update(control="resource-matched complete-model replicas",
@@ -262,7 +262,7 @@ def run_bench(args, report):
 def run_check(args, report):
     if getattr(args, "backend", None) == "pipeline":
         import asyncio
-        from steamboat_runtime.service_check import run_validation
+        from replicant_mesh.service_check import run_validation
         asyncio.run(run_validation(args, report))
         report["success"] = report.get("status") == "passed"
         return
@@ -331,7 +331,7 @@ def run_check(args, report):
 def metadata(args):
     backend = getattr(args, "backend", "petals")
     if backend in ("pytorch", "pipeline", "matched"):
-        from steamboat_runtime.manifest import MODEL_ID, MODEL_REVISION
+        from replicant_mesh.manifest import MODEL_ID, MODEL_REVISION
         model, revision = MODEL_ID, MODEL_REVISION
     else:
         model, revision = model_settings()

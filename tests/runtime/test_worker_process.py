@@ -1,6 +1,6 @@
 """M3 Linux process faults with real gRPC and independently enforced deadlines.
 
-Opt in with STEAMBOAT_PROCESS_TESTS=1 and STEAMBOAT_ARTIFACT_DIR. The blocked
+Opt in with REPLICANT_MESH_PROCESS_TESTS=1 and REPLICANT_MESH_ARTIFACT_DIR. The blocked
 compute test exercises the actual frozen 15-second grace, not an accelerated
 clock. Synthetic executors are injected only by a local test helper process.
 """
@@ -30,7 +30,7 @@ class ProcessHarness:
         self.port = unused_port()
         self.target = f"127.0.0.1:{self.port}"
         if real:
-            command = [sys.executable, "-u", "-m", "steamboat_runtime.worker", "serve",
+            command = [sys.executable, "-u", "-m", "replicant_mesh.worker", "serve",
                        "--worker", "worker-1"]
         else:
             command = [sys.executable, "-u", str(Path(__file__).with_name("process_fixture.py")),
@@ -75,18 +75,18 @@ class ProcessHarness:
         self.stderr.close()
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_PROCESS_TESTS") == "1" and sys.platform == "linux",
-                     "Set STEAMBOAT_PROCESS_TESTS=1 in the Linux runtime image")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_PROCESS_TESTS") == "1" and sys.platform == "linux",
+                     "Set REPLICANT_MESH_PROCESS_TESTS=1 in the Linux runtime image")
 class WorkerProcessTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         import torch
-        from steamboat_runtime.manifest import load_manifest
-        from steamboat_runtime.protocol.codec import encode_tensor
-        from steamboat_runtime.protocol.transport import GrpcClient
-        from steamboat_runtime.protocol.worker_pb2 import Request
-        from steamboat_runtime.worker import validate_ready
-        cls.artifacts = os.environ["STEAMBOAT_ARTIFACT_DIR"]
+        from replicant_mesh.manifest import load_manifest
+        from replicant_mesh.protocol.codec import encode_tensor
+        from replicant_mesh.protocol.transport import GrpcClient
+        from replicant_mesh.protocol.worker_pb2 import Request
+        from replicant_mesh.worker import validate_ready
+        cls.artifacts = os.environ["REPLICANT_MESH_ARTIFACT_DIR"]
         cls.manifest = load_manifest(cls.artifacts)
         cls.torch, cls.Client, cls.Request = torch, GrpcClient, Request
         cls.encode = staticmethod(encode_tensor)
@@ -280,7 +280,7 @@ class SupervisorUnitTests(unittest.TestCase):
     def test_reader_exits_when_its_bounded_queue_is_full(self):
         import io
         import queue
-        from steamboat_runtime.supervisor import ProcessSupervisor
+        from replicant_mesh.supervisor import ProcessSupervisor
         frames = queue.Queue(maxsize=1)
         stopped = threading.Event()
         stream = io.BytesIO(b'{"event":"heartbeat"}\n' * 100)
@@ -297,12 +297,12 @@ class SupervisorUnitTests(unittest.TestCase):
 
     def test_supervisor_import_does_not_load_torch(self):
         completed = subprocess.run([sys.executable, "-c",
-            "import sys; import steamboat_runtime.supervisor; assert 'torch' not in sys.modules"],
+            "import sys; import replicant_mesh.supervisor; assert 'torch' not in sys.modules"],
             capture_output=True, text=True, timeout=5)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_restart_budget_bounds_permanent_startup_failure(self):
-        from steamboat_runtime.supervisor import ProcessSupervisor
+        from replicant_mesh.supervisor import ProcessSupervisor
         events = []
         supervisor = ProcessSupervisor([sys.executable, "-c", "raise SystemExit(9)"],
             restart_limit=2, log=lambda event, **fields: events.append((event, fields)))
@@ -311,7 +311,7 @@ class SupervisorUnitTests(unittest.TestCase):
         self.assertEqual(events[-1][0], "restart_budget_exhausted")
 
     def test_compute_deadline_is_enforced_while_child_keeps_heartbeating(self):
-        from steamboat_runtime.supervisor import ProcessSupervisor
+        from replicant_mesh.supervisor import ProcessSupervisor
         code = """
 import json, time
 status = dict(ready=True, active_compute=True, compute_id='blocked',
@@ -332,7 +332,7 @@ while True:
                             for _, fields in events))
 
     def test_shutdown_observes_cancellation_deadline_during_wedged_child(self):
-        from steamboat_runtime.supervisor import ProcessSupervisor
+        from replicant_mesh.supervisor import ProcessSupervisor
         code = """
 import json, signal, time
 status = dict(ready=True, active_compute=True, compute_id='wedged',
@@ -369,7 +369,7 @@ while True:
         self.assertIsNotNone(supervisor.child.poll())
 
     def test_startup_heartbeats_do_not_extend_the_readiness_deadline(self):
-        from steamboat_runtime.supervisor import ProcessSupervisor
+        from replicant_mesh.supervisor import ProcessSupervisor
         code = """
 import json, time
 while True:

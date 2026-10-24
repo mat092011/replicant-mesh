@@ -12,7 +12,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $compose = Join-Path $repo 'compose.pytorch.yaml'
-$project = 'steamboat-pytorch-m1'
+$project = 'replicant-mesh-pytorch-m1'
 $docker = (Get-Command docker -CommandType Application | Select-Object -First 1).Source
 $composeArgs = @('compose','-f',$compose,'-p',$project)
 $services = @('replica-1','replica-2','replica-3','replica-4')
@@ -78,7 +78,7 @@ try { $experimentLock = [IO.File]::Open((Join-Path $repo '.lab/pytorch-experimen
 catch { throw 'Another lab experiment owns the network/resource lock.' }
 $summary = [ordered]@{success=$false;cases=@();error=$null;final_reset_verified=$false}
 try {
-    $tagImage = (Docker @('image','inspect','steamboat-pytorch:cpu','--format','{{.Id}}')).Trim()
+    $tagImage = (Docker @('image','inspect','replicant-mesh-pytorch:cpu','--format','{{.Id}}')).Trim()
     if ($tagImage -ne $ExpectedImage) { throw 'Validation image tag differs from frozen runtime image.' }
     foreach ($service in @('coordinator','worker-1','worker-2','worker-3')) {
         $id = Docker ($composeArgs + @('ps','--status','running','-q',$service))

@@ -60,7 +60,7 @@ class FakeClient:
         self.closed = False
 
     async def execute(self, method, request):
-        from steamboat_runtime.protocol.errors import ProtocolError
+        from replicant_mesh.protocol.errors import ProtocolError
         self.calls.append((method, request.session_id, request.sequence))
         if method == "Describe" and self.fail_describe:
             raise ProtocolError(self.fail_describe, "Injected readiness failure")
@@ -96,14 +96,14 @@ class FakeClient:
         self.closed = True
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1",
-                     "Set STEAMBOAT_PROTOCOL_TESTS=1 for coordinator checks")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1",
+                     "Set REPLICANT_MESH_PROTOCOL_TESTS=1 for coordinator checks")
 class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         import torch
-        from steamboat_runtime.coordinator import Coordinator, CoordinatorError, SchedulerLimits
-        from steamboat_runtime.worker_state import WorkerHandler
+        from replicant_mesh.coordinator import Coordinator, CoordinatorError, SchedulerLimits
+        from replicant_mesh.worker_state import WorkerHandler
         support = importlib.import_module(
             f"{__package__}.test_worker_state" if __package__ else "test_worker_state")
         manifest = importlib.import_module(

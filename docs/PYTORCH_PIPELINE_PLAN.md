@@ -339,18 +339,18 @@ Network-profile tools measure applied conditions and verify reset after experime
 
 | Path | Intended contents |
 | --- | --- |
-| `src/steamboat_runtime/model.py` | Llama adapter, weight manifest and assigned-layer loading |
-| `src/steamboat_runtime/protocol/` | Protobuf schema, checked tensor codec, errors |
-| `src/steamboat_runtime/worker_state.py` | Implemented owned-stage executor and worker lifecycle handler |
-| `src/steamboat_runtime/worker.py` | Worker service, bounded execution and session state |
-| `src/steamboat_runtime/supervisor.py` | Independent process watchdog and bounded restart budget |
-| `src/steamboat_runtime/remote_check.py` | Sequential remote validation fixture and complete-model comparison |
-| `src/steamboat_runtime/coordinator.py` | Admission, stage scheduler, token feedback and cancellation |
-| `src/steamboat_runtime/coordinator_model.py` | Coordinator-owned input/output weights and offline tokenizer |
-| `src/steamboat_runtime/coordinator_check.py` | Concurrent parity and clock-verified compute overlap |
-| `src/steamboat_runtime/client.py`, `remote_client.py` | Local and remote streamed-token clients |
-| `src/steamboat_runtime/coordinator_service.py` | Bounded supervised gRPC coordinator listener |
-| `src/steamboat_runtime/service_check.py` | Standalone service numerical and cancellation validation |
+| `src/replicant_mesh/model.py` | Llama adapter, weight manifest and assigned-layer loading |
+| `src/replicant_mesh/protocol/` | Protobuf schema, checked tensor codec, errors |
+| `src/replicant_mesh/worker_state.py` | Implemented owned-stage executor and worker lifecycle handler |
+| `src/replicant_mesh/worker.py` | Worker service, bounded execution and session state |
+| `src/replicant_mesh/supervisor.py` | Independent process watchdog and bounded restart budget |
+| `src/replicant_mesh/remote_check.py` | Sequential remote validation fixture and complete-model comparison |
+| `src/replicant_mesh/coordinator.py` | Admission, stage scheduler, token feedback and cancellation |
+| `src/replicant_mesh/coordinator_model.py` | Coordinator-owned input/output weights and offline tokenizer |
+| `src/replicant_mesh/coordinator_check.py` | Concurrent parity and clock-verified compute overlap |
+| `src/replicant_mesh/client.py`, `remote_client.py` | Local and remote streamed-token clients |
+| `src/replicant_mesh/coordinator_service.py` | Bounded supervised gRPC coordinator listener |
+| `src/replicant_mesh/service_check.py` | Standalone service numerical and cancellation validation |
 | `tests/runtime/` | Model equivalence, protocol, cache, scheduling and failure tests |
 | `docker/pytorch/` | Independent runtime image and locked dependencies |
 | `compose.pytorch.yaml` | Three workers, coordinator, thin benchmark and validation drivers using private static discovery |

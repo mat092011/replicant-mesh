@@ -1,6 +1,6 @@
 """M3 FIFO admission, cancellation and external-watchdog snapshots.
 
-Use the pinned runtime with STEAMBOAT_PROTOCOL_TESTS=1; no weights are needed.
+Use the pinned runtime with REPLICANT_MESH_PROTOCOL_TESTS=1; no weights are needed.
 Barriers hold the only compute thread while queued operations are inspected.
 """
 
@@ -16,8 +16,8 @@ support = importlib.import_module(
     f"{__package__}.test_worker_state" if __package__ else "test_worker_state")
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1",
-                     "Set STEAMBOAT_PROTOCOL_TESTS=1 for M3 queue checks")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1",
+                     "Set REPLICANT_MESH_PROTOCOL_TESTS=1 for M3 queue checks")
 class WorkerQueueTests(unittest.IsolatedAsyncioTestCase):
     setUpClass = classmethod(support.WorkerStateTests.setUpClass.__func__)
     asyncTearDown = support.WorkerStateTests.asyncTearDown

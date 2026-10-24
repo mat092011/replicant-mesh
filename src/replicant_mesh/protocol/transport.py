@@ -12,7 +12,7 @@ from .errors import ProtocolError
 from .wire import parse_message, serialize_message, validate_response
 from .worker_pb2 import Request, Response
 
-SERVICE = "steamboat.v1.Worker"
+SERVICE = "replicant.mesh.v1.Worker"
 
 
 def _method(method):

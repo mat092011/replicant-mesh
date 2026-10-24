@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Set or inspect packet shaping inside the Steamboat container lab.
+Set or inspect packet shaping inside the Replicant Mesh container lab.
 .DESCRIPTION
 Only changes the eth0 egress queue in the selected Compose containers. LAN removes
 this script's root netem queue. WAN adds 25 ms per direction and a 100 Mbit/s cap.
@@ -68,7 +68,7 @@ param (
     [string]$ComposeFile,
 
     [ValidatePattern('^[a-z0-9][a-z0-9_-]{0,62}$')]
-    [string]$ProjectName = 'steamboat-net-lab',
+    [string]$ProjectName = 'replicant-mesh-lab',
 
     [string]$Output,
 

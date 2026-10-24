@@ -67,8 +67,9 @@ docker compose -f compose.pytorch.yaml run --rm --no-deps remote-check
 docker compose -f compose.pytorch.yaml logs --no-color worker-1 worker-2 worker-3
 ```
 
-The existing project name `steamboat-pytorch-m1` and model/artifact volumes are
-retained. Preparation alone downloads the pinned public files. The `tests` service
+The project `replicant-mesh-pytorch-m1` owns its model/artifact volumes; see the
+[rename guide](RENAMING.md) when upgrading an existing lab. Preparation alone
+downloads the pinned public files. The `tests` service
 has networking disabled and enables protocol and process tests. The final command
 records startup, readiness, process IDs, layer assignments, parameter counts,
 loading duration and process RSS in sanitized supervisor logs. Heartbeat/control
@@ -95,7 +96,7 @@ new remote services. Network shaping and performance comparisons belong to M5.
 
 ## Readiness, bounded execution and shutdown
 
-`python -m steamboat_runtime.worker serve` launches a separate supervisor process
+`python -m replicant_mesh.worker serve` launches a separate supervisor process
 and an inference child. The child verifies artifacts, instantiates its assigned
 layers once, starts the RPC loop and reports readiness. A health check validates
 the exact assignment, fingerprint, limits and new boot identity. The remote client

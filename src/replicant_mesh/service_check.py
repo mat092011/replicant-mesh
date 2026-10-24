@@ -137,7 +137,7 @@ async def run_validation(args, evidence):
         raise ValueError(f"The remote service gate uses the frozen atol={ATOL}; it cannot be relaxed")
     torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "2")))
     manifest = load_manifest(args.artifacts)
-    reference_path = getattr(args, "reference", None) or os.environ.get("STEAMBOAT_REFERENCE_DIR")
+    reference_path = getattr(args, "reference", None) or os.environ.get("REPLICANT_MESH_REFERENCE_DIR")
     if not reference_path:
         raise ValueError("Remote correctness checks require the verified --reference snapshot")
     verify_snapshot(reference_path)
@@ -192,9 +192,9 @@ async def run_validation(args, evidence):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifacts", default=os.environ.get("STEAMBOAT_ARTIFACT_DIR", "/artifacts"))
-    parser.add_argument("--reference", default=os.environ.get("STEAMBOAT_REFERENCE_DIR"),
-                        required=not os.environ.get("STEAMBOAT_REFERENCE_DIR"))
+    parser.add_argument("--artifacts", default=os.environ.get("REPLICANT_MESH_ARTIFACT_DIR", "/artifacts"))
+    parser.add_argument("--reference", default=os.environ.get("REPLICANT_MESH_REFERENCE_DIR"),
+                        required=not os.environ.get("REPLICANT_MESH_REFERENCE_DIR"))
     parser.add_argument("--coordinator", default="coordinator:50052")
     parser.add_argument("--output", default="/results", help="Directory for unique success/failure reports")
     args = parser.parse_args(argv)

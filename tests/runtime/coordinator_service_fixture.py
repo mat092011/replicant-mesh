@@ -6,8 +6,8 @@ import time
 
 import torch
 
-from steamboat_runtime.coordinator_service import supervised_model_class
-from steamboat_runtime.worker import _frame
+from replicant_mesh.coordinator_service import supervised_model_class
+from replicant_mesh.worker import _frame
 from test_manifest import sample_manifest
 
 

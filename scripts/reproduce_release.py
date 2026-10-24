@@ -25,8 +25,8 @@ def main():
     output = args.output.resolve() / identity
     output.mkdir(parents=True)
     source = output / 'source'
-    project = 'steamboat-release-' + identity.lower()
-    image = 'steamboat-release:' + identity.lower()
+    project = 'replicant-mesh-release-' + identity.lower()
+    image = 'replicant-mesh-release:' + identity.lower()
     names = source_files(ROOT)
     runtime_names = [name for name in names if not name.endswith('.md') and (
         name.startswith(('src/', 'lab/', 'tests/', 'scripts/', 'docker/'))

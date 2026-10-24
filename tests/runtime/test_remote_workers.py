@@ -6,14 +6,14 @@ import unittest
 import uuid
 
 
-@unittest.skipUnless(os.environ.get("STEAMBOAT_PROTOCOL_TESTS") == "1",
-                     "Set STEAMBOAT_PROTOCOL_TESTS=1 for remote worker contracts")
+@unittest.skipUnless(os.environ.get("REPLICANT_MESH_PROTOCOL_TESTS") == "1",
+                     "Set REPLICANT_MESH_PROTOCOL_TESTS=1 for remote worker contracts")
 class RemoteWorkerContractTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        from steamboat_runtime.protocol.worker_pb2 import Response
-        from steamboat_runtime.protocol.errors import ProtocolError
-        from steamboat_runtime.remote_check import RemoteWorkers
+        from replicant_mesh.protocol.worker_pb2 import Response
+        from replicant_mesh.protocol.errors import ProtocolError
+        from replicant_mesh.remote_check import RemoteWorkers
         fixture = importlib.import_module(f"{__package__}.test_manifest" if __package__ else "test_manifest")
         cls.sample_manifest = staticmethod(fixture.sample_manifest)
         cls.Response, cls.ProtocolError, cls.RemoteWorkers = Response, ProtocolError, RemoteWorkers

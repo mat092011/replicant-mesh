@@ -1,5 +1,9 @@
 # Public source preview
 
+> Historical Replicant Mesh experiment, recorded before the project rename.
+> Original image names, source paths and measurements are retained as evidence;
+> use the [migration guide](../RENAMING.md) for current commands and names.
+
 Date: 2026-10-17. The maintainer explicitly authorized committing and pushing all
 prepared source changes and making `mat092011/steamboat_net` public.
 Commit `d10d762e3095fdec488ac33894519a3291c3cb58` contains the Apache-2.0 source

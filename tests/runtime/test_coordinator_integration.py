@@ -10,9 +10,9 @@ import os
 import unittest
 
 
-ENABLED = os.environ.get("STEAMBOAT_COORDINATOR_TESTS") == "1"
-ARTIFACT_DIR = os.environ.get("STEAMBOAT_ARTIFACT_DIR")
-REFERENCE_DIR = os.environ.get("STEAMBOAT_REFERENCE_DIR")
+ENABLED = os.environ.get("REPLICANT_MESH_COORDINATOR_TESTS") == "1"
+ARTIFACT_DIR = os.environ.get("REPLICANT_MESH_ARTIFACT_DIR")
+REFERENCE_DIR = os.environ.get("REPLICANT_MESH_REFERENCE_DIR")
 
 
 class TraceProofTests(unittest.TestCase):
@@ -32,7 +32,7 @@ class TraceProofTests(unittest.TestCase):
         return sorted(events, key=lambda event: event["coordinator_ns"])
 
     def verify(self, events, **kwargs):
-        from steamboat_runtime.coordinator_check import inspect_trace
+        from replicant_mesh.coordinator_check import inspect_trace
         return inspect_trace(events, ["a", "b"], 1, clock_id="verified-fixture-clock", **kwargs)
 
     def test_causal_trace_with_actual_compute_overlap_passes(self):
@@ -70,7 +70,7 @@ class TraceProofTests(unittest.TestCase):
             self.verify(events[1:])
 
 
-@unittest.skipUnless(ENABLED, "Set STEAMBOAT_COORDINATOR_TESTS=1 for offline M4 integration")
+@unittest.skipUnless(ENABLED, "Set REPLICANT_MESH_COORDINATOR_TESTS=1 for offline M4 integration")
 class CoordinatorModelIntegrationTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
@@ -78,12 +78,12 @@ class CoordinatorModelIntegrationTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("M4 integration requires offline artifacts and reference")
         import torch
         from transformers import AutoModelForCausalLM
-        from steamboat_runtime.coordinator import Coordinator
-        from steamboat_runtime.coordinator_model import CoordinatorModel
-        from steamboat_runtime.manifest import load_manifest
-        from steamboat_runtime.prepare import verify_snapshot
-        from steamboat_runtime.protocol.transport import InMemoryTransport
-        from steamboat_runtime.worker_state import StageExecutor, WorkerHandler
+        from replicant_mesh.coordinator import Coordinator
+        from replicant_mesh.coordinator_model import CoordinatorModel
+        from replicant_mesh.manifest import load_manifest
+        from replicant_mesh.prepare import verify_snapshot
+        from replicant_mesh.protocol.transport import InMemoryTransport
+        from replicant_mesh.worker_state import StageExecutor, WorkerHandler
         torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "2")))
         verify_snapshot(REFERENCE_DIR)
         cls.reference = AutoModelForCausalLM.from_pretrained(
@@ -104,14 +104,14 @@ class CoordinatorModelIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.coordinator.start()
 
     async def asyncTearDown(self):
-        from steamboat_runtime.coordinator_check import assert_worker_cleanup
+        from replicant_mesh.coordinator_check import assert_worker_cleanup
         self.assertTrue(await self.coordinator.close())
         for handler in self.handlers:
             self.assertTrue(await handler.shutdown())
         await assert_worker_cleanup(self.clients, self.manifest, self.evidence, self.id())
 
     async def test_one_three_eight_concurrent_requests_and_greedy_match_reference(self):
-        from steamboat_runtime.coordinator_check import validate_cohorts
+        from replicant_mesh.coordinator_check import validate_cohorts
         await validate_cohorts(self.coordinator, self.reference, self.evidence,
                                clients=self.clients, manifest=self.manifest,
                                cohorts=((1, (7,)), (3, (7, 13, 31)),
@@ -120,7 +120,7 @@ class CoordinatorModelIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(item["cleanup_complete"] for item in self.evidence["requests"]))
 
     async def test_cancelling_one_stream_preserves_another_real_cache(self):
-        from steamboat_runtime.coordinator_check import (
+        from replicant_mesh.coordinator_check import (
             consume_checked, fixture_tokens, reference_logits, assert_worker_cleanup,
         )
         prompt = fixture_tokens(31, 847, self.reference.config.vocab_size)

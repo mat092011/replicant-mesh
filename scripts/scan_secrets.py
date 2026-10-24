@@ -79,7 +79,7 @@ def main():
     config = ROOT / '.gitleaks.toml'
     ignore = output / 'empty.ignore'
     ignore.write_text('', encoding='utf-8')
-    with tempfile.TemporaryDirectory(prefix='steamboat-scanner-control-') as directory:
+    with tempfile.TemporaryDirectory(prefix='replicant-mesh-scanner-control-') as directory:
         control = Path(directory)
         synthetic = 'ghp_' + '0123456789abcdefghijklmnopqrstuvABCD'
         (control / 'control.txt').write_text('token = ' + synthetic + '\n', encoding='utf-8')
@@ -88,7 +88,7 @@ def main():
             raise RuntimeError('Scanner detection/redaction positive control failed')
     names = source_files(ROOT)
     history = scan(executable, 'git', ROOT, output / 'history.json', config, ignore)
-    with tempfile.TemporaryDirectory(prefix='steamboat-source-scan-') as directory:
+    with tempfile.TemporaryDirectory(prefix='replicant-mesh-source-scan-') as directory:
         snapshot = Path(directory)
         for name in names:
             source = ROOT / name

@@ -11,8 +11,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
 COPY docker/pytorch/requirements.lock /tmp/requirements.lock
 RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock \
     && python -m pip check
-COPY docker/pytorch/verify_environment.py /opt/steamboat/verify_environment.py
-RUN python /opt/steamboat/verify_environment.py
+COPY docker/pytorch/verify_environment.py /opt/replicant-mesh/verify_environment.py
+RUN python /opt/replicant-mesh/verify_environment.py
 WORKDIR /app
 
 FROM dependencies AS runtime

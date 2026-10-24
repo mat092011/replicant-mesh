@@ -87,7 +87,7 @@ def worker():
         "--attn_cache_tokens", "12288", "--inference_max_length", "1152",
         "--max_batch_size", "1152", "--max_alloc_timeout", "15",
         "--session_timeout", "120", "--step_timeout", "60",
-        "--dht_prefix", os.environ.get("LAB_DHT_PREFIX", "steamboat-local-v1"),
+        "--dht_prefix", os.environ.get("LAB_DHT_PREFIX", "replicant-mesh-local-v1"),
         "--initial_peers", *read_peers(),
     ]
     # Experimental wrapper deviation: the pinned upstream CLI checks PyPI with

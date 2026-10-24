@@ -8,7 +8,7 @@ service descriptor's explicit method names and needs no generated gRPC stub.
 Regenerate from the repository root in the pinned Linux image (PowerShell):
 
 ```powershell
-docker.exe run --rm -v "${PWD}:/app" steamboat-pytorch:cpu sh -c 'python -m pip install --no-deps --target /tmp/protoc "https://files.pythonhosted.org/packages/74/18/d9fa4b43c4974094a9e720e97fc90fcba1908f8c806b36eefabf6c148d88/grpcio_tools-1.84.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl#sha256=fc1708de3ba6cc46eff02de1aea865442418167794ca963a2cf6ea2013930146" && PYTHONPATH=/tmp/protoc python -m grpc_tools.protoc -I/app/src --python_out=/app/src /app/src/steamboat_runtime/protocol/worker.proto'
+docker.exe run --rm -v "${PWD}:/app" replicant-mesh-pytorch:cpu sh -c 'python -m pip install --no-deps --target /tmp/protoc "https://files.pythonhosted.org/packages/74/18/d9fa4b43c4974094a9e720e97fc90fcba1908f8c806b36eefabf6c148d88/grpcio_tools-1.84.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl#sha256=fc1708de3ba6cc46eff02de1aea865442418167794ca963a2cf6ea2013930146" && PYTHONPATH=/tmp/protoc python -m grpc_tools.protoc -I/app/src --python_out=/app/src /app/src/replicant_mesh/protocol/worker.proto'
 ```
 
 The compiler is installed only in the disposable generation container. It does

@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/NetworkReset.ps1')
 
-$temp = Join-Path ([IO.Path]::GetTempPath()) ('steamboat-reset-test-' + [Guid]::NewGuid().ToString('N'))
+$temp = Join-Path ([IO.Path]::GetTempPath()) ('replicant-mesh-reset-test-' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $temp
 try {
     $calls = New-Object 'System.Collections.Generic.List[string]'

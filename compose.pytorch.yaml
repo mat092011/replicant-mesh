@@ -1,9 +1,9 @@
 # M0-M5: supervised workers/coordinator, private lab and offline validation.
 # Network shaping is confined to the four inference-service network namespaces.
-name: steamboat-pytorch-m1
+name: replicant-mesh-pytorch-m1
 
 x-common: &common
-  image: steamboat-pytorch:cpu
+  image: replicant-mesh-pytorch:cpu
   platform: linux/amd64
   build:
     context: .
@@ -20,10 +20,10 @@ x-common: &common
     TRANSFORMERS_OFFLINE: "1"
     OMP_NUM_THREADS: "2"
     MKL_NUM_THREADS: "2"
-    STEAMBOAT_ARTIFACT_DIR: /artifacts
-    STEAMBOAT_REFERENCE_DIR: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
-    STEAMBOAT_TEST_SNAPSHOT: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
-    STEAMBOAT_PROTOCOL_TESTS: "1"
+    REPLICANT_MESH_ARTIFACT_DIR: /artifacts
+    REPLICANT_MESH_REFERENCE_DIR: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+    REPLICANT_MESH_TEST_SNAPSHOT: /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f
+    REPLICANT_MESH_PROTOCOL_TESTS: "1"
   volumes:
     - pytorch-model-cache:/cache:ro
     - pytorch-artifacts:/artifacts:ro
@@ -32,7 +32,7 @@ x-common: &common
 services:
   prepare:
     <<: *common
-    command: [python, -m, steamboat_runtime.prepare, --output, /artifacts]
+    command: [python, -m, replicant_mesh.prepare, --output, /artifacts]
     environment:
       <<: *environment
       HF_HUB_OFFLINE: "0"
@@ -48,11 +48,11 @@ services:
     network_mode: none
     environment:
       <<: *environment
-      STEAMBOAT_TEST_REPORT: ${STEAMBOAT_TEST_REPORT:-/results}
-      STEAMBOAT_PROTOCOL_REPORT: ${STEAMBOAT_PROTOCOL_REPORT:-/results}
-      STEAMBOAT_PROCESS_TESTS: "1"
-      STEAMBOAT_COORDINATOR_TESTS: "1"
-      STEAMBOAT_SERVICE_TESTS: "1"
+      REPLICANT_MESH_TEST_REPORT: ${REPLICANT_MESH_TEST_REPORT:-/results}
+      REPLICANT_MESH_PROTOCOL_REPORT: ${REPLICANT_MESH_PROTOCOL_REPORT:-/results}
+      REPLICANT_MESH_PROCESS_TESTS: "1"
+      REPLICANT_MESH_COORDINATOR_TESTS: "1"
+      REPLICANT_MESH_SERVICE_TESTS: "1"
 
   benchmark:
     <<: *common
@@ -71,7 +71,7 @@ services:
 
   worker-1: &worker
     <<: *common
-    command: [python, -m, steamboat_runtime.worker, serve, --artifacts, /artifacts, --worker, worker-1, --host, "0.0.0.0:50051", --private-network]
+    command: [python, -m, replicant_mesh.worker, serve, --artifacts, /artifacts, --worker, worker-1, --host, "0.0.0.0:50051", --private-network]
     mem_limit: 3g
     cap_add: [NET_ADMIN]
     stop_grace_period: 20s
@@ -79,7 +79,7 @@ services:
       - pytorch-artifacts:/artifacts:ro
     networks: [workers]
     healthcheck:
-      test: [CMD, python, -m, steamboat_runtime.worker, health, --target, "127.0.0.1:50051", --artifacts, /artifacts, --worker, worker-1]
+      test: [CMD, python, -m, replicant_mesh.worker, health, --target, "127.0.0.1:50051", --artifacts, /artifacts, --worker, worker-1]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -87,9 +87,9 @@ services:
 
   worker-2:
     <<: *worker
-    command: [python, -m, steamboat_runtime.worker, serve, --artifacts, /artifacts, --worker, worker-2, --host, "0.0.0.0:50051", --private-network]
+    command: [python, -m, replicant_mesh.worker, serve, --artifacts, /artifacts, --worker, worker-2, --host, "0.0.0.0:50051", --private-network]
     healthcheck:
-      test: [CMD, python, -m, steamboat_runtime.worker, health, --target, "127.0.0.1:50051", --artifacts, /artifacts, --worker, worker-2]
+      test: [CMD, python, -m, replicant_mesh.worker, health, --target, "127.0.0.1:50051", --artifacts, /artifacts, --worker, worker-2]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -97,9 +97,9 @@ services:
 
   worker-3:
     <<: *worker
-    command: [python, -m, steamboat_runtime.worker, serve, --artifacts, /artifacts, --worker, worker-3, --host, "0.0.0.0:50051", --private-network]
+    command: [python, -m, replicant_mesh.worker, serve, --artifacts, /artifacts, --worker, worker-3, --host, "0.0.0.0:50051", --private-network]
     healthcheck:
-      test: [CMD, python, -m, steamboat_runtime.worker, health, --target, "127.0.0.1:50051", --artifacts, /artifacts, --worker, worker-3]
+      test: [CMD, python, -m, replicant_mesh.worker, health, --target, "127.0.0.1:50051", --artifacts, /artifacts, --worker, worker-3]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -107,7 +107,7 @@ services:
 
   remote-check:
     <<: *common
-    command: [python, -m, steamboat_runtime.remote_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --output, /results]
+    command: [python, -m, replicant_mesh.remote_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --output, /results]
     networks: [workers]
     depends_on:
       worker-1:
@@ -119,7 +119,7 @@ services:
 
   coordinator-check:
     <<: *common
-    command: [python, -m, steamboat_runtime.coordinator_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --output, /results]
+    command: [python, -m, replicant_mesh.coordinator_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --output, /results]
     networks: [workers]
     depends_on:
       worker-1:
@@ -131,7 +131,7 @@ services:
 
   coordinator:
     <<: *common
-    command: [python, -m, steamboat_runtime.coordinator_service, serve, --artifacts, /artifacts, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --host, "0.0.0.0:50052", --private-network]
+    command: [python, -m, replicant_mesh.coordinator_service, serve, --artifacts, /artifacts, --workers, "worker-1:50051", "worker-2:50051", "worker-3:50051", --host, "0.0.0.0:50052", --private-network]
     mem_limit: 3g
     cap_add: [NET_ADMIN]
     stop_grace_period: 40s
@@ -146,7 +146,7 @@ services:
       worker-3:
         condition: service_healthy
     healthcheck:
-      test: [CMD, python, -m, steamboat_runtime.coordinator_service, health, --target, "127.0.0.1:50052", --artifacts, /artifacts]
+      test: [CMD, python, -m, replicant_mesh.coordinator_service, health, --target, "127.0.0.1:50052", --artifacts, /artifacts]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -166,7 +166,7 @@ services:
 
   service-check:
     <<: *common
-    command: [python, -m, steamboat_runtime.service_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --coordinator, "coordinator:50052", --output, /results]
+    command: [python, -m, replicant_mesh.service_check, --artifacts, /artifacts, --reference, /cache/huggingface/hub/models--Maykeye--TinyLLama-v0/snapshots/298338802ab94432b917bcce11382aa151aee50f, --coordinator, "coordinator:50052", --output, /results]
     networks: [workers]
     depends_on:
       coordinator:

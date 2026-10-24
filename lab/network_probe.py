@@ -145,7 +145,7 @@ async def measure(host, token, count=8 * 1024 * 1024, *, port=PORT):
 
 async def run(args):
     if args.command == "serve":
-        from steamboat_runtime.protocol.transport import validate_endpoint
+        from replicant_mesh.protocol.transport import validate_endpoint
         validate_endpoint(f"{args.host}:{args.port}", listen=True, private_network=args.private_network)
         handler = ProbeServer(args.token)
         server = await asyncio.start_server(handler.handle, args.host, args.port, limit=1024)
